@@ -205,6 +205,11 @@ _by_rating()
 
 
 # --------------------------------------------------------------------------- availability through contacts
+def contact_supply(ct):
+    """What a contact can source: their type's defaults plus the ticked boxes."""
+    return set(G.CONTACT_TYPE_SUPPLY.get(ct.get("type") or "", [])) | set(ct.get("supply") or [])
+
+
 def access(c, avail, legal, supply, approved):
     """Can this character source an item? -> (ok, reason)."""
     if avail is None:
@@ -215,12 +220,15 @@ def access(c, avail, legal, supply, approved):
         return False, f"Availability {avail}: above the creation limit of {CREATION_MAX_AVAIL}."
     if avail <= ALWAYS_AVAIL and legal != "I":
         return True, ""
+    pending = None
     for ct in c.get("contacts") or []:
-        if not ct.get("verified", True):
-            continue
-        sup = ct.get("supply") or []
+        sup = contact_supply(ct)
         if (supply in sup or "Fixer" in sup) and int(ct.get("connection") or 0) > avail:
-            return True, ct.get("name") or ""
+            if ct.get("verified", True):
+                return True, ct.get("name") or ""
+            pending = pending or ct.get("name") or "A contact"
+    if pending:
+        return False, f"{pending} can get this once the GM confirms them."
     return False, f"Needs a contact for {supply} with Connection {avail + 1} or more."
 
 

@@ -90,6 +90,7 @@ function onSheet(sh) {
   if (S.view === 'store') renderStore();
 }
 function onRolled(res) {
+  if (res.sheet && sheetUI) sheetUI.setSheet(res.sheet);
   if (res.me && S.st) { Object.assign(S.st.me, res.me); renderChips(); }
   if (res.rolls) { SR.renderLog($('p-log'), res.rolls); if (sheetUI) sheetUI.updateLog(res.rolls); }
   if (res.me && sheetUI) { sheetUI.mergeMe(res.me); }
@@ -428,11 +429,15 @@ function availOk(av, legal, supply) {
   const sh = S.sheet;
   if (!sh.approved) return av <= CAT.store.creationMaxAvail ? [true, ''] : [false, `Availability ${av}: above the creation limit of ${CAT.store.creationMaxAvail}.`];
   if (av <= CAT.store.alwaysAvail && legal !== 'I') return [true, ''];
+  let pending = null;
   for (const ct of sh.char.contacts) {
-    if (ct.verified === false) continue;
-    const sup = ct.supply || [];
-    if ((sup.includes(supply) || sup.includes('Fixer')) && ct.connection > av) return [true, ct.name];
+    const sup = SR.contactSupply(ct);
+    if ((sup.includes(supply) || sup.includes('Fixer')) && ct.connection > av) {
+      if (ct.verified !== false) return [true, ct.name];
+      pending = pending || ct.name;
+    }
   }
+  if (pending) return [false, `${pending} can get this once the GM confirms them.`];
   return [false, `Needs a contact for ${supply} with Connection ${av + 1} or more.`];
 }
 $('store-search').oninput = () => renderStore();

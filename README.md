@@ -23,11 +23,12 @@ game masters, with screenshots.
 - **Approval workflow.** Players build freely while their sheet is a draft. The
   GM approves it, and from then on upgrades cost Karma and purchases are final.
 - **Store gated by contacts.** Players see what their contacts can source. A
-  contact covers some kinds of goods and finds items with an Availability below
-  their Connection. Implants come in grades, ammo is sold by the box, and gear
-  can be sold back at a percentage the GM sets.
+  contact's type (fixer, arms dealer, street doc…) covers some kinds of goods,
+  and they find items with an Availability below their Connection. Implants
+  come in grades, ammo is sold by the box, and gear can be sold back at a
+  percentage the GM sets.
 - **Automatic ammo**: attacks spend rounds by firing mode, and grenades are used
-  up when thrown.
+  up when thrown. Guns reload from matching ammo on the sheet or in the roller.
 - **Fog-of-war maps** on square or hex grids, drawn by hand or generated. Each
   player sees only what their runner has explored, and doors block movement and
   sight.
@@ -45,7 +46,8 @@ game masters, with screenshots.
   spirits of any Force, with grunt condition monitors.
 - **Statuses** such as Prone, Burning or Zapped, set by the GM and shown as icons
   on the map.
-- **Healing** with first aid, medkits, magic and natural recovery, per the book.
+- **Healing** with first aid, medkits, magic and natural recovery, per the book,
+  rolled from the dice roller on yourself or an ally.
 - **Runs (contracts)**: the GM assigns tasks and runners, ticks tasks as they
   happen, and closes the run. Each runner is paid automatically.
 - **GM tools**: invite links, Karma and nuyen awards, Edge refresh, monthly
@@ -168,7 +170,8 @@ Security measures:
   is above Magic or Resonance. Every point of Essence lost lowers Magic and
   Resonance by 1.
 - **Healing:** first aid and medkits test against 5 − Essence, once per set of
-  injuries; natural recovery rolls Body + Willpower per hour (Stun) or
+  injuries (−2 and no Edge without a medkit; a medkit adds +1 and uses a set of
+  supplies); natural recovery rolls Body + Willpower per hour (Stun) or
   Body + Body per day (Physical). Drain can't be healed by first aid or magic.
 - **Availability:** up to 6 during creation. After approval, legal items up to
   2 are always available; everything else needs a confirmed contact who covers

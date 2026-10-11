@@ -26,6 +26,23 @@ CONTACT_SUPPLY = [
     "Identity", "Tools", "Security", "Medical", "Cyberware", "Bioware",
     "Magic", "Vehicles", "Drones", "General",
 ]
+# What each kind of contact sources without ticking anything (the sheet's
+# "Can source" boxes add to this). A fixer finds anything.
+CONTACT_TYPE_SUPPLY = {
+    "Fixer": ["Fixer"],
+    "Fence": ["General", "Electronics", "Tools", "Security", "Identity"],
+    "Arms Dealer": ["Weapons", "Ammo & Explosives", "Armor"],
+    "Street Doc": ["Medical", "Cyberware", "Bioware"],
+    "Talismonger": ["Magic"],
+    "Decker": ["Matrix", "Electronics", "Identity"],
+    "Mechanic": ["Vehicles", "Drones", "Tools"],
+    "Smuggler": ["Weapons", "Ammo & Explosives", "Vehicles", "General"],
+    "Corporate": ["Electronics", "General"],
+    "Police": ["Security"],
+    "Gang": ["Weapons", "Ammo & Explosives", "General"],
+    "Media": ["Electronics"],
+    "Bartender": ["General"],
+}
 CATEGORY_SUPPLY = {
     "Melee": "Weapons", "Ranged": "Weapons", "Weapon Accessories": "Weapons",
     "Ammo & Explosives": "Ammo & Explosives", "Armor": "Armor",

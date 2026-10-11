@@ -806,7 +806,7 @@ function renderCombat() {
   root.append(list,
     h('div.row.tight.mt', h('button.small.primary', { type: 'button', onclick: () => trackerOp('next') }, 'Next turn ›'), h('button.small', { type: 'button', onclick: () => trackerOp('roll') }, 'Roll NPCs'),
       h('button.small', { type: 'button', onclick: () => trackerOp('round') }, 'New round'), h('button.small', { type: 'button', onclick: addToCombat }, '+ Add'),
-      h('button.small', { type: 'button', onclick: () => attackDialog() }, '⚔ Attack…'), h('button.small.danger', { type: 'button', onclick: () => trackerOp('end') }, 'End')),
+      h('button.small', { type: 'button', title: 'Attack with whoever’s turn it is', onclick: () => { const cur = t.entries.find(x => x.current && x.kind !== 'custom'); attackDialog(cur ? { kind: cur.kind, id: cur.ref } : undefined); } }, '⚔ Attack…'), h('button.small.danger', { type: 'button', onclick: () => trackerOp('end') }, 'End')),
     h('p.hint', 'Initiative isn’t rerolled each round in SR6: “New round” goes back to the top. Players’ own initiative rolls fill in their score.'));
 }
 function focusCombatant(e) {
@@ -882,7 +882,18 @@ async function attackDialog(attacker, target) {
     catch (e) { toast(e.message); options = []; }
     weapon.innerHTML = '';
     options.forEach(o => weapon.append(option(o.key, `${o.name} · ${o.pool} dice · DV ${o.dv}`)));
-    await loadDr(); drawModes(); suggestRange();
+    picked = false;
+    await loadDr(); drawModes(); suggestRange(); pickReachable();
+  }
+  // until the GM picks a weapon, prefer the first one that reaches the target's range band
+  let picked = false;
+  function pickReachable() {
+    if (picked) return;
+    const i = SR.RANGES.indexOf(range.value);
+    const cur = options.find(x => x.key === weapon.value);
+    if (cur && cur.ar && cur.ar[i] != null) return;
+    const ok = options.find(o => o.ar && o.ar[i] != null);
+    if (ok) { weapon.value = ok.key; drawModes(); }
   }
   async function loadDr() {
     const [kind, id] = tgtSel.value.split(':');
@@ -905,8 +916,8 @@ async function attackDialog(attacker, target) {
     const edge = ar != null ? (ar - dr >= 4 ? ' → attacker may gain 1 Edge' : dr - ar >= 4 ? ' → defender may gain 1 Edge' : '') : '';
     info.textContent = ar == null ? `Can’t attack at ${range.value} range with this.` : `AR ${ar} vs DR ${dr}${edge}${ammo}${o.spell ? ` · drain ${o.drain}${+amp.value ? ' + ' + 2 * amp.value : ''}` : ''}${o.grenade ? ' · blast ' + o.grenade.join('/') : ''}`;
   }
-  attSel.onchange = loadOptions; tgtSel.onchange = async () => { await loadDr(); suggestRange(); };
-  weapon.onchange = drawModes; mode.onchange = describe; range.onchange = describe; amp.oninput = describe;
+  attSel.onchange = loadOptions; tgtSel.onchange = async () => { await loadDr(); suggestRange(); pickReachable(); };
+  weapon.onchange = () => { picked = true; drawModes(); }; mode.onchange = describe; range.onchange = describe; amp.oninput = describe;
   const body = h('div',
     h('div.form-grid', h('label', 'Attacker', attSel), h('label', 'Target', tgtSel), h('label', 'Weapon / spell', weapon), h('label', 'Firing mode', mode),
       h('label', h('span', 'Range ', distInfo), range), h('label', 'Meters per cell', meters)),
@@ -1014,7 +1025,7 @@ function exportPng() {
     const suffix = S.mode === 'edit' ? '' : player() ? ` (${player().name}'s view)` : ' (GM view)';
     a.download = `${S.map.name.replace(/[^\w\- ]+/g, '_')}${suffix}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }, 'image/png');
-};
+}
 
 // ------------------------------------------------------------ dice (Shadowrun pools, shared table log)
 function renderRolls(rolls) { SR.renderLog($('roll-log'), rolls); }

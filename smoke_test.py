@@ -1,4 +1,5 @@
 """End-to-end API smoke test: python smoke_test.py  (uses a throwaway database)."""
+import json
 import hashlib
 import os
 import sys
@@ -171,12 +172,15 @@ check(r.status_code == 200, "legal Availability 2 needs no contact")
 r = act(action="save_contact", contact={"name": "Nails", "type": "Fixer", "connection": 8, "loyalty": 3, "supply": ["Fixer"]})
 check(not j(r)["char"]["contacts"][1]["verified"] and j(r)["player"]["pendingContacts"] == 1, "new contact after approval waits for the GM")
 r = act(action="buy", ref=ref("Monofilament Whip"))
-check(r.status_code == 400, "unconfirmed contact unlocks nothing")
+check(r.status_code == 400 and "once the GM confirms" in j(r)["error"], "unconfirmed contact unlocks nothing, and says why")
 gm.post(f"/api/players/{pid}/sheet/action", json={"action": "admin_set", "nuyen": 5000}, headers=H)
 r = gm.post(f"/api/players/{pid}/sheet/action", json={"action": "verify_contact", "index": 1}, headers=H)
 check(j(r)["char"]["contacts"][1]["verified"], "GM confirms the contact")
 r = act(action="buy", ref=ref("Monofilament Whip"))
 check(r.status_code == 200, "confirmed fixer unlocks it")
+r = gm.post(f"/api/players/{pid}/sheet/action", json={"action": "save_contact", "contact": {"name": "Doc", "type": "Street Doc", "connection": 6, "loyalty": 2}}, headers=H)
+sh = j(pl.get("/api/me/sheet"))
+check(sh["store"][ref("Medkit")][0] and sh["store"][ref("Cyberjack 1")][0], "a contact's type sources its goods without ticking boxes")
 r = act(action="buy_custom", item={"name": "Homebrew gun", "cat": "Ranged", "cost": 1})
 check(r.status_code == 400, "no custom purchases after approval")
 gm.put(f"/api/games/{cid}/settings", json={"sellPct": 60}, headers=H)
@@ -231,12 +235,43 @@ r = pl.post("/api/me/heal", json={"method": "first_aid"}, headers=H)
 check(r.status_code == 200 and "threshold" in j(r)["message"], "first aid rolled against 5 - Essence")
 r = pl.post("/api/me/heal", json={"method": "first_aid"}, headers=H)
 check(r.status_code == 400, "first aid only once per set of injuries")
+keys = {p["key"]: p for p in j(pl.get("/api/me/sheet"))["pools"]}
+check(keys.get("medkit", {}).get("heal") == "medkit" and keys["first_aid"]["heal"] == "first_aid", "healing tests are dice-roller pools")
+check(["Wireless medkit", 1] in keys["medkit"]["parts"], "medkit adds +1 (wireless)")
+r = pl.post("/api/me/heal", json={"method": "medkit"}, headers=H)
+check(r.status_code == 400 and "supplies" in j(r)["error"], "medkit needs supplies")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": ref("Medkit Supplies"), "qty": 2}, headers=H)
+r = pl.post("/api/me/heal", json={"method": "medkit", "push": True}, headers=H)
+if r.status_code == 400 and "Nothing to heal" in j(r)["error"]:
+    act(action="set_damage", track="stun", value=4)
+    r = pl.post("/api/me/heal", json={"method": "medkit", "push": True}, headers=H)
+check(r.status_code == 200 and j(r)["rollId"], "medkit heal returns its roll")
+sh = j(pl.get("/api/me/sheet"))
+check(item(sh, "Medkit Supplies")["qty"] == 1, "medkit uses one set of supplies")
+rb = pl.post(f"/api/me/rolls/{j(r)['rollId']}/boost", json={"boost": "buy_hit"}, headers=H)
+check(rb.status_code == 400, "no Edge boost after a healing roll")
 act(action="set_damage", track="stun", value=4)  # first aid may have healed it all
 r = pl.post("/api/me/heal", json={"method": "natural_stun"}, headers=H)
 check(r.status_code == 200, "rest heals Stun")
 act(action="set_damage", track="stun", value=0)
 r = pl.post("/api/me/heal", json={"method": "natural_stun"}, headers=H)
 check(r.status_code == 400 and "Nothing to heal" in j(r)["error"], "nothing to heal is refused")
+
+print("Old sheets")
+_, r = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "oldie")
+oid = j(_.get("/api/me/state"))["me"]["id"]
+with A.app_context():
+    from core import get_db
+    get_db().execute("UPDATE players SET character=?, approved=2 WHERE id=?", (json.dumps({
+        "name": "Old", "base_attributes": {"Body": 4}, "contacts": [{"name": "Jo", "type": "Fixer", "connection": 12, "loyalty": 9}],
+        "gear": {"Weapons": [{"name": "Ares Predator V"}], "Other": [{"name": "Lucky coin"}]}}), oid))
+    get_db().commit()
+osh = j(gm.get(f"/api/players/{oid}/sheet"))
+check(item(osh, "Ares Predator VI") and item(osh, "Ares Predator VI")["clip"] == 15, "old gear linked to the core-book item")
+check(item(osh, "Lucky coin")["_custom"], "unknown old gear stays custom")
+check(osh["store"][ref("Erika MCD-6")][0], "old Fixer contact unlocks the store")
+r = _.post("/api/me/sheet/action", json={"action": "reload", "uid": item(osh, "Ares Predator VI")["uid"]}, headers=H)
+check(r.status_code == 400 and "no ammunition" in j(r)["error"], "old pistol takes Heavy ammo")
 
 print("Magic")
 _, r = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "mage")

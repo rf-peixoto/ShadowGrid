@@ -662,7 +662,7 @@ function mount(root, cfg) {
     const btns = [];
     if (equippable) btns.push(h('button.small' + (on ? '.good' : ''), { type: 'button', onclick: () => act('toggle_equipped', { uid: it.uid }, { quiet: true }), title: on ? 'Equipped: click to store' : 'Stored: click to equip' }, on ? '✓ Equipped' : 'Equip'));
     if (it.clip) {
-      btns.push(h('button.small', { type: 'button', onclick: () => reload(it) }, 'Reload'));
+      btns.push(h('button.small', { type: 'button', onclick: () => reloadWeapon(it) }, 'Reload'));
       if (it.loaded && it.loaded.rounds) btns.push(h('button.small.ghost', { type: 'button', onclick: () => act('unload', { uid: it.uid }) }, 'Unload'));
       if (cfg.gm) btns.push(h('button.small.ghost', { type: 'button', onclick: async () => { const v = await UI.prompt('Set loaded rounds', `0-${it.clip}`, { type: 'number', value: it.loaded.rounds, min: 0 }); if (v !== null) act('set_ammo', { uid: it.uid, rounds: +v }); } }, 'Set ammo'));
     }
@@ -693,7 +693,7 @@ function mount(root, cfg) {
       h('td', h('a', { href: '#', onclick: e => { e.preventDefault(); showItem(it); } }, it.name), it._custom ? h('span.tag.custom', ' custom') : '', sub ? h('div.hint', sub) : null),
       h('td.hint', SR.itemStats(it)), h('td.nowrap', qtyCell), h('td.right.nowrap', btns));
   }
-  async function reload(it) {
+  async function reloadWeapon(it) {
     const stacks = c().inventory.filter(x => x.ammo_for && x.ammo_for === it.ammo_class && x.qty > 0);
     if (!stacks.length) { toast(`You have no ${it.ammo_class || ''} ammunition. Buy some in the store.`, 4000); return; }
     let pick = stacks[0].uid;
@@ -800,7 +800,7 @@ function mount(root, cfg) {
       out.append(h('div.card', h('h3', 'Weapons'), h('div.table-wrap', t), h('p.hint', 'Attack Ratings per range before the firing mode (SA −2, BF −4, FA −6). Compare with the target’s Defense Rating: 4 or more ahead earns Edge (your GM decides).')));
     }
     if (!cfg.gm && cfg.post) {
-      if (!rollerEl) rollerEl = SR.roller({ getSheet: () => S.sheet, post: cfg.post, onRolled: res => { if (res.me) mergeMe(res.me); cfg.onRolled && cfg.onRolled(res); } });
+      if (!rollerEl) rollerEl = SR.roller({ getSheet: () => S.sheet, post: cfg.post, onRolled: res => { if (res.me) mergeMe(res.me); if (cfg.onRolled) cfg.onRolled(res); else if (res.sheet) set(res.sheet); } });
       const logEl = h('div.log', { style: { maxHeight: '420px' } });
       out.append(h('div.grid2', h('div.card', h('h3', 'Dice roller'), rollerEl), h('div.card', h('h3', 'Table log'), logEl)));
       rollerEl.render();
@@ -855,7 +855,7 @@ function mount(root, cfg) {
     ch.contacts.forEach((ct, i) => tb.append(h('tr.clickable', { onclick: e => { if (!e.target.closest('button')) editContact(i); }, title: ct.notes || '' },
       h('td', h('b', ct.name), ct.verified === false ? h('span.tag.waiting', { style: { marginLeft: '.4rem' } }, 'Waiting for GM') : null),
       h('td', ct.type), h('td', ct.connection), h('td', ct.loyalty),
-      h('td', (ct.supply || []).length ? h('div.chips-list', ct.supply.map(s => h('span.chip.small', s))) : h('span.hint', '—')),
+      h('td', (() => { const sup = SR.contactSupply(ct); return sup.length ? h('div.chips-list', sup.map(s => h('span.chip.small', s === 'Fixer' ? 'Anything' : s))) : h('span.hint', 'Nothing (tick what they can source)'); })()),
       h('td.right.nowrap', cfg.gm && ct.verified === false ? h('button.small.primary', { type: 'button', onclick: () => act('verify_contact', { index: i, verified: true }) }, 'Confirm') : null,
         h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Remove ${ct.name}?`, { danger: true, ok: 'Remove' })) act('remove_contact', { index: i }); } }, '✕')))));
     t.append(tb);
@@ -869,13 +869,21 @@ function mount(root, cfg) {
     if (ct.type && !CAT.contactTypes.includes(ct.type)) type.prepend(option(ct.type, ct.type, true));
     const conn = h('input', { type: 'number', min: 1, max: 12, value: ct.connection || 1 });
     const loyal = h('input', { type: 'number', min: 1, max: 12, value: ct.loyalty || 1 });
+    const typeSup = () => CAT.contactTypeSupply[type.value] || [];
     const boxes = CAT.store.supply.map(s => h('label.check', h('input', { type: 'checkbox', value: s, checked: (ct.supply || []).includes(s) }), s === 'Fixer' ? 'Anything (fixer)' : s));
+    const fromType = h('p.hint');
+    const syncType = () => {
+      const ts = typeSup();
+      for (const b of boxes) { const x = b.querySelector('input'); const t = ts.includes(x.value); x.disabled = t; if (t) x.checked = true; else if (x.dataset.auto) x.checked = false; x.dataset.auto = t ? '1' : ''; }
+      fromType.textContent = ts.length ? `A ${type.value.toLowerCase()} sources ${ts.includes('Fixer') ? 'anything' : ts.join(', ')}. Tick more if they have other connections.` : 'Tick what this contact can source.';
+    };
+    type.onchange = syncType; syncType();
     const notes = h('textarea', { rows: 4 }, ct.notes || '');
     const ok = await UI.modal(i === null ? 'New contact' : `Edit ${ct.name}`, h('div',
       h('div.form-grid', h('label', 'Name', name), h('label', 'Type', type), h('label', 'Connection (1-12)', conn), h('label', 'Loyalty (1-12)', loyal)),
-      h('h4.mt', 'Can source'), h('div.check-grid', boxes), h('label.stack', 'Notes', notes)), { ok: 'Save' });
+      h('h4.mt', 'Can source'), fromType, h('div.check-grid', boxes), h('label.stack', 'Notes', notes)), { ok: 'Save' });
     if (!ok) return;
-    const supply = boxes.map(b => b.querySelector('input')).filter(x => x.checked).map(x => x.value);
+    const supply = boxes.map(b => b.querySelector('input')).filter(x => x.checked && !x.disabled).map(x => x.value);
     act('save_contact', { index: i, contact: { name: name.value, type: type.value, connection: +conn.value, loyalty: +loyal.value, supply, notes: notes.value, verified: true } });
   }
 

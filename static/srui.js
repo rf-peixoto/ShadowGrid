@@ -8,6 +8,8 @@ async function catalog() { if (!CAT) CAT = await api('/api/catalog'); return CAT
 // ---------------------------------------------------------------- tags & pips
 const STATUS_LABEL = { draft: 'Draft', waiting: 'Waiting for approval', approved: 'Approved' };
 function statusTag(status) { return h('span.tag.' + status, STATUS_LABEL[status] || status); }
+/* What a contact can source: their type's defaults plus the ticked boxes (same rule as the server). */
+function contactSupply(ct) { return [...new Set([...((CAT.contactTypeSupply || {})[ct.type] || []), ...(ct.supply || [])])]; }
 function healthTag(st) { return st && st !== 'OK' ? h('span.tag.status-' + st, st) : null; }
 function pips(cur, max, cap = 7) {
   const el = h('span.pips', { title: `Edge ${cur} / ${max}` });
@@ -159,7 +161,7 @@ function itemStats(it) {
 /* opts: { getSheet: () => sheet, post: (path, body) => Promise, onRolled(res), compact } */
 function roller(opts) {
   const S = { key: null, mode: 'pool', wild: false, threshold: '', mod: 0, push: false, wound: true, free: 6, last: null, sel: new Set(), label: '',
-    fire: {}, range: 'Near', drain: 0 };
+    fire: {}, range: 'Near', drain: 0, patient: '', assisted: false };
   try { Object.assign(S, JSON.parse(localStorage.getItem('sg.roller') || '{}'), { last: null, sel: new Set() }); } catch { /* ignore */ }
   const root = h('div.roller' + (opts.compact ? '.compact' : ''));
   const save = () => { try { localStorage.setItem('sg.roller', JSON.stringify({ key: S.key, mode: S.mode, wild: S.wild, threshold: S.threshold, wound: S.wound, free: S.free, fire: S.fire, range: S.range })); } catch { /* ignore */ } };
@@ -214,30 +216,46 @@ function roller(opts) {
         const need = m && pool.clip ? m.rounds : 0;
         weaponInfo = h('div.weapon-line', modeSel, rangeSel,
           h('span.chip', h('span.k', 'AR'), h('b', arNow == null ? '—' : arNow)), h('span.chip', h('span.k', 'DV'), h('b', dvNow)),
-          ammo ? h('span.chip' + (pool.clip && pool.loaded < (need || 1) ? '.bad' : ''), ammo) : null);
+          ammo ? h('span.chip' + (pool.clip && pool.loaded < (need || 1) ? '.bad' : ''), ammo) : null,
+          pool.clip && pool.loaded < pool.clip ? h('button.small', { type: 'button', onclick: () => reloadWeapon(S.key.slice(7)), title: 'Fill the magazine from your ammo' }, 'Reload') : null);
         root.append(weaponInfo);
         S._fmode = fmode;
       } else S._fmode = null;
       if (pool.spell) root.append(h('div.weapon-line', h('span.hint', `Drain ${pool.drain}${+S.drain ? ' + ' + S.drain : ''} is rolled after casting.`),
         h('label', 'Extra drain', h('input', { type: 'number', min: 0, max: 20, value: S.drain, title: 'Amp Up (+2 per extra DV) or Increase Area (+1 per +2 m)', oninput: e => { S.drain = e.target.value; } }))));
       if (pool.form) root.append(h('p.hint', `Fading ${pool.fade} is rolled after threading.`));
+      if (pool.heal) {
+        const natural = pool.heal.startsWith('natural');
+        const line = h('div.weapon-line');
+        if (!natural) {
+          const allies = sh.allies || [];
+          if (!allies.some(a => a.id === S.patient)) S.patient = '';
+          line.append(h('label', 'Patient', h('select', { onchange: e => { S.patient = e.target.value; } }, option('', 'Myself', !S.patient), allies.map(a => option(a.id, a.name, a.id === S.patient)))));
+          if (pool.heal === 'medkit') line.append(h('span.chip' + (pool.supplies ? '' : '.bad'), `${pool.supplies} supplies`));
+          if (pool.heal === 'magic') line.append(h('span.hint', `Drain ${pool.drain} after casting.`));
+          line.append(h('span.hint', 'Threshold 5 − the patient’s Essence. Works once per set of injuries.'));
+        } else line.append(h('label.check', h('input', { type: 'checkbox', checked: S.assisted, onchange: e => { S.assisted = e.target.checked; } }), 'A Biotech-trained helper watches (+2)'));
+        root.append(line);
+      }
     } else {
       root.append(h('div.free', h('label', 'Dice', h('input', { type: 'number', min: 1, max: 60, value: S.free, oninput: e => { S.free = e.target.value; save(); refreshTotals(); } })),
         h('input.grow', { placeholder: 'What is it for? (optional)', value: S.label, oninput: e => { S.label = e.target.value; } })));
     }
     const edge = sh.char.current_edge, pushCost = CAT.rules.pushCost;
-    const optsRow = h('div.opts',
+    const healing = S.mode === 'pool' && pool && pool.heal;
+    const optsRow = h('div.opts', healing ? null : [
       h('label.check', { title: 'One die is the Wild Die: 5-6 = 3 hits, 1 = your 5s don’t count' }, h('input', { type: 'checkbox', checked: S.wild, onchange: e => { S.wild = e.target.checked; save(); } }), 'Wild Die'),
-      h('label', 'Threshold', h('input', { type: 'number', min: 0, max: 30, value: S.threshold, placeholder: '–', oninput: e => { S.threshold = e.target.value; save(); } })));
+      h('label', 'Threshold', h('input', { type: 'number', min: 0, max: 30, value: S.threshold, placeholder: '–', oninput: e => { S.threshold = e.target.value; save(); } }))]);
     if (S.mode === 'pool') {
       optsRow.append(h('label', 'Mod', h('input', { type: 'number', min: -30, max: 30, value: S.mod, oninput: e => { S.mod = e.target.value; refreshTotals(); } })));
       if (wound) optsRow.append(h('label.check', h('input', { type: 'checkbox', checked: S.wound, onchange: e => { S.wound = e.target.checked; save(); render(); } }), `Wounds (${wound})`));
       optsRow.append(h('label.check', { title: `Before rolling: spend ${pushCost} Edge to add your Edge (${sh.derived.edge_max}) to the pool; 6s explode` },
-        h('input', { type: 'checkbox', checked: S.push, disabled: edge < pushCost, onchange: e => { S.push = e.target.checked; refreshTotals(); } }), `Push (+${sh.derived.edge_max}, ${pushCost} Edge)`));
+        h('input', { type: 'checkbox', checked: S.push && !(pool && pool.noEdge), disabled: edge < pushCost || !!(pool && (pool.noEdge || (pool.heal || '').startsWith('natural'))), onchange: e => { S.push = e.target.checked; refreshTotals(); } }), `Push (+${sh.derived.edge_max}, ${pushCost} Edge)`));
+      if (pool && pool.noEdge) optsRow.append(h('span.hint', 'No Edge without a medkit.'));
     }
     root.append(optsRow);
     function rollLabel(t) {
-      const verb = pool && S.mode === 'pool' ? (pool.weapon ? 'Attack' : pool.spell ? 'Cast' : pool.form ? 'Thread' : 'Roll') : 'Roll';
+      const verb = pool && S.mode === 'pool' ? (pool.weapon ? 'Attack' : pool.spell ? 'Cast' : pool.form ? 'Thread' : pool.heal ? (pool.heal.startsWith('natural') ? 'Rest' : 'Heal') : 'Roll') : 'Roll';
       return `${verb}: ${t + (S.push ? sh.derived.edge_max : 0)} dice`;
     }
     rollBtn = h('button.primary', { type: 'button', onclick: roll, disabled: total <= 0 && !S.push }, rollLabel(total));
@@ -250,7 +268,7 @@ function roller(opts) {
     const d = r.data;
     const card = h('div.result');
     card.append(h('div.top', h('div.hits', d.hits, h('small', d.hits === 1 ? 'hit' : 'hits')), verdict(d)));
-    const canBoost = !d.boost && r.playerId && (Date.now() / 1000 - r.at < 14 * 60);
+    const canBoost = !d.boost && !d.heal && r.playerId && (Date.now() / 1000 - r.at < 14 * 60);
     const dice = h('div.dice-row');
     d.dice.forEach((x, i) => dice.append(dieEl(x, i, { selectable: canBoost, selected: S.sel.has(i), onClick: idx => { S.sel.has(idx) ? S.sel.delete(idx) : S.sel.add(idx); render(); } })));
     card.append(dice);
@@ -269,6 +287,18 @@ function roller(opts) {
     return card;
   }
   async function roll() {
+    const sh = opts.getSheet(), pool = S.mode === 'pool' ? sh.pools.find(p => p.key === S.key) : null;
+    if (pool && pool.heal) {
+      try {
+        const res = await opts.post('heal', { method: pool.heal, target: S.patient || undefined, push: S.push && !pool.noEdge, mod: +S.mod || 0, wound: S.wound, assisted: S.assisted });
+        S.push = false; S.sel = new Set();
+        S.last = res.rolls.find(r => r.id === res.rollId) || null;
+        toast(res.message, 4500);
+        opts.onRolled && opts.onRolled(res);
+        render();
+      } catch (e) { toast(e.message, 4500); }
+      return;
+    }
     const body = { wild: S.wild, threshold: +S.threshold || 0 };
     if (S.mode === 'pool') Object.assign(body, { key: S.key, mod: +S.mod || 0, wound: S.wound, push: S.push, mode: S._fmode, range: S.range, drain: +S.drain || 0 });
     else Object.assign(body, { dice: +S.free || 0, label: S.label.trim() });
@@ -279,6 +309,14 @@ function roller(opts) {
       opts.onRolled && opts.onRolled(res);
       render();
     } catch (e) { toast(e.message, 4000); }
+  }
+  async function reloadWeapon(uid) {
+    try {
+      const sh = await opts.post('sheet/action', { action: 'reload', uid });
+      toast(sh.message, 3000);
+      opts.onRolled && opts.onRolled({ sheet: sh });
+      render();
+    } catch (e) { toast(e.message, 4500); }
   }
   async function boost(key) {
     if (!S.last) return;
@@ -390,6 +428,6 @@ async function invite(cid, gameName) {
   return res;
 }
 
-return { invite, catalog, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
+return { invite, catalog, contactSupply, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
   roller, edgeMenu, editItem, itemStats, availText, arText, breakdown, sum, RANGES };
 })();

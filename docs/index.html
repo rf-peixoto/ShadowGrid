@@ -231,11 +231,18 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       </figure>
 
       <h3 id="contacts">Contacts</h3>
-      <p>Contacts are how you get gear. Each contact has a <strong>Connection</strong> and a <strong>Loyalty</strong> (1-12) and a list of what they can <strong>source</strong>: weapons, armor, cyberware, magic, vehicles, and so on. A fixer can find anything. A contact can get an item whose Availability is <em>lower</em> than their Connection.</p>
-      <figure>
-        <a class="shot" href="img/player-contacts.png"><img src="img/player-contacts.png" width="1440" height="421" alt="Contacts table with a fixer, an arms dealer and a street doc waiting for GM confirmation" loading="lazy"></a>
-        <figcaption>Contacts added or changed after approval wait for the GM to confirm them before they unlock anything.</figcaption>
-      </figure>
+      <p>Contacts are how you get gear. Each contact has a <strong>Connection</strong> and a <strong>Loyalty</strong> (1-12) and a list of what they can <strong>source</strong>: weapons, armor, cyberware, magic, vehicles, and so on. A contact can get an item whose Availability is <em>lower</em> than their Connection.</p>
+      <p>The contact's <strong>type</strong> already sets what they source: a fixer finds anything, an arms dealer weapons, ammo and armor, a street doc medical gear, cyberware and bioware, a talismonger magic, a decker Matrix gear, electronics and IDs, a mechanic vehicles, drones and tools, and so on. Tick extra boxes for anything else they can get you.</p>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/player-contact-form.png"><img src="img/player-contact-form.png" width="720" height="660" alt="New contact form: a street doc already sources Medical, Cyberware and Bioware, with Drones ticked as an extra" loading="lazy"></a>
+          <figcaption>A street doc sources medical gear, cyberware and bioware; the ticked box adds drones.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/player-contacts.png"><img src="img/player-contacts.png" width="1440" height="421" alt="Contacts table with a fixer, an arms dealer and a street doc waiting for GM confirmation" loading="lazy"></a>
+          <figcaption>Contacts added or changed after approval wait for the GM to confirm them before they unlock anything.</figcaption>
+        </figure>
+      </div>
 
       <h3 id="gear">Store, gear and ammo</h3>
       <p>The <span class="ui">Store</span> tab has every item from the core book, by category: weapons, ammunition and explosives, accessories, armor, electronics, cyberdecks and software, IDs, tools, security gear, medical supplies, cyberware, bioware, magic items, vehicles and drones. Each card shows the game stats, the Availability (L means a license is needed, I means illegal) and the price. Rated items have a rating box, implants a grade (used, alphaware, betaware, deltaware), and ammo is sold in boxes of 10.</p>
@@ -251,14 +258,14 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <p>Your items appear in the <strong>Gear</strong> section of your sheet, grouped by category:</p>
       <ul>
         <li><strong>Equip</strong> weapons and armor. Your best body armor plus helmets, shields and implants add to your Defense Rating.</li>
-        <li><strong>Reload</strong> guns from your ammo stacks. The rounds loaded and the ammo type (APDS, explosive, gel and so on) are shown and change the weapon's Attack Rating and damage.</li>
+        <li><strong>Reload</strong> guns from your ammo stacks, here or with the Reload button in the dice roller. Ammo fits by caliber: heavy pistol and SMG rounds, light pistol rounds, rifle rounds and so on, as named in the store. The rounds loaded and the ammo type (APDS, explosive, gel and so on) are shown and change the weapon's Attack Rating and damage.</li>
         <li>Rolling an attack spends the ammo by firing mode, and throwing a grenade or throwing knife uses it up.</li>
         <li>Vehicles and drones have their stats and a damage monitor. Foci are bonded from here or from the Magic section.</li>
         <li><strong>Sell</strong> gives you the game's buy-back percentage, again through a contact who could handle the item (implants included). During creation, <span class="ui">Return</span> refunds the full price instead.</li>
       </ul>
       <figure>
-        <a class="shot" href="img/player-gear.png"><img src="img/player-gear.png" width="1440" height="900" alt="Gear section with an equipped katana, a pistol with 13 of 15 rounds loaded and ammo stacks" loading="lazy"></a>
-        <figcaption>A pistol with 13/15 rounds loaded, two ammo stacks and grenades.</figcaption>
+        <a class="shot" href="img/player-gear.png"><img src="img/player-gear.png" width="1440" height="900" alt="Gear section with an equipped katana, a pistol with 3 of 15 rounds loaded and ammo stacks" loading="lazy"></a>
+        <figcaption>A pistol with 3 of its 15 rounds left, two ammo stacks and grenades.</figcaption>
       </figure>
 
       <h3 id="magic">Magic and resonance</h3>
@@ -318,7 +325,11 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/player-combat.png"><img src="img/player-combat.png" width="1440" height="900" alt="Combat section with condition monitors, the healing panel, Edge, combat values and statuses" loading="lazy"></a>
         <figcaption>Condition monitors (Physical shows the overflow boxes), healing, Edge, combat values and the statuses the GM has set.</figcaption>
       </figure>
-      <p><strong>Healing</strong> follows the book. First aid and medkits roll Biotech + Logic against 5 − the patient's Essence; a Heal spell rolls Sorcery + Magic. Each works once per set of injuries and never heals drain. You can treat yourself or an ally. Rest rolls Body + Willpower per hour for Stun and Body + Body per day for Physical, with +2 when someone trained in Biotech looks after you.</p>
+      <p><strong>Healing</strong> follows the book, and every method is in the dice roller's <em>Healing</em> group: pick it, choose the patient (yourself or an ally) and roll; the healing is applied right away. First aid and medkits roll Biotech + Logic against 5 − the patient's Essence; a Heal spell rolls Sorcery + Magic. First aid without a medkit is −2 dice and can't use Edge; a medkit adds +1 (wireless) and uses one set of Medkit Supplies, which you need to have. Each works once per set of injuries and never heals drain. Rest rolls Body + Willpower per hour for Stun and Body + Body per day for Physical, with +2 when someone trained in Biotech looks after you.</p>
+      <figure>
+          <a class="shot narrow" href="img/player-heal-roller.png"><img src="img/player-heal-roller.png" width="267" height="289" alt="Dice roller with the Medkit pool selected, an ally picked as the patient, 4 supplies and the button Heal: 6 dice" loading="lazy"></a>
+          <figcaption>Healing an ally with a medkit from the roller.</figcaption>
+        </figure>
 
       <h3 id="runs">Runs and lifestyle</h3>
       <p>The <span class="ui">Runs</span> tab lists the contracts the GM gave you, with their tasks and progress. Tasks marked <span style="color:var(--accent)">*</span> are mandatory. When the GM closes the run, your reward is added to your nuyen.</p>

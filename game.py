@@ -46,7 +46,7 @@ def catalog():
                       "items": CAT.ITEMS, "grades": G.IMPLANT_GRADES, "firingModes": G.FIRING_MODES,
                       "ammoTypes": G.AMMO_TYPES, "ranges": G.RANGES, "rangeMeters": G.RANGE_METERS,
                       "creationMaxAvail": CAT.CREATION_MAX_AVAIL, "alwaysAvail": CAT.ALWAYS_AVAIL},
-            "contactTypes": R.CONTACT_TYPES,
+            "contactTypes": R.CONTACT_TYPES, "contactTypeSupply": G.CONTACT_TYPE_SUPPLY,
             "spells": M.SPELLS, "rituals": M.RITUALS, "powers": M.ADEPT_POWERS, "metamagics": M.METAMAGICS,
             "spirits": list(M.SPIRITS), "complexForms": M.COMPLEX_FORMS, "sprites": M.SPRITES, "echoes": M.ECHOES,
             "programs": M.PROGRAMS, "matrixModes": list(M.MATRIX_INIT), "focusBond": G.FOCUS_BOND_KARMA,
@@ -463,83 +463,106 @@ def charge_lifestyle(cid):
 
 # ====================================================================== healing
 def _heal(patient_id, healer_row, method, b, admin):
-    """Roll a healing test (healer's pool, or natural recovery) and apply it to the patient."""
+    """Roll a healing test (healer's pool, or natural recovery) and apply it to the patient.
+    Returns (error_response, None) or (None, message, roll id)."""
     if method not in R.HEAL_METHODS:
-        return err("Unknown healing method.")
+        return err("Unknown healing method."), None
     note = {}
+    self_heal = healer_row is None or healer_row["id"] == patient_id
+    hc0 = None if healer_row is None else load_char(healer_row)
+    push = bool(b.get("push"))
+    if hc0 is not None and method in ("first_aid", "medkit", "magic"):
+        if method == "medkit":
+            if not R.medkits(hc0):
+                return err("The healer has no medkit."), None
+            if not R.medkit_supplies(hc0) and not admin:
+                return err("The medkit is out of supplies. Buy Medkit Supplies in the store."), None
+        if push and method == "first_aid" and not R.medkits(hc0):
+            return err("First aid without a medkit can't use Edge."), None
+    if push and (hc0 is None or hc0["current_edge"] < DICE.PUSH_COST):
+        return err(f"Pushing needs {DICE.PUSH_COST} Edge."), None
 
     def mutate(c, ctx, row):
         dmg = {"natural_stun": R._int(c["stun_damage"]), "natural_physical": R._int(c["physical_damage"])}.get(
             method, R._int(c["stun_damage"]) - R._int(c.get("drain_stun")) + R._int(c["physical_damage"]) - R._int(c.get("drain_phys")))
         if dmg <= 0:
             raise R.RuleError("Nothing to heal" + (" (drain only heals with rest)." if method in ("first_aid", "medkit", "magic") and (c["stun_damage"] or c["physical_damage"]) else "."))
+        hc = c if self_heal else hc0
+        hd = R.derive(hc)
+        sp = None
         if method.startswith("natural"):
             parts = R.natural_pool(c, method, bool(b.get("assisted")))
-            who = "Rest"
+        elif method == "magic":
+            sp = next((s for s in hc.get("spells") or [] if s.get("name") in R.HEAL_SPELLS), None)
+            if not sp and not admin:
+                raise R.RuleError("The healer doesn't know a Heal spell.")
+            prof = R.spell_profile(hc, hd, sp or {"name": "Heal", "drain": 3}) if hc.get("magic_type") in R.CASTERS else None
+            if not prof:
+                raise R.RuleError("The healer can't cast spells.")
+            parts = list(prof["parts"])
         else:
-            hc = c if (healer_row is None or healer_row["id"] == row["id"]) else load_char(healer_row)
-            hd = R.derive(hc)
-            if method == "magic":
-                sp = next((s for s in hc.get("spells") or [] if s.get("name") in ("Heal", "Cleansing Heal", "Cooling Heal", "Warming Heal")), None)
-                if not sp and not admin:
-                    raise R.RuleError("The healer doesn't know a Heal spell.")
-                prof = R.spell_profile(hc, hd, sp or {"name": "Heal", "drain": 3}) if hc.get("magic_type") in R.CASTERS else None
-                if not prof:
-                    raise R.RuleError("The healer can't cast spells.")
-                parts = list(prof["parts"])
-            else:
-                parts = list(R.pool_by_key(hc, "first_aid", hd)["parts"])
-                kits = [it for it in hc["inventory"] if it.get("medkit")]
-                if method == "medkit":
-                    if not kits:
-                        raise R.RuleError("The healer has no medkit.")
-                    kit = max(kits, key=lambda k: R._int(k.get("rating"), 1))
-                    parts.append([kit["name"], R._int(kit.get("rating"), 1)])
-                elif not kits:
-                    parts.append(["No medkit", -2])
-            if hd["wound_modifier"]:
-                parts.append(["Wound modifier", hd["wound_modifier"]])
-            who = display_name(healer_row) if healer_row is not None else "GM"
-        pool = max(1, sum(x[1] for x in parts))
-        r = DICE.new_roll(pool)
+            if method == "medkit" and not R.medkits(hc):
+                raise R.RuleError("The healer has no medkit.")
+            parts = [list(x) for x in R.pool_by_key(hc, method, hd)["parts"]]
+        if b.get("wound", True) and hd["wound_modifier"] and not method.startswith("natural"):
+            parts.append(["Wound modifier", hd["wound_modifier"]])
+        mod = clamp_int(b.get("mod"), -30, 30, 0)
+        if mod:
+            parts.append(["Modifier", mod])
+        pe = 0
+        if push:
+            pe = hd["edge_max"]
+            parts.append(["Edge (pushed, exploding 6s)", pe])
+            if self_heal:
+                R.spend_edge(c, DICE.PUSH_COST)
+        pool = max(1, sum(x[1] for x in parts) - pe)
+        r = DICE.new_roll(pool, push_edge=pe)
         d = R.derive(c)
-        bonus = 1 if method in ("first_aid", "medkit") and d["essence"] >= 6 else 0
-        if bonus:
+        if method in ("first_aid", "medkit") and d["essence"] >= 6:
             r["bought"] = r.get("bought", 0) + 1
-            DICE.evaluate(r)
             parts.append(["Full Essence (+1 hit)", 0])
         label = {"first_aid": "First aid", "medkit": "Medkit", "magic": "Heal spell", "natural_stun": "Rest (Stun)",
                  "natural_physical": "Rest (Physical)"}[method]
-        r["label"] = f"{label} on {display_name(row, c)}" + (f" by {who}" if who not in ("Rest",) else "")
+        r["label"] = f"{label} on {display_name(row, c)}" if not self_heal else f"{label} (self)" if not method.startswith("natural") else label
         r["parts"] = parts
+        r["heal"] = method
         if method in ("first_aid", "medkit", "magic"):
             r["threshold"] = R.heal_threshold(d)
-            DICE.evaluate(r)
-        ctx.rolls.append(("sr", r))
+        DICE.evaluate(r)
         text = R.apply_heal(c, method, r["hits"], ctx)
-        if method == "magic" and healer_row is not None and healer_row["id"] == row["id"]:
+        r["note"] = text
+        actor = healer_row if healer_row is not None else row
+        note["rid"] = add_roll(row["campaign_id"], actor["id"] if healer_row is not None else row["id"],
+                               display_name(actor, hc if healer_row is not None else c) if healer_row is not None else "GM",
+                               actor["color"], "sr", r)
+        if method == "magic" and self_heal and healer_row is not None:
             R.after_cast(c, sp or {"name": "Heal", "drain": 3}, ctx)
-        note["text"] = text
-        ctx.log.append(f"{label}: {text}")
+        if method == "medkit" and self_heal and healer_row is not None:
+            _use_supplies(c)
         return text
     try:
         _row, _ctx, msg = char_tx(patient_id, admin, mutate)
-        if method == "medkit" and healer_row is not None:
-            def use_supplies(c, ctx, row):
-                sup = next((it for it in c["inventory"] if it.get("ref") == "medical-medkit-supplies"), None)
-                if sup:
-                    sup["qty"] = R._int(sup.get("qty"), 1) - 1
-                    if sup["qty"] <= 0:
-                        c["inventory"].remove(sup)
-            char_tx(healer_row["id"], True, use_supplies)
-        if method == "magic" and healer_row is not None and healer_row["id"] != patient_id:
-            def drain(c, ctx, row):
-                sp = next((s for s in c.get("spells") or [] if s.get("name") in ("Heal", "Cleansing Heal", "Cooling Heal", "Warming Heal")), None)
-                R.after_cast(c, sp or {"name": "Heal", "drain": 3}, ctx)
-            char_tx(healer_row["id"], True, drain)
+        if healer_row is not None and not self_heal:
+            def after(c, ctx, row):
+                if push:
+                    R.spend_edge(c, DICE.PUSH_COST)
+                if method == "medkit":
+                    _use_supplies(c)
+                if method == "magic":
+                    sp = next((s for s in c.get("spells") or [] if s.get("name") in R.HEAL_SPELLS), None)
+                    R.after_cast(c, sp or {"name": "Heal", "drain": 3}, ctx)
+            char_tx(healer_row["id"], True, after)
     except R.RuleError as e:
-        return err(str(e))
-    return None, msg
+        return err(str(e)), None
+    return None, msg, note.get("rid")
+
+
+def _use_supplies(c):
+    sup = next((it for it in c["inventory"] if it.get("ref") == "medical-medkit-supplies"), None)
+    if sup:
+        sup["qty"] = R._int(sup.get("qty"), 1) - 1
+        if sup["qty"] <= 0:
+            c["inventory"].remove(sup)
 
 
 @app.route("/api/me/heal", methods=["POST"])
@@ -556,9 +579,10 @@ def me_heal(me):
     if method.startswith("natural") and target != me["id"]:
         return err("Only the patient can rest.")
     res = _heal(target, me, method, b, False)
-    if isinstance(res, tuple) and res[0] is not None:
-        return res
-    return jsonify({"message": res[1], "rolls": roll_rows(me["campaign_id"]), "sheet": sheet_payload(fetch_player_row(me["id"]), False)})
+    if res[0] is not None:
+        return res[0]
+    return jsonify({"message": res[1], "rollId": res[2], "rolls": roll_rows(me["campaign_id"]),
+                    "sheet": sheet_payload(fetch_player_row(me["id"]), False), "me": row_to_player(fetch_player_row(me["id"]), False)})
 
 
 @app.route("/api/players/<pid>/heal", methods=["POST"])
@@ -570,8 +594,8 @@ def gm_heal(pid):
     if b.get("healer"):
         healer = get_db().execute("SELECT * FROM players WHERE id=? AND campaign_id=?", (str(b["healer"]), row["campaign_id"])).fetchone()
     res = _heal(pid, healer, str(b.get("method") or ""), b, True)
-    if isinstance(res, tuple) and res[0] is not None:
-        return res
+    if res[0] is not None:
+        return res[0]
     out = sheet_payload(fetch_player_row(pid), True)
     out["message"] = res[1]
     return jsonify(out)
@@ -882,7 +906,10 @@ def me_roll(me):
         char_tx(me["id"], False, mutate)
     except R.RuleError as e:
         return err(str(e))
-    return jsonify({"rollId": out["rid"], "rolls": roll_rows(me["campaign_id"]), "me": row_to_player(fetch_player_row(me["id"]), False)})
+    res = {"rollId": out["rid"], "rolls": roll_rows(me["campaign_id"]), "me": row_to_player(fetch_player_row(me["id"]), False)}
+    if str(b.get("key") or "").startswith(("weapon:", "spell:", "form:")):
+        res["sheet"] = sheet_payload(fetch_player_row(me["id"]), False)   # ammo, drain or fading changed
+    return jsonify(res)
 
 
 @app.route("/api/me/rolls/<rid>/boost", methods=["POST"])
@@ -902,6 +929,8 @@ def me_boost(me, rid):
         if not fresh:
             raise R.RuleError("That roll is gone.")
         r = json.loads(fresh["data"])
+        if r.get("heal"):
+            raise R.RuleError("Healing is applied as soon as you roll; push before rolling instead.")
         try:
             cost = DICE.apply_boost(r, str(b.get("boost") or ""), b.get("dice") or [])
         except DICE.DiceError as e:

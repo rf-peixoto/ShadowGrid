@@ -58,7 +58,9 @@ An attack is an opposed test:
     "Healing": """**Healing**
 Overflow heals first. Each method works once per set of injuries.
 - First aid (within a minute): Biotech + Logic, threshold 5 - patient's Essence (+1 hit if the patient has full Essence; -2 dice without a kit). Extra hits heal 1 Stun each, or 1 Physical per 2 hits.
-- Medkit (within an hour): same test plus the medkit's rating; each extra hit heals 1 box of any kind. Uses one set of supplies.
+- Medkit (within an hour): same test, +1 die for the wireless medkit; each extra hit heals 1 box of any kind. Uses one set of supplies, and can't be done without supplies.
+- Without a medkit, first aid can't use Edge.
+- Roll any of these from the dice roller (Healing group): pick the patient, and the healing is applied.
 - Magic: Sorcery + Magic with a Heal spell, same threshold; each net hit heals 1 box.
 - None of those heal drain.
 - Natural recovery: Body + Willpower per hour of rest heals Stun; Body + Body per day heals Physical (overflow: minus wound modifiers). A Biotech-trained helper adds +2 dice.""",

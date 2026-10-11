@@ -17,6 +17,7 @@ Economy:
 - The GM can do anything and never pays.
 """
 import copy
+import difflib
 import math
 import re
 import secrets
@@ -185,7 +186,50 @@ def normalize(c):
         c["skills"].setdefault(s, 0)
     c["karma"] = _int(c["karma"])
     c["nuyen"] = _int(c["nuyen"])
+    _relink(c)
     return c
+
+
+def _norm_name(s):
+    return re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).strip()
+
+
+_CAT_NAMES = {}
+
+
+def catalog_match(name):
+    """Find the catalog entry for a free-text item name -> (entry, rating) or (None, None)."""
+    if not _CAT_NAMES:
+        for e in CAT.ITEMS:
+            _CAT_NAMES.setdefault(_norm_name(e["name"]), e)
+    n = _norm_name(name)
+    if n in _CAT_NAMES:
+        return _CAT_NAMES[n], None
+    m = re.match(r"^(.*?)\s*(?:r|rating)?\s*(\d{1,2})$", n)
+    if m and m.group(1) in _CAT_NAMES and CAT.rating_range(_CAT_NAMES[m.group(1)]):
+        return _CAT_NAMES[m.group(1)], int(m.group(2))
+    close = difflib.get_close_matches(n, list(_CAT_NAMES), n=1, cutoff=0.9)
+    return (_CAT_NAMES[close[0]], None) if close else (None, None)
+
+
+def _relink(c):
+    """Gear carried over from the first sheet format has no game stats: link it to the store item of the same name."""
+    for i, it in enumerate(c.get("inventory") or []):
+        if it.get("ref") or not it.get("_custom") or it.get("_linkchk") or any(k in it for k in CAT.STAT_KEYS):
+            continue
+        it["_linkchk"] = 1
+        e, rating = catalog_match(it.get("name"))
+        if not e:
+            continue
+        lo_hi = CAT.rating_range(e)
+        if lo_hi:
+            rating = max(lo_hi[0], min(lo_hi[1], rating or lo_hi[0]))
+        new = CAT.make_item(e, rating=rating, metatype=c.get("metatype", ""), uid=it.get("uid") or _uid(c))
+        new["qty"] = max(1, _int(it.get("qty"), 1)) * CAT.box_size(e)
+        for k in ("equipped", "notes", "bonded"):
+            if k in it:
+                new[k] = it[k]
+        c["inventory"][i] = new
 
 
 # --------------------------------------------------------------------------- lookups
@@ -678,7 +722,7 @@ def pools(c, d=None):
     soak = [["Body", A["Body"]]] + [[it["name"], _int(it.get("soak"))] for it in implants(c) if _int(it.get("soak"))]
     out.append(_pool("soak", "Combat", "Damage resistance", soak))
     out.append(_pool("toxin", "Combat", "Toxin resistance", [["Body", A["Body"]], ["Willpower", A["Willpower"]]]))
-    out.append(_pool("first_aid", "Healing", "First aid / medkit", _skill_parts(c, d, "Biotech", focus="First Aid") or [["Logic", A["Logic"]], ["Biotech (untrained)", -1]]))
+    out.extend(heal_pools(c, d))
     out.append(_pool("composure", "Attribute tests", "Composure", [["Willpower", A["Willpower"]], ["Charisma", A["Charisma"]]]))
     out.append(_pool("judge", "Attribute tests", "Judge intentions", [["Willpower", A["Willpower"]], ["Intuition", A["Intuition"]]]))
     mem = [["Logic", A["Logic"]], ["Intuition", A["Intuition"]]]
@@ -692,6 +736,42 @@ def pools(c, d=None):
         if a in ("Magic", "Resonance") and not A[a]:
             continue
         out.append(_pool(f"attr:{a}", "Single attribute", a, [[a, A.get(a, 0)]]))
+    return out
+
+
+HEAL_SPELLS = ("Heal", "Cleansing Heal", "Cooling Heal", "Warming Heal")
+
+
+def medkits(c):
+    return [it for it in c.get("inventory") or [] if it.get("medkit")]
+
+
+def medkit_supplies(c):
+    return sum(_int(it.get("qty"), 1) for it in c.get("inventory") or [] if it.get("ref") == "medical-medkit-supplies")
+
+
+def heal_pools(c, d):
+    """Healing tests for the dice roller (book p. 119-121). ``heal`` names the method the roll applies."""
+    A = d["attributes"]
+    base = _skill_parts(c, d, "Biotech", focus="First Aid") or [["Logic", A["Logic"]], ["Biotech (untrained)", -1]]
+    kits = medkits(c)
+    out = []
+    if kits:
+        out.append(_pool("first_aid", "Healing", "First aid", base, heal="first_aid"))
+        sup = medkit_supplies(c)
+        out.append(_pool("medkit", "Healing", f"Medkit · {sup} supplies", base + [["Wireless medkit", 1]],
+                         heal="medkit", supplies=sup))
+    else:
+        out.append(_pool("first_aid", "Healing", "First aid (no medkit)", base + [["No medkit", -2]], heal="first_aid", noEdge=True))
+    if c.get("magic_type") in CASTERS:
+        for sp in c.get("spells") or []:
+            if sp.get("name") in HEAL_SPELLS:
+                prof = spell_profile(c, d, sp)
+                if prof:
+                    out.append(_pool("magic", "Healing", f"{sp['name']} spell", prof["parts"], heal="magic", drain=prof["drain"]))
+                break
+    out.append(_pool("natural_stun", "Healing", "Rest 1 hour (Stun)", natural_pool(c, "natural_stun"), heal="natural_stun"))
+    out.append(_pool("natural_physical", "Healing", "Rest 1 day (Physical)", natural_pool(c, "natural_physical"), heal="natural_physical"))
     return out
 
 
@@ -1497,7 +1577,7 @@ def a_save_contact(c, p, ctx):
     i = _list_index(c["contacts"], p["index"])
     old = c["contacts"][i]
     if ctx.locked:
-        changed = any(old.get(k) != contact[k] for k in ("connection", "loyalty", "supply"))
+        changed = any(old.get(k) != contact[k] for k in ("type", "connection", "loyalty", "supply"))
         contact["verified"] = old.get("verified", True) and not changed
     elif ctx.admin and "verified" in raw:
         contact["verified"] = bool(raw["verified"])
