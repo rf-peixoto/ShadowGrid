@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>ShadowGrid</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="app player-page">
+<header class="appbar">
+  <h1 class="brand">Shadow<span>Grid</span></h1>
+  <span class="game-name" id="game-name"></span>
+  <nav class="tabs" id="tabs" role="tablist">
+    <button data-view="map" role="tab">Map</button>
+    <button data-view="sheet" role="tab">Character <span class="badge" id="badge-sheet" hidden>!</span></button>
+    <button data-view="store" role="tab">Store</button>
+    <button data-view="runs" role="tab">Runs <span class="badge" id="badge-runs" hidden></span></button>
+    <button data-view="wiki" role="tab">Wiki</button>
+  </nav>
+  <div class="chips">
+    <span class="chip" id="chip-health" title="Condition"></span>
+    <span class="chip" title="Edge (your GM refreshes it)"><span class="k">Edge</span><span id="chip-edge-pips"></span><b id="chip-edge"></b></span>
+    <span class="chip"><span class="k">Karma</span><b id="chip-karma"></b></span>
+    <span class="chip"><span class="k">Nuyen</span><b id="chip-nuyen"></b></span>
+    <div class="menu">
+      <button id="btn-account" class="ghost" aria-haspopup="true"><span class="dot" id="me-dot"></span><span id="me-name">…</span> ▾</button>
+      <div class="menu-pop" id="account-menu" hidden>
+        <button id="btn-password">Change password</button>
+        <form method="post" action="/logout"><button style="width:100%">Sign out</button></form>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ===== MAP ===== -->
+<section class="view" id="view-map">
+  <div class="workspace">
+    <aside class="tools player-tools">
+      <div class="tool-group">
+        <p class="hint" id="p-help">Waiting for the game master to place you on a map.</p>
+        <div id="p-actions" class="col"></div>
+      </div>
+      <details class="tool-group" open>
+        <summary>Condition</summary>
+        <div id="p-condition" class="col"></div>
+      </details>
+      <details class="tool-group" open id="dice-panel">
+        <summary>Dice</summary>
+        <div id="p-roller"></div>
+      </details>
+      <details class="tool-group" open>
+        <summary>Table log</summary>
+        <div class="log" id="p-log"></div>
+      </details>
+      <div class="tool-group always">
+        <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle" checked> Isometric view</label>
+        <label class="check"><input type="checkbox" id="legend-toggle" checked> Show legend</label>
+        <p class="hint">Drag your token or click a room to move. Double-click to ping. Scroll to zoom, right-drag to pan. <kbd>F</kbd> fits the map, <kbd>C</kbd> centres on you, <kbd>I</kbd> toggles the isometric view.</p>
+      </div>
+    </aside>
+    <main class="canvas-wrap" id="canvas-wrap">
+      <canvas id="map"></canvas>
+      <div class="legend" id="legend"></div>
+      <canvas id="minimap" class="minimap"></canvas>
+      <div id="map-empty" class="overlay" hidden><div class="panel"><h3>No map yet</h3><p class="muted">Your GM hasn't placed your token on a map. Meanwhile, build your character.</p><button class="primary" data-goto="sheet">Open my character</button></div></div>
+    </main>
+  </div>
+</section>
+
+<!-- ===== CHARACTER ===== -->
+<section class="view" id="view-sheet"><div class="page"><div class="page-inner" id="sheet-root"></div></div></section>
+
+<!-- ===== STORE ===== -->
+<section class="view" id="view-store"><div class="page"><div class="page-inner">
+  <div class="section-head"><h2>Store</h2><span class="chip"><span class="k">You have</span><b id="store-nuyen"></b></span></div>
+  <div id="store-note"></div>
+  <div class="store-head">
+    <input type="search" id="store-search" placeholder="Search gear…" aria-label="Search the store">
+    <button id="store-custom">Custom item…</button>
+  </div>
+  <div class="cat-chips" id="store-cats"></div>
+  <div class="store-grid mt" id="store-grid"></div>
+</div></div></section>
+
+<!-- ===== RUNS ===== -->
+<section class="view" id="view-runs"><div class="page"><div class="page-inner">
+  <div class="section-head"><h2>Runs</h2><span class="hint">Contracts your GM gave you. Rewards are paid automatically when the GM closes a run.</span></div>
+  <div id="runs-list"></div>
+</div></div></section>
+
+<!-- ===== WIKI ===== -->
+<section class="view" id="view-wiki"><div class="page"><div class="page-inner"><div class="wiki" id="wiki"></div></div></div></section>
+
+<script src="/static/api.js"></script>
+<script src="/static/gridcore.js"></script>
+<script src="/static/srui.js"></script>
+<script src="/static/sheet.js"></script>
+<script src="/static/wiki.js"></script>
+<script src="/static/play.js"></script>
+</body>
+</html>

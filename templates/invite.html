@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid - join {{ game_name }}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login" data-bits="{{ bits }}" data-token="{{ token }}">
+<main class="login-box panel">
+  <h1 class="brand">Shadow<span>Grid</span></h1>
+  {% if problem %}
+    <p>{{ problem }}</p>
+    <a class="btn" href="/login">Go to sign in</a>
+  {% else %}
+    <p class="muted">You're invited to join <strong class="accent">{{ game_name }}</strong>. Pick the username and password you'll use to sign in.</p>
+    <form id="invite-form" class="col" autocomplete="on">
+      <label class="stack">Username <input id="username" autocomplete="username" pattern="[A-Za-z0-9_.\-]{3,24}" title="3-24 letters, numbers, dot, dash or underscore" autofocus required>
+        <small class="hint">3-24 letters, numbers, dot, dash or underscore.</small></label>
+      <label class="stack">Password <input id="password" type="password" autocomplete="new-password" minlength="8" required>
+        <small class="hint">At least 8 characters.</small></label>
+      <label class="stack">Repeat password <input id="password2" type="password" autocomplete="new-password" minlength="8" required></label>
+      <button id="btn-join" class="primary" type="submit">Create account &amp; join</button>
+    </form>
+    <p id="login-status" class="hint" aria-live="polite"></p>
+  {% endif %}
+</main>
+<script src="/static/pow.js"></script>
+<script src="/static/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid · Game</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="app" data-game-id="{{ game_id }}">
+<header class="appbar">
+  <a href="/" class="back" style="color:var(--muted);text-decoration:none">‹ Games</a>
+  <h1 class="brand">Shadow<span>Grid</span></h1>
+  <span class="game-name" id="game-name"></span>
+  <nav class="tabs" id="tabs" role="tablist">
+    <button data-view="players" role="tab">Runners <span class="badge" id="badge-waiting" hidden></span></button>
+    <button data-view="runs" role="tab">Runs <span class="badge" id="badge-runs" hidden></span></button>
+    <button data-view="maps" role="tab">Maps</button>
+    <button data-view="log" role="tab">Dice &amp; log</button>
+    <button data-view="history" role="tab">History</button>
+    <button data-view="wiki" role="tab">Wiki</button>
+  </nav>
+  <div class="chips"><form method="post" action="/logout"><button class="ghost">Sign out</button></form></div>
+</header>
+<section class="view" id="view-players"><div class="page"><div class="page-inner" id="players-root"></div></div></section>
+<section class="view" id="view-runs"><div class="page"><div class="page-inner" id="runs-root"></div></div></section>
+<section class="view" id="view-maps"><div class="page"><div class="page-inner" id="maps-root"></div></div></section>
+<section class="view" id="view-log"><div class="page"><div class="page-inner" id="log-root"></div></div></section>
+<section class="view" id="view-history"><div class="page"><div class="page-inner" id="history-root"></div></div></section>
+<section class="view" id="view-wiki"><div class="page"><div class="page-inner"><div class="wiki" id="wiki"></div></div></div></section>
+<script src="/static/api.js"></script>
+<script src="/static/srui.js"></script>
+<script src="/static/wiki.js"></script>
+<script src="/static/gamepage.js"></script>
+</body>
+</html>

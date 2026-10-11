@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid · Game master</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="home">
+<header class="home-head">
+  <div>
+    <h1 class="brand">Shadow<span>Grid</span></h1>
+    <p>Your games, their maps and their runners.</p>
+  </div>
+  <div class="row">
+    <button id="btn-new-campaign" class="primary">New game</button>
+    <form method="post" action="/logout"><button>Sign out</button></form>
+  </div>
+</header>
+
+<main class="home-main" id="campaigns"></main>
+
+<template id="tpl-campaign">
+  <section class="panel campaign">
+    <div class="campaign-head">
+      <h2 class="campaign-name" contenteditable="true" spellcheck="false" title="Click to rename"></h2>
+      <div class="row tight">
+        <a class="btn primary open-game">Open game ›</a>
+        <button class="new-map">New map</button>
+        <button class="gen-map">Generate map</button>
+        <button class="add-player">Invite player</button>
+        <button class="del-campaign danger small">Delete</button>
+      </div>
+    </div>
+    <div class="campaign-body">
+      <div class="maps-col"><h3>Maps</h3><div class="map-grid"></div></div>
+      <div class="players-col"><h3>Runners</h3><ul class="player-list"></ul></div>
+    </div>
+  </section>
+</template>
+
+<dialog id="map-dialog">
+  <form method="dialog">
+    <h2 id="md-title">New map</h2>
+    <label>Name <input id="md-name" placeholder="Sunken Vault, Level 3" autocomplete="off"></label>
+    <div class="row">
+      <label>Grid <select id="md-grid"><option value="square">Square</option><option value="hex">Hex (flat-top)</option></select></label>
+      <label>Columns <input id="md-w" type="number" min="4" max="200" value="40"></label>
+      <label>Rows <input id="md-h" type="number" min="4" max="200" value="24"></label>
+      <label>Cell size <input id="md-cs" type="number" min="8" max="128" value="32"></label>
+    </div>
+    <p class="hint">You can resize the map later. Or <button type="button" id="md-import" class="link">import a JSON export</button> instead.<input id="md-file" type="file" accept="application/json" hidden></p>
+    <div class="row end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary">Create map</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="gen-dialog" class="wide">
+  <form method="dialog">
+    <h2 id="gd-title">Generate map</h2>
+    <div class="gen-layout">
+      <div class="gen-form">
+        <label>Name <input id="gd-name" placeholder="e.g. Catacombs, level 2" autocomplete="off"></label>
+        <div class="row">
+          <label>Grid <select id="gd-grid"><option value="square">Square</option><option value="hex">Hex (flat-top)</option></select></label>
+          <label>Style <select id="gd-algo">
+            <option value="rooms">Rooms &amp; corridors</option>
+            <option value="mazes">Rooms &amp; winding passages</option>
+            <option value="caves" id="gd-algo-caves">Caves (hex only)</option>
+          </select></label>
+        </div>
+        <div class="row">
+          <label>Columns <input id="gd-w" type="number" min="12" max="200" value="48"></label>
+          <label>Rows <input id="gd-h" type="number" min="12" max="200" value="32"></label>
+          <label>Cell size <input id="gd-cs" type="number" min="8" max="128" value="32"></label>
+        </div>
+        <div class="row">
+          <label>Seed <span class="row tight"><input id="gd-seed" placeholder="random" style="width:9rem"><button type="button" id="gd-regen" class="small">Regenerate</button></span></label>
+        </div>
+        <div class="row" id="gd-door-opts">
+          <label class="check"><input type="checkbox" id="gd-doors" checked> Generate doors</label>
+          <label>Door chance <span class="row tight"><input id="gd-doorchance" type="range" min="0" max="100" value="60"><span id="gd-doorchance-val">60%</span></span></label>
+        </div>
+        <div class="row" id="gd-room-opts">
+          <label class="check"><input type="checkbox" id="gd-rooms" checked> Group rooms (Room 1, 2, …)</label>
+        </div>
+        <details id="gd-advanced">
+          <summary>Advanced</summary>
+          <div class="gen-adv" data-for="rooms mazes">
+            <label>Rooms <input id="gd-roomcount" type="number" min="1" max="60" value="9"></label>
+            <label>Room size <span class="row tight"><input id="gd-roommin" type="number" min="1" max="30" value="3"> – <input id="gd-roommax" type="number" min="1" max="40" value="8"></span></label>
+            <label>Wall between rooms <input id="gd-gap" type="number" min="1" max="8" value="1"></label>
+            <label>Extra connections <span class="row tight"><input id="gd-loops" type="range" min="0" max="100" value="15"><span id="gd-loops-val">15%</span></span></label>
+          </div>
+          <div class="gen-adv" data-for="rooms">
+            <label>Corridor width <input id="gd-cwidth" type="number" min="1" max="3" value="1"></label>
+            <label>Max corridor length <input id="gd-cmax" type="number" min="2" max="200" value="20" title="Only extra connections shorter than this are added"></label>
+          </div>
+          <div class="gen-adv" data-for="mazes">
+            <label>Windiness <span class="row tight"><input id="gd-windy" type="range" min="0" max="100" value="50"><span id="gd-windy-val">50%</span></span></label>
+            <label>Remove dead ends <span class="row tight"><input id="gd-deadends" type="range" min="0" max="100" value="80"><span id="gd-deadends-val">80%</span></span></label>
+          </div>
+          <div class="gen-adv" data-for="caves">
+            <label>Initial wall fill <span class="row tight"><input id="gd-fill" type="range" min="30" max="60" value="45"><span id="gd-fill-val">45%</span></span></label>
+            <label>Smoothing passes <input id="gd-smooth" type="number" min="1" max="10" value="4"></label>
+            <label>Drop pockets smaller than <input id="gd-minblob" type="number" min="1" max="200" value="12"></label>
+          </div>
+        </details>
+      </div>
+      <div class="gen-preview">
+        <canvas id="gd-canvas" width="480" height="320"></canvas>
+        <p class="hint" id="gd-stats"></p>
+      </div>
+    </div>
+    <div class="row end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary">Create this map</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="campaign-dialog">
+  <form method="dialog">
+    <h2>New game</h2>
+    <label>Name <input id="cd-name" placeholder="e.g. Seattle 2081" autocomplete="off"></label>
+    <p class="hint">A game holds its maps, its runners and their runs. Invite players with a link; their account only opens this game.</p>
+    <div class="row end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary">Create game</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/api.js"></script>
+<script src="/static/srui.js"></script>
+<script src="/static/gridcore.js"></script>
+<script src="/static/procgen.js"></script>
+<script src="/static/home.js"></script>
+</body>
+</html>

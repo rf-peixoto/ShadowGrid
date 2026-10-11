@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid · Map</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="editor" data-map-id="{{ map_id }}">
+
+<header class="topbar">
+  <a href="/" class="back" id="back-link" title="Back">‹ Games</a>
+  <input id="map-name" class="map-title" value="…" aria-label="Map name">
+  <div class="mode-switch" role="tablist">
+    <button id="mode-edit" class="active" role="tab">Edit</button>
+    <button id="mode-play" role="tab">Play</button>
+  </div>
+  <span id="save-state" class="save-state">Saved</span>
+  <div class="topbar-actions">
+    <button id="btn-export-json">Export JSON</button>
+    <button id="btn-export-png">Export PNG</button>
+    <button id="btn-settings">Colors &amp; settings</button>
+    <form method="post" action="/logout" class="inline"><button title="Sign out">Sign out</button></form>
+  </div>
+</header>
+
+<div class="workspace">
+  <aside class="tools" id="tools">
+
+    <!-- ===== EDIT MODE ===== -->
+    <div class="tool-group" data-mode="edit">
+      <div class="tool-buttons">
+        <button data-tool="paint" class="tool active" title="Paint cells (P)">Paint</button>
+        <button data-tool="rect" class="tool" title="Fill a rectangle (R)">Rectangle</button>
+        <button data-tool="erase" class="tool" title="Erase cells (E)">Erase</button>
+        <button data-tool="secret" class="tool" title="Toggle secret cells (S)">Secret</button>
+        <button data-tool="door" class="tool" title="Place doors on cell edges (D)">Door</button>
+        <button data-tool="marker" class="tool" title="Place markers (M)">Marker</button>
+        <button data-tool="room" class="tool" title="Group cells into a named room (G)">Room</button>
+        <button data-tool="select" class="tool" title="Inspect a cell (V)">Select</button>
+      </div>
+
+      <div class="tool-opts" data-for="paint rect">
+        <label>Cell color <input type="color" id="paint-color"></label>
+        <div class="swatches" id="paint-swatches"></div>
+        <label>Border color <input type="color" id="paint-border"></label>
+        <label class="check"><input type="checkbox" id="paint-border-on" checked> Draw border</label>
+      </div>
+
+      <div class="tool-opts" data-for="door">
+        <p class="hint">Click near a cell edge to add a door. Click the same edge again to remove it. Closed doors block players and their line of sight.</p>
+        <label>Door color <input type="color" id="door-color"></label>
+        <div class="swatches" id="door-swatches"></div>
+      </div>
+
+      <div class="tool-opts" data-for="marker">
+        <div class="marker-grid" id="marker-types"></div>
+        <label>Marker color <input type="color" id="marker-color"></label>
+        <label>Label <input id="marker-label" placeholder="optional, e.g. Chest B"></label>
+        <label title="Optional, for enemies: gives the marker Physical and Stun condition monitors (8 + attribute/2)">Body / Willpower <span class="row tight"><input type="number" id="marker-body" min="1" max="20" placeholder="B" style="width:3.4rem"> <input type="number" id="marker-wil" min="1" max="20" placeholder="W" style="width:3.4rem"></span></label>
+        <p class="hint" id="marker-cm-hint">Leave empty for markers without a condition monitor.</p>
+        <label class="check"><input type="checkbox" id="link-on"> Leads to another map</label>
+        <div id="link-opts" hidden>
+          <label>Destination <select id="link-map"></select></label>
+          <label>Arrive at <span class="row tight"><input type="number" id="link-c" min="0" value="0" title="column"> <input type="number" id="link-r" min="0" value="0" title="row"></span></label>
+          <label>Link ID <span class="row tight"><input id="link-id" placeholder="auto" style="width:7rem" title="Two link markers sharing an ID connect to each other"><button type="button" id="link-newid" class="small" title="New ID">↻</button></span></label>
+          <label class="check"><input type="checkbox" id="link-return" checked> Also create the return link on the other map</label>
+          <p class="hint">Players are moved to the other map when they arrive on this cell.</p>
+        </div>
+        <p class="hint">Click a cell to place. Drag a marker to move it; click one to edit or remove it. <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes edits.</p>
+      </div>
+
+      <div class="tool-opts" data-for="room">
+        <label>Room name <input id="room-name" placeholder="e.g. Barracks"></label>
+        <p class="hint">Drag across cells to group them. Dragging over cells already in a room moves them to the new one.</p>
+        <div id="room-list" class="mini-list"></div>
+      </div>
+
+      <div class="tool-opts" data-for="secret">
+        <p class="hint">Secret cells are never revealed by the map station. Players only see them when their token walks in, or when you reveal them by hand.</p>
+      </div>
+    </div>
+
+    <!-- ===== PLAY MODE ===== -->
+    <div class="tool-group" data-mode="play" hidden>
+      <div class="view-as" id="view-as"></div>
+      <div class="tool-buttons">
+        <button data-tool="reveal" class="tool active" title="Reveal cells by dragging (P)">Reveal</button>
+        <button data-tool="hide" class="tool" title="Hide cells again (E)">Hide</button>
+        <button data-tool="pdoor" class="tool" title="Open or close a door (D)">Doors</button>
+        <button data-tool="token" class="tool" title="Place this player's token (T)">Token</button>
+        <button data-tool="pmarker" class="tool" title="Move markers, set enemy health (M)">Markers</button>
+        <button data-tool="select" class="tool" title="Inspect a cell (V)">Select</button>
+      </div>
+      <div class="tool-opts" data-for="reveal hide">
+        <label>Brush size <input type="range" id="brush-size" min="1" max="5" value="1"> <span id="brush-size-val">1</span></label>
+        <p class="hint" id="reveal-hint"></p>
+      </div>
+      <div class="tool-opts" data-for="pdoor">
+        <p class="hint">Click a door to open or close it. <kbd>Shift</kbd>+click locks or unlocks it. Players can't open locked doors.</p>
+      </div>
+      <div class="tool-opts" data-for="pmarker">
+        <p class="hint">Drag a marker to move it (enemies during combat, loot that changes hands). Click one to mark damage on its condition monitor or edit its label.</p>
+      </div>
+      <div class="tool-opts" data-for="token">
+        <p class="hint">Click a room cell to move the selected player's token there. The map reveals around it using their view radius.</p>
+      </div>
+
+      <div class="fog-actions" id="fog-player" hidden>
+        <div class="row between"><strong id="fog-player-name"></strong><span class="row tight"><label class="check" title="Jump to whatever map this player is on"><input type="checkbox" id="follow-player"> Follow</label><label class="check"><input type="checkbox" id="map-station"> Map station</label></span></div>
+        <div class="row tight">
+          <button id="btn-reveal-all" class="small">Reveal all</button>
+          <button id="btn-hide-all" class="small">Hide all</button>
+          <select id="room-reveal" class="small grow"><option value="">Reveal a room…</option></select>
+        </div>
+      </div>
+      <div class="fog-actions">
+        <div class="row between"><strong>Everyone</strong></div>
+        <div class="row tight">
+          <button id="btn-reveal-all-everyone" class="small">Reveal all</button>
+          <button id="btn-hide-all-everyone" class="small">Hide all</button>
+          <select id="room-reveal-everyone" class="small grow"><option value="">Reveal a room…</option></select>
+        </div>
+      </div>
+      <p id="no-campaign" class="hint" hidden>Assign this map to a game (Colors &amp; settings) to place runners, roll dice and take snapshots.</p>
+
+      <details id="players-panel" open>
+        <summary>Runners</summary>
+        <div id="player-list" class="mini-list"></div>
+        <button id="btn-add-player" class="small">Invite player</button>
+      </details>
+
+      <details id="dice-panel" open>
+        <summary>Dice</summary>
+        <div class="roller compact" id="gm-roller">
+          <div class="row tight"><input id="dice-label" class="grow" placeholder="Label, e.g. Guard: Perception" autocomplete="off"></div>
+          <div class="opts">
+            <label>Dice <input type="number" id="dice-n" min="1" max="60" value="6"></label>
+            <label>Thr. <input type="number" id="dice-thr" min="0" max="30" placeholder="–"></label>
+            <label class="check"><input type="checkbox" id="dice-wild"> Wild</label>
+            <label class="check" title="Only you see hidden rolls"><input type="checkbox" id="dice-hidden"> Hidden</label>
+          </div>
+          <div class="row tight"><button id="dice-roll" class="small primary grow">Roll</button><span class="quick" id="dice-quick"></span></div>
+        </div>
+        <div class="log" id="roll-log" style="max-height:300px;margin-top:.5rem"></div>
+      </details>
+
+      <details id="snapshots-panel">
+        <summary>Snapshots</summary>
+        <div class="row tight">
+          <input id="snapshot-name" placeholder="e.g. End of session 4" class="grow">
+          <button id="btn-snapshot" class="small">Save</button>
+        </div>
+        <div id="snapshot-list" class="mini-list"></div>
+      </details>
+    </div>
+
+    <div class="inspector" id="inspector" hidden>
+      <h3 id="insp-title">Cell</h3>
+      <div id="insp-body"></div>
+    </div>
+
+    <div class="tool-group always">
+      <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle"> Isometric view</label>
+      <label class="check"><input type="checkbox" id="legend-toggle" checked> Show legend</label>
+      <label class="check"><input type="checkbox" id="rooms-toggle" checked> Show room names</label>
+      <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map.</p>
+    </div>
+  </aside>
+
+  <main class="canvas-wrap" id="canvas-wrap">
+    <canvas id="map"></canvas>
+    <div class="legend" id="legend"></div>
+    <canvas id="minimap" class="minimap"></canvas>
+    <div class="statusbar" id="statusbar"><span id="st-cell">–</span><span id="st-room"></span><span id="st-marker"></span><span id="st-door"></span></div>
+  </main>
+</div>
+
+<dialog id="settings-dialog">
+  <form method="dialog">
+    <h2>Colors &amp; settings</h2>
+    <div class="settings-grid" id="settings-colors"></div>
+    <h3>Door palette</h3>
+    <div class="row" id="settings-door-palette"></div>
+    <h3>Rendering</h3>
+    <label class="check"><input type="checkbox" id="set-grid"> Show grid lines</label>
+    <h3>Map</h3>
+    <div class="row">
+      <label>Game <select id="set-campaign"><option value="">No game</option></select></label>
+      <label>Columns <input type="number" id="set-w" min="4" max="200"></label>
+      <label>Rows <input type="number" id="set-h" min="4" max="200"></label>
+      <label>Cell size <input type="number" id="set-cs" min="8" max="128"></label>
+    </div>
+    <p class="hint">Shrinking the map hides cells outside the new bounds; they come back if you grow it again.</p>
+    <div class="row end">
+      <button type="button" id="set-reset">Reset colors</button>
+      <button value="cancel">Close</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="export-dialog">
+  <form method="dialog">
+    <h2>Export PNG</h2>
+    <p class="hint">The image is cropped to the painted area. <span id="ex-view"></span></p>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="ex-grid"> Grid lines</label>
+      <label class="check"><input type="checkbox" id="ex-borders" checked> Cell borders</label>
+      <label class="check"><input type="checkbox" id="ex-rooms" checked> Room names</label>
+      <label class="check"><input type="checkbox" id="ex-transparent"> Transparent background</label>
+    </div>
+    <label>Scale <select id="ex-scale"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option></select></label>
+    <div class="row end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary">Download PNG</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="confirm-dialog">
+  <form method="dialog">
+    <p id="confirm-text"></p>
+    <div class="row end">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary" id="confirm-ok">Confirm</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/api.js"></script>
+<script src="/static/srui.js"></script>
+<script src="/static/gridcore.js"></script>
+<script src="/static/editor.js"></script>
+</body>
+</html>

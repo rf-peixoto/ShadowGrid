@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid · Character</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="app" data-game-id="{{ game_id }}" data-player-id="{{ player_id }}">
+<header class="appbar">
+  <a href="/game/{{ game_id }}" class="back" style="color:var(--muted);text-decoration:none">‹ Game</a>
+  <h1 class="brand">Shadow<span>Grid</span></h1>
+  <span class="game-name" id="who"></span>
+  <span class="tag" style="color:var(--accent)">GM view</span>
+  <div class="chips"><form method="post" action="/logout"><button class="ghost">Sign out</button></form></div>
+</header>
+<section class="view active"><div class="page"><div class="page-inner" id="sheet-root"></div></div></section>
+<script src="/static/api.js"></script>
+<script src="/static/srui.js"></script>
+<script src="/static/sheet.js"></script>
+<script src="/static/gmsheet.js"></script>
+</body>
+</html>

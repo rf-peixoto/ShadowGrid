@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid - sign in</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login" data-bits="{{ bits }}">
+<main class="login-box panel">
+  <h1 class="brand">Shadow<span>Grid</span></h1>
+  <p class="muted">Sign in to your game</p>
+  <form id="login-form" class="col" autocomplete="on">
+    <label class="stack">Username <input id="username" autocomplete="username" autofocus required></label>
+    <label class="stack">Password <input id="password" type="password" autocomplete="current-password" required></label>
+    <button id="btn-login" class="primary" type="submit">Sign in</button>
+  </form>
+  <p id="login-status" class="hint" aria-live="polite"></p>
+  <p class="hint">New player? Open the invite link your GM sent you. The GM signs in as <kbd>admin</kbd>.</p>
+</main>
+<script src="/static/pow.js"></script>
+<script src="/static/login.js"></script>
+</body>
+</html>
