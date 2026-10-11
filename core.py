@@ -124,10 +124,20 @@ def kv_set(db, k, v):
     db.execute("INSERT INTO kv (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
 
 
+MIGRATIONS = [
+    ("campaigns", "settings", "TEXT NOT NULL DEFAULT '{}'"),
+    ("campaigns", "combat", "TEXT NOT NULL DEFAULT '{}'"),
+]
+
+
 def init_db(quiet=False):
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    for table, col, decl in MIGRATIONS:
+        cols = {r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()}
+        if col not in cols:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     secret = kv_get(db, "secret_key")
     if not secret:
         secret = secrets.token_hex(32)
@@ -186,6 +196,21 @@ def err(msg, code=400):
     return jsonify({"error": msg}), code
 
 
+# ====================================================================== game settings
+GAME_DEFAULTS = {"sellPct": 50}
+
+
+def game_settings(cid):
+    row = get_db().execute("SELECT settings FROM campaigns WHERE id=?", (cid,)).fetchone() if cid else None
+    out = dict(GAME_DEFAULTS)
+    if row:
+        try:
+            out.update({k: v for k, v in json.loads(row["settings"] or "{}").items() if k in GAME_DEFAULTS})
+        except ValueError:
+            pass
+    return out
+
+
 # ====================================================================== players & characters
 def load_char(row):
     try:
@@ -209,7 +234,10 @@ def row_to_player(row, include_state=True):
          "approved": row["approved"], "status": STATUS_NAMES.get(row["approved"], "draft"),
          "reviewNote": row["review_note"],
          "cm": R.condition_summary(c, d), "edge": {"cur": c["current_edge"], "max": d["edge_max"]},
-         "karma": c["karma"], "nuyen": c["nuyen"], "metatype": c["metatype"], "role": c["role"],
+         "karma": c["karma"], "nuyen": c["nuyen"], "metatype": c["metatype"], "role": c.get("role", ""), "magicType": c["magic_type"],
+         "statuses": c.get("statuses") or {},
+         "pendingContacts": sum(1 for ct in c.get("contacts") or [] if not ct.get("verified", True)),
+         "init": {"score": d["initiative_score"], "dice": d["initiative_dice"], "minor": d["minor_actions"]},
          "charRev": row["char_rev"],
          "ping": json.loads(row["ping"]) if row["ping"] else None}
     if include_state:

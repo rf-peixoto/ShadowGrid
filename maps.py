@@ -13,7 +13,9 @@ import geometry as geo
 from core import (DEFAULT_SETTINGS, app, body, campaign_version, clamp_int, clean_color, display_name,
                   err, fetch_player, get_db, load_char, new_id, now, player_required, roll_rows,
                   row_to_player, save_player)
+import fight
 from security import admin_required, rate_limited
+from sr import combat as X
 from sr import rules as R
 
 
@@ -34,28 +36,33 @@ def merged_settings(user):
 
 
 def clean_cm(v):
-    """Enemy condition monitor: {pm, sm, ov, p, s} (max physical, max stun, overflow, damage)."""
+    """Enemy condition monitor: {pm, sm, ov, p, s} (max physical, max stun, overflow, damage).
+    Grunts have a single track (``grunt``: true, sm 0) and remember what hit them last."""
     if not isinstance(v, dict):
         return None
     pm = clamp_int(v.get("pm"), 0, 60, 0)
     sm = clamp_int(v.get("sm"), 0, 60, 0)
     if not pm and not sm:
         return None
-    ov = clamp_int(v.get("ov"), 0, 30, 0)
-    return {"pm": pm, "sm": sm, "ov": ov,
-            "p": clamp_int(v.get("p"), 0, pm + ov + 1, 0), "s": clamp_int(v.get("s"), 0, sm, 0)}
+    ov = clamp_int(v.get("ov"), 0, 40, 0)
+    out = {"pm": pm, "sm": sm, "ov": ov,
+           "p": clamp_int(v.get("p"), 0, pm + ov, 0), "s": clamp_int(v.get("s"), 0, sm, 0)}
+    if v.get("grunt"):
+        out["grunt"] = True
+        out["sm"] = 0
+        out["ov"] = 0
+        out["p"] = min(out["p"], pm)
+        if v.get("last") in ("P", "S"):
+            out["last"] = v["last"]
+    return out
 
 
 def cm_damage(cm, track, amount):
     """Apply +/- boxes to a marker monitor with Stun overflowing into Physical (same rule as characters)."""
-    if track == "stun":
-        v = max(0, cm["s"] + amount)
-        if v > cm["sm"]:
-            cm["p"] = min(cm["pm"] + cm["ov"] + 1, cm["p"] + (v - cm["sm"]))
-            v = cm["sm"]
-        cm["s"] = v
-    else:
-        cm["p"] = max(0, min(cm["pm"] + cm["ov"] + 1, cm["p"] + amount))
+    X.marker_damage(cm, track, amount)
+
+
+RUNTIME_MARKER_KEYS = ("cm", "statuses")
 
 
 def clean_data(data, grid_type="square"):
@@ -122,6 +129,12 @@ def clean_data(data, grid_type="square"):
         cm = clean_cm(m.get("cm"))
         if cm:
             nm["cm"] = cm
+        npc = X.clean_npc(m.get("npc"))
+        if npc:
+            nm["npc"] = npc
+        st = fight.clean_statuses(m.get("statuses"))
+        if st:
+            nm["statuses"] = st
         t = m.get("target")
         if m.get("linkId") or nm["type"] == "link":
             nm["linkId"] = re.sub(r"[^A-Za-z0-9_-]", "", str(m.get("linkId") or ""))[:24] or new_id(8)
@@ -283,14 +296,45 @@ def map_context(map_id):
     ctx["allMaps"] = [{"id": r["id"], "name": r["name"], "campaignId": r["campaign_id"]} for r in db.execute(
         "SELECT id,name,campaign_id FROM maps ORDER BY name").fetchall()]
     ctx["rolls"] = roll_rows(m["campaignId"], admin=True)
+    ctx["tracker"] = fight.tracker_view(fight.load_tracker(m["campaignId"]), True) if m["campaignId"] else None
     ctx["now"] = now()
     return jsonify(ctx)
+
+
+def keep_runtime(old, new, runtime):
+    """The editor autosaves the whole map. Doors opened by players and monitors or statuses changed by
+    combat happen on the server meanwhile, so keep the server's value unless the editor says it changed it."""
+    rt = runtime if isinstance(runtime, dict) else {}
+    door_keys = {str(k) for k in (rt.get("doors") or [])}
+    marker_ids = {str(k) for k in (rt.get("markers") or [])}
+    for k, cell in new.get("cells", {}).items():
+        oc = old.get("cells", {}).get(k) or {}
+        for e, door in (cell.get("doors") or {}).items():
+            od = (oc.get("doors") or {}).get(e)
+            if od is not None and f"{k}:{e}" not in door_keys:
+                door["open"] = bool(od.get("open"))
+                if od.get("locked"):
+                    door["locked"] = True
+                    door["open"] = False
+                else:
+                    door.pop("locked", None)
+    old_markers = {m["id"]: m for m in old.get("markers", [])}
+    for m in new.get("markers", []):
+        om = old_markers.get(m["id"])
+        if om is None or m["id"] in marker_ids:
+            continue
+        for key in RUNTIME_MARKER_KEYS:
+            if key in om:
+                m[key] = om[key]
+            else:
+                m.pop(key, None)
 
 
 @app.route("/api/maps/<map_id>", methods=["PUT"])
 @admin_required
 def update_map(map_id):
     db = get_db()
+    db.execute("BEGIN IMMEDIATE")
     old = fetch_map(map_id)
     b = body()
     name = str(b.get("name") or old["name"]).strip()[:120]
@@ -299,6 +343,8 @@ def update_map(map_id):
     cell_size = clamp_int(b.get("cellSize"), 8, 128, old["cellSize"])
     settings = merged_settings(b["settings"]) if "settings" in b else old["settings"]
     data = clean_data(b["data"], old["gridType"]) if "data" in b else old["data"]
+    if "data" in b:
+        keep_runtime(old["data"], data, b.get("runtime"))
     cid = old["campaignId"]
     if "campaignId" in b:
         cid = b["campaignId"] or None
@@ -404,11 +450,13 @@ def bulk_reveal(map_id):
 @app.route("/api/maps/<map_id>/door", methods=["POST"])
 @admin_required
 def admin_toggle_door(map_id):
+    get_db().execute("BEGIN IMMEDIATE")
     m = fetch_map(map_id)
     b = body()
     c, r, e = clamp_int(b.get("c"), 0, 999, -1), clamp_int(b.get("r"), 0, 999, -1), clamp_int(b.get("edge"), 0, 5, -1)
     door = geo.door_on_edge(m["gridType"], m["data"]["cells"], c, r, e)
     if not door:
+        get_db().rollback()
         return err("No door on that edge.", 404)
     if "locked" in b:
         if b["locked"]:
@@ -430,12 +478,31 @@ def admin_toggle_door(map_id):
 @app.route("/api/maps/<map_id>/marker", methods=["POST"])
 @admin_required
 def admin_update_marker(map_id):
-    """In-place marker update used in Play mode: move it, set label/visibility, condition monitor, damage."""
+    """In-place marker update used in Play mode: move it, set label/visibility, condition monitor, damage,
+    NPC template or stat block."""
+    get_db().execute("BEGIN IMMEDIATE")
     m = fetch_map(map_id)
     b = body()
     mk = next((x for x in m["data"]["markers"] if x["id"] == str(b.get("id"))), None)
     if not mk:
+        get_db().rollback()
         return err("Marker not found.", 404)
+    if b.get("template"):
+        try:
+            npc = X.npc_from_key(b["template"], clamp_int(b.get("force"), 1, 12, 3))
+        except R.RuleError as e:
+            get_db().rollback()
+            return err(str(e))
+        mk["npc"] = X.clean_npc(npc)
+        mk["cm"] = clean_cm(X.npc_cm(npc))
+        if not mk.get("label") or b.get("relabel"):
+            mk["label"] = (npc.get("template") or "Enemy")[:80]
+    if "npc" in b:
+        npc = X.clean_npc(b["npc"])
+        if npc:
+            mk["npc"] = npc
+        else:
+            mk.pop("npc", None)
     if "c" in b and "r" in b:
         c, r = clamp_int(b["c"], 0, 999, -1), clamp_int(b["r"], 0, 999, -1)
         if not geo.in_bounds(m, c, r):
@@ -454,6 +521,12 @@ def admin_update_marker(map_id):
             mk["cm"] = cm
         else:
             mk.pop("cm", None)
+    if "statuses" in b:
+        st = fight.clean_statuses(b["statuses"])
+        if st:
+            mk["statuses"] = st
+        else:
+            mk.pop("statuses", None)
     if "damage" in b and mk.get("cm"):
         d = b["damage"] if isinstance(b["damage"], dict) else {}
         if d.get("track") in ("physical", "stun"):
@@ -610,7 +683,7 @@ def player_view(me_row):
     """Filter the player's current map down to what they are allowed to see."""
     p = row_to_player(me_row)
     out = {"map": None, "others": [], "pings": [], "canTravel": None, "doorsHere": [],
-           "token": None, "now": now()}
+           "token": None, "now": now(), "tracker": fight.player_tracker(p["campaignId"]), "statuses": p.get("statuses") or {}}
     if not p["currentMapId"]:
         return out
     row = get_db().execute("SELECT * FROM maps WHERE id=?", (p["currentMapId"],)).fetchone()
@@ -648,7 +721,7 @@ def player_view(me_row):
     for mk in m["data"]["markers"]:
         k = f"{mk['c']},{mk['r']}"
         if explored.get(k) and not mk.get("hidden"):
-            o = {k2: mk.get(k2) for k2 in ("id", "c", "r", "type", "color", "label", "cm")}
+            o = {k2: mk.get(k2) for k2 in ("id", "c", "r", "type", "color", "label", "cm", "statuses")}
             if is_link(mk):
                 o["isLink"] = True
                 trow, _, _ = resolve_link(mk, m)
@@ -661,7 +734,7 @@ def player_view(me_row):
         c2 = load_char(r2)
         if tok and explored.get(f"{tok['c']},{tok['r']}"):
             out["others"].append({"id": r2["id"], "name": display_name(r2, c2), "color": r2["color"], "c": tok["c"], "r": tok["r"],
-                                  "cm": R.condition_summary(c2)})
+                                  "cm": R.condition_summary(c2), "statuses": c2.get("statuses") or {}})
         ping = json.loads(r2["ping"]) if r2["ping"] else None
         if ping and ping.get("mapId") == m["id"] and now() - ping.get("t", 0) < 10:
             out["pings"].append({"name": display_name(r2, c2), "color": r2["color"], "c": ping["c"], "r": ping["r"], "t": ping["t"]})

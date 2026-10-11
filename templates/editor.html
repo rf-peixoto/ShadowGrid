@@ -59,6 +59,8 @@
         <label>Label <input id="marker-label" placeholder="optional, e.g. Chest B"></label>
         <label title="Optional, for enemies: gives the marker Physical and Stun condition monitors (8 + attribute/2)">Body / Willpower <span class="row tight"><input type="number" id="marker-body" min="1" max="20" placeholder="B" style="width:3.4rem"> <input type="number" id="marker-wil" min="1" max="20" placeholder="W" style="width:3.4rem"></span></label>
         <p class="hint" id="marker-cm-hint">Leave empty for markers without a condition monitor.</p>
+        <label title="Core-book NPC: stats, weapons and condition monitor">NPC template <select id="marker-template"><option value="">None</option></select></label>
+        <label id="marker-force-wrap" hidden>Spirit Force <input type="number" id="marker-force" min="1" max="12" value="3" style="width:4rem"></label>
         <label class="check"><input type="checkbox" id="link-on"> Leads to another map</label>
         <div id="link-opts" hidden>
           <label>Destination <select id="link-map"></select></label>
@@ -123,6 +125,11 @@
         </div>
       </div>
       <p id="no-campaign" class="hint" hidden>Assign this map to a game (Colors &amp; settings) to place runners, roll dice and take snapshots.</p>
+
+      <details id="combat-panel" open>
+        <summary>Combat</summary>
+        <div id="combat-root"></div>
+      </details>
 
       <details id="players-panel" open>
         <summary>Runners</summary>

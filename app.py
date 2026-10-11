@@ -14,6 +14,7 @@ import time
 from flask import jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import fight  # noqa: F401  (registers routes)
 import game  # noqa: F401  (registers routes)
 import maps  # noqa: F401  (registers routes)
 from core import (DB_PATH, app, body, current_player_row, err, get_db, init_db, kv_get, kv_set)

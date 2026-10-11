@@ -8,13 +8,18 @@ from flask import abort, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core import (APPROVED, DRAFT, GM_COLOR, INVITE_DAYS, PLAYER_COLORS, SUBMITTED, add_roll, app, body,
-                  campaign_version, clamp_int, display_name, err, fetch_player_row, get_db, ledger_add,
+                  campaign_version, clamp_int, display_name, err, fetch_player_row, game_settings, get_db, ledger_add,
                   ledger_rows, load_char, new_id, now, player_required, roll_rows, row_to_player, save_char)
 from maps import player_view, row_to_map
 from security import admin_required, rate_limited
-from sr import data as D
+from sr import catalog as CAT
+from sr import combat as X
+from sr import core6e as K
 from sr import dice as DICE
+from sr import gear6e as G
+from sr import magic6e as M
 from sr import rules as R
+from sr import wiki as WIKI
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,24}$")
 RESERVED = {"admin", "gm", "root", "system"}
@@ -22,43 +27,6 @@ BOOST_WINDOW = 15 * 60        # seconds after a roll during which Edge Boosts ma
 
 
 # ====================================================================== catalog (static reference data)
-def _wiki():
-    topics = dict(D.WIKI_TOPICS)
-    tree = []
-    for cat, subs in D.WIKI_TREE.items():
-        node = {"title": cat, "children": []}
-        for sub in subs:
-            child = {"title": sub, "children": []}
-            items = []
-            if sub in D.PREDEFINED_GEAR:
-                for it in D.PREDEFINED_GEAR[sub]:
-                    lines = [f"**{it['name']}**", ""] + [f"- {k}: {v}" for k, v in it.items() if k not in ("name", "Price")]
-                    lines += ["", f"Price: {it.get('Price', 'N/A')}¥"]
-                    topics[it["name"]] = "\n".join(lines)
-                    items.append(it["name"])
-            elif sub == "Spells":
-                for s in D.PREDEFINED_SPELLS:
-                    topics[s["name"]] = f"**{s['name']}**\n\nType: {s.get('type', '')}\nDrain: {s.get('drain', '')}\n\n{s.get('description', '')}"
-                    items.append(s["name"])
-            elif sub == "Powers":
-                for p in D.PREDEFINED_POWERS:
-                    topics[p["name"]] = (f"**{p['name']}**\n\nActivation: {p.get('activation', '')}\nEffect: {p.get('effect', '')}\n"
-                                         f"Power Points: {p.get('Cost', '')}\n\n{p.get('description', '')}")
-                    items.append(p["name"])
-            elif sub == "Foci":
-                for f in D.PREDEFINED_FOCI:
-                    topics[f["name"]] = f"**{f['name']}**\n\nType: {f.get('type', '')}\nForce: {f.get('force', '')}\n\n{f.get('description', '')}"
-                    items.append(f["name"])
-            elif sub == "Minor Actions":
-                items = list(D.MINOR_ACTIONS)
-            elif sub == "Major Actions":
-                items = list(D.MAJOR_ACTIONS)
-            child["children"] = [{"title": t, "children": []} for t in items]
-            node["children"].append(child)
-        tree.append(node)
-    return {"tree": tree, "topics": topics}
-
-
 CATALOG = None
 
 
@@ -66,24 +34,27 @@ def catalog():
     global CATALOG
     if CATALOG is None:
         CATALOG = {
-            "attributes": D.ATTRIBUTES, "skills": D.SKILLS, "specializations": D.SKILL_SPECIALIZATIONS,
-            "skillAttribute": D.SKILL_ATTRIBUTE, "metatypes": D.METATYPES, "metatypeMin": R.METATYPE_MIN,
-            "roles": D.ROLES, "magicTypes": D.MAGIC_TYPES, "traditions": D.TRADITIONS,
-            "lifestyles": D.LIFESTYLES, "lifestyleCost": D.LIFESTYLE_NUYEN,
-            "qualities": D.QUALITIES, "qualityEffects": D.QUALITY_EFFECTS,
-            "gearCategories": D.GEAR_CATEGORIES, "gear": D.PREDEFINED_GEAR,
-            "spells": [R.predefined("Spell", i) for i in range(len(D.PREDEFINED_SPELLS))],
-            "powers": [R.predefined("Power", i) for i in range(len(D.PREDEFINED_POWERS))],
-            "foci": [R.predefined("Focus", i) for i in range(len(D.PREDEFINED_FOCI))],
-            "fields": D.GEAR_ATTRIBUTES, "options": D.GEAR_OPTIONS, "equippable": list(D.EQUIPPABLE_CATEGORIES),
-            "contactTypes": D.CONTACT_TYPES, "loyalty": D.LOYALTY_LEVELS,
-            "focusBond": D.FOCUS_BOND_MULTIPLIER,
+            "attributes": R.ATTRS, "physical": K.PHYSICAL, "mental": K.MENTAL,
+            "skills": K.SKILLS, "skillMax": K.SKILL_MAX, "skillMaxCreation": K.SKILL_MAX_CREATION,
+            "metatypes": K.METATYPES, "defaultMax": K.DEFAULT_MAX, "roles": R.ROLES,
+            "magicTypes": R.MAGIC_TYPES, "aspects": R.ASPECTS, "traditions": M.TRADITIONS,
+            "mentorSpirits": M.MENTOR_SPIRITS, "lifestyles": K.LIFESTYLES,
+            "qualities": K.QUALITIES, "statuses": K.STATUSES,
+            "knowledgeExamples": K.KNOWLEDGE_EXAMPLES, "languageExamples": K.LANGUAGE_EXAMPLES,
+            "languageLevels": K.LANGUAGE_LEVELS, "karma": K.KARMA,
+            "store": {"categories": G.STORE_CATEGORIES, "supply": R.SUPPLY, "categorySupply": G.CATEGORY_SUPPLY,
+                      "items": CAT.ITEMS, "grades": G.IMPLANT_GRADES, "firingModes": G.FIRING_MODES,
+                      "ammoTypes": G.AMMO_TYPES, "ranges": G.RANGES, "rangeMeters": G.RANGE_METERS,
+                      "creationMaxAvail": CAT.CREATION_MAX_AVAIL, "alwaysAvail": CAT.ALWAYS_AVAIL},
+            "contactTypes": R.CONTACT_TYPES,
+            "spells": M.SPELLS, "rituals": M.RITUALS, "powers": M.ADEPT_POWERS, "metamagics": M.METAMAGICS,
+            "spirits": list(M.SPIRITS), "complexForms": M.COMPLEX_FORMS, "sprites": M.SPRITES, "echoes": M.ECHOES,
+            "programs": M.PROGRAMS, "matrixModes": list(M.MATRIX_INIT), "focusBond": G.FOCUS_BOND_KARMA,
             "edgeSpend": [{"key": k, "cost": v[0], "label": v[1]} for k, v in R.EDGE_SPEND.items()],
             "postBoosts": [{"key": k, "cost": v[0]} for k, v in DICE.POST_BOOSTS.items()],
-            "rules": {"edgeCap": R.EDGE_CAP, "karmaPerRating": R.KARMA_PER_RATING, "karmaSpec": R.KARMA_SPECIALIZATION,
-                      "karmaSpell": R.KARMA_SPELL, "nuyenPerKarma": R.NUYEN_PER_KARMA, "attrMax": R.ATTR_MAX,
-                      "skillMax": R.SKILL_MAX, "pushCost": DICE.PUSH_COST},
-            "wiki": _wiki(),
+            "npcTemplates": X.templates(),
+            "rules": {"edgeCap": R.EDGE_CAP, "pushCost": DICE.PUSH_COST, "ampUpDrain": M.AMP_UP_DRAIN},
+            "wiki": WIKI.build(),
         }
     return CATALOG
 
@@ -92,8 +63,7 @@ def catalog():
 def api_catalog():
     if not session.get("admin") and not session.get("pid"):
         return err("Sign in required.", 401)
-    resp = jsonify(catalog())
-    return resp
+    return jsonify(catalog())
 
 
 # ====================================================================== shared payload builders
@@ -109,19 +79,33 @@ def run_to_dict(row):
             "scaledPayout": scaled, "createdAt": row["created_at"], "completedAt": row["completed_at"]}
 
 
+def store_access(c, approved):
+    """{item id: [ok, reason]} for the store tab (only the entries that differ from 'ok')."""
+    out = {}
+    for e in CAT.ITEMS:
+        o = CAT.offer(e, None, "Standard", c.get("metatype", ""))
+        ok, why = CAT.access(c, o["avail"], o["legal"], e["supply"], approved)
+        out[e["id"]] = [ok, why, o["cost"]]
+    return out
+
+
 def sheet_payload(row, admin):
     c = load_char(row)
     d = R.derive(c)
+    approved = row["approved"] == APPROVED
     allies = [{"id": r["id"], "name": display_name(r), "color": r["color"]} for r in get_db().execute(
         "SELECT * FROM players WHERE campaign_id=? AND id<>? ORDER BY created_at", (row["campaign_id"], row["id"])).fetchall()]
+    settings = game_settings(row["campaign_id"])
     return {"player": row_to_player(row, include_state=False), "char": c, "derived": d, "pools": R.pools(c, d),
-            "approved": row["approved"] == APPROVED, "locked": row["approved"] == APPROVED and not admin,
-            "admin": admin, "ledger": ledger_rows(pid=row["id"], limit=50), "allies": allies}
+            "approved": approved, "locked": approved and not admin, "admin": admin,
+            "ledger": ledger_rows(pid=row["id"], limit=50), "allies": allies,
+            "store": store_access(c, approved), "sellPct": settings["sellPct"],
+            "spirits": [R.spirit_stats(s["type"], s["force"]) for s in c.get("spirits") or [] if s.get("type") in M.SPIRITS]}
 
 
 def char_tx(pid, admin, mutate):
     """Load a character inside a write transaction, let ``mutate(c, ctx, row)`` change it,
-    then persist it with ledger entries. Returns (row, ctx, message) or raises RuleError."""
+    then persist it with ledger entries, log notes and rolls. Returns (row, ctx, message) or raises RuleError."""
     db = get_db()
     db.execute("BEGIN IMMEDIATE")
     try:
@@ -130,14 +114,17 @@ def char_tx(pid, admin, mutate):
             abort(404)
         c = load_char(row)
         start = {"karma": c["karma"], "nuyen": c["nuyen"]}
-        ctx = R.Ctx(row["approved"] == APPROVED, admin)
+        ctx = R.Ctx(row["approved"] == APPROVED, admin, game_settings(row["campaign_id"])["sellPct"])
         msg = mutate(c, ctx, row)
+        R.clamp_state(c)
         save_char(pid, c)
         running = dict(start)
         for kind, delta, reason in ctx.ledger:
             running[kind] += delta
             ledger_add(row["campaign_id"], pid, kind, delta, running[kind], reason, admin)
         who = display_name(row, c)
+        for kind, data in ctx.rolls:
+            add_roll(row["campaign_id"], pid, who, row["color"], kind, data)
         for note in ctx.log:
             add_roll(row["campaign_id"], pid, who, row["color"], "note", {"text": note})
         db.commit()
@@ -226,7 +213,7 @@ def game_detail(cid):
                 "usedBy": r["used_by"], "usedAt": r["used_at"]}
                for r in db.execute("SELECT * FROM invites WHERE campaign_id=? ORDER BY created_at DESC", (cid,)).fetchall()]
     return jsonify({
-        "game": {"id": g["id"], "name": g["name"]},
+        "game": {"id": g["id"], "name": g["name"], "settings": game_settings(cid)},
         "players": [row_to_player(r, False) for r in db.execute("SELECT * FROM players WHERE campaign_id=? ORDER BY created_at", (cid,)).fetchall()],
         "maps": [row_to_map(r, False) for r in db.execute("SELECT * FROM maps WHERE campaign_id=? ORDER BY name COLLATE NOCASE", (cid,)).fetchall()],
         "invites": invites,
@@ -354,6 +341,8 @@ def review_sheet(pid):
     if decision == "approve":
         c = load_char(row)
         c["current_edge"] = R.derive(c)["edge_max"]
+        for ct in c.get("contacts") or []:
+            ct["verified"] = True
         db.execute("UPDATE players SET approved=?, review_note=NULL, character=?, char_rev=char_rev+1, updated_at=? WHERE id=?",
                    (APPROVED, json.dumps(c), now(), pid))
     elif decision in ("return", "reopen"):
@@ -403,7 +392,7 @@ def grant(cid):
         def mutate(c, ctx, _row):
             for kind, amount in (("karma", karma), ("nuyen", nuyen)):
                 if amount:
-                    new = max(0, c[kind] + amount)
+                    new = c[kind] + amount if amount > 0 else max(min(0, c[kind]), c[kind] + amount)
                     if new != c[kind]:
                         ctx.ledger.append((kind, new - c[kind], reason))
                         c[kind] = new
@@ -436,6 +425,156 @@ def gm_edge(cid):
         add_roll(cid, None, "GM", GM_COLOR, "note", {"text": "refreshed Edge for " + ("everyone" if b.get("players") == "all" else ", ".join(display_name(r) for r in rows)) + "."})
         get_db().commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/games/<cid>/settings", methods=["PUT"])
+@admin_required
+def game_settings_update(cid):
+    g = game_or_404(cid)
+    b = body()
+    cur = json.loads(g["settings"] or "{}") if "settings" in g.keys() else {}
+    if "sellPct" in b:
+        cur["sellPct"] = clamp_int(b.get("sellPct"), 0, 100, 50)
+    get_db().execute("UPDATE campaigns SET settings=?, updated_at=? WHERE id=?", (json.dumps(cur), now(), cid))
+    get_db().commit()
+    return jsonify({"settings": game_settings(cid)})
+
+
+@app.route("/api/games/<cid>/lifestyle", methods=["POST"])
+@admin_required
+def charge_lifestyle(cid):
+    """Start of a new month: charge every runner's lifestyle (nuyen may go negative)."""
+    game_or_404(cid)
+    rows = _target_rows(cid, body().get("players") or "all")
+    total = []
+    for row in rows:
+        def mutate(c, ctx, _row):
+            cost = R.derive(c)["lifestyle_cost"]
+            if cost:
+                c["nuyen"] -= cost
+                ctx.ledger.append(("nuyen", -cost, f"{c['lifestyle']} lifestyle, 1 month"))
+            return cost
+        _r, _ctx, cost = char_tx(row["id"], True, mutate)
+        total.append(f"{display_name(row)} {cost:,}¥")
+    add_roll(cid, None, "GM", GM_COLOR, "note", {"text": "charged a month of lifestyle: " + (", ".join(total) or "nobody") + "."})
+    get_db().commit()
+    return jsonify({"ok": True, "count": len(rows)})
+
+
+# ====================================================================== healing
+def _heal(patient_id, healer_row, method, b, admin):
+    """Roll a healing test (healer's pool, or natural recovery) and apply it to the patient."""
+    if method not in R.HEAL_METHODS:
+        return err("Unknown healing method.")
+    note = {}
+
+    def mutate(c, ctx, row):
+        dmg = {"natural_stun": R._int(c["stun_damage"]), "natural_physical": R._int(c["physical_damage"])}.get(
+            method, R._int(c["stun_damage"]) - R._int(c.get("drain_stun")) + R._int(c["physical_damage"]) - R._int(c.get("drain_phys")))
+        if dmg <= 0:
+            raise R.RuleError("Nothing to heal" + (" (drain only heals with rest)." if method in ("first_aid", "medkit", "magic") and (c["stun_damage"] or c["physical_damage"]) else "."))
+        if method.startswith("natural"):
+            parts = R.natural_pool(c, method, bool(b.get("assisted")))
+            who = "Rest"
+        else:
+            hc = c if (healer_row is None or healer_row["id"] == row["id"]) else load_char(healer_row)
+            hd = R.derive(hc)
+            if method == "magic":
+                sp = next((s for s in hc.get("spells") or [] if s.get("name") in ("Heal", "Cleansing Heal", "Cooling Heal", "Warming Heal")), None)
+                if not sp and not admin:
+                    raise R.RuleError("The healer doesn't know a Heal spell.")
+                prof = R.spell_profile(hc, hd, sp or {"name": "Heal", "drain": 3}) if hc.get("magic_type") in R.CASTERS else None
+                if not prof:
+                    raise R.RuleError("The healer can't cast spells.")
+                parts = list(prof["parts"])
+            else:
+                parts = list(R.pool_by_key(hc, "first_aid", hd)["parts"])
+                kits = [it for it in hc["inventory"] if it.get("medkit")]
+                if method == "medkit":
+                    if not kits:
+                        raise R.RuleError("The healer has no medkit.")
+                    kit = max(kits, key=lambda k: R._int(k.get("rating"), 1))
+                    parts.append([kit["name"], R._int(kit.get("rating"), 1)])
+                elif not kits:
+                    parts.append(["No medkit", -2])
+            if hd["wound_modifier"]:
+                parts.append(["Wound modifier", hd["wound_modifier"]])
+            who = display_name(healer_row) if healer_row is not None else "GM"
+        pool = max(1, sum(x[1] for x in parts))
+        r = DICE.new_roll(pool)
+        d = R.derive(c)
+        bonus = 1 if method in ("first_aid", "medkit") and d["essence"] >= 6 else 0
+        if bonus:
+            r["bought"] = r.get("bought", 0) + 1
+            DICE.evaluate(r)
+            parts.append(["Full Essence (+1 hit)", 0])
+        label = {"first_aid": "First aid", "medkit": "Medkit", "magic": "Heal spell", "natural_stun": "Rest (Stun)",
+                 "natural_physical": "Rest (Physical)"}[method]
+        r["label"] = f"{label} on {display_name(row, c)}" + (f" by {who}" if who not in ("Rest",) else "")
+        r["parts"] = parts
+        if method in ("first_aid", "medkit", "magic"):
+            r["threshold"] = R.heal_threshold(d)
+            DICE.evaluate(r)
+        ctx.rolls.append(("sr", r))
+        text = R.apply_heal(c, method, r["hits"], ctx)
+        if method == "magic" and healer_row is not None and healer_row["id"] == row["id"]:
+            R.after_cast(c, sp or {"name": "Heal", "drain": 3}, ctx)
+        note["text"] = text
+        ctx.log.append(f"{label}: {text}")
+        return text
+    try:
+        _row, _ctx, msg = char_tx(patient_id, admin, mutate)
+        if method == "medkit" and healer_row is not None:
+            def use_supplies(c, ctx, row):
+                sup = next((it for it in c["inventory"] if it.get("ref") == "medical-medkit-supplies"), None)
+                if sup:
+                    sup["qty"] = R._int(sup.get("qty"), 1) - 1
+                    if sup["qty"] <= 0:
+                        c["inventory"].remove(sup)
+            char_tx(healer_row["id"], True, use_supplies)
+        if method == "magic" and healer_row is not None and healer_row["id"] != patient_id:
+            def drain(c, ctx, row):
+                sp = next((s for s in c.get("spells") or [] if s.get("name") in ("Heal", "Cleansing Heal", "Cooling Heal", "Warming Heal")), None)
+                R.after_cast(c, sp or {"name": "Heal", "drain": 3}, ctx)
+            char_tx(healer_row["id"], True, drain)
+    except R.RuleError as e:
+        return err(str(e))
+    return None, msg
+
+
+@app.route("/api/me/heal", methods=["POST"])
+@player_required
+@rate_limited("player_heal", 30)
+def me_heal(me):
+    """Heal yourself or an ally (first aid, medkit, Heal spell) or rest (natural recovery, yourself only)."""
+    b = body()
+    method = str(b.get("method") or "")
+    target = str(b.get("target") or me["id"])
+    trow = get_db().execute("SELECT * FROM players WHERE id=? AND campaign_id=?", (target, me["campaign_id"])).fetchone()
+    if not trow:
+        return err("Pick a runner in your game.")
+    if method.startswith("natural") and target != me["id"]:
+        return err("Only the patient can rest.")
+    res = _heal(target, me, method, b, False)
+    if isinstance(res, tuple) and res[0] is not None:
+        return res
+    return jsonify({"message": res[1], "rolls": roll_rows(me["campaign_id"]), "sheet": sheet_payload(fetch_player_row(me["id"]), False)})
+
+
+@app.route("/api/players/<pid>/heal", methods=["POST"])
+@admin_required
+def gm_heal(pid):
+    b = body()
+    row = fetch_player_row(pid)
+    healer = None
+    if b.get("healer"):
+        healer = get_db().execute("SELECT * FROM players WHERE id=? AND campaign_id=?", (str(b["healer"]), row["campaign_id"])).fetchone()
+    res = _heal(pid, healer, str(b.get("method") or ""), b, True)
+    if isinstance(res, tuple) and res[0] is not None:
+        return res
+    out = sheet_payload(fetch_player_row(pid), True)
+    out["message"] = res[1]
+    return jsonify(out)
 
 
 # ====================================================================== runs (contracts)
@@ -683,10 +822,31 @@ def me_roll(me):
 
     def mutate(c, ctx, row):
         d = R.derive(c)
-        if b.get("key"):
-            pool = R.pool_by_key(c, str(b["key"]))
+        key = str(b.get("key") or "")
+        extra = []
+        follow = None
+        if key:
+            pool = R.pool_by_key(c, key, d)
             parts = [list(p) for p in pool["parts"]]
             label = pool["label"]
+            if key.startswith("weapon:") and key != "weapon:unarmed":
+                it = R.find_item(c, key[7:])
+                prof = R.weapon_profile(c, d, it, b.get("mode"), b.get("range"))
+                note = R.consume_attack(c, it["uid"], prof["mode"])
+                label = it["name"] + (f" ({G.FIRING_MODES[prof['mode']]['name']})" if prof["mode"] else "")
+                if b.get("range") in G.RANGES and prof["ar_at"] is not None:
+                    extra.append(f"AR {prof['ar_at']} at {b['range']}")
+                extra.append(f"DV {prof['dv']}{prof['type']}" + (f" {prof['element']}" if prof["element"] else ""))
+                if prof.get("grenade"):
+                    extra.append(f"blast {prof.get('blast')}: {' / '.join(prof['grenade'])}")
+                if note:
+                    extra.append(note)
+            elif key.startswith("spell:"):
+                sp = c["spells"][R._list_index(c["spells"], key[6:])]
+                follow = ("spell", sp)
+            elif key.startswith("form:"):
+                f = c["complex_forms"][R._list_index(c["complex_forms"], key[5:])]
+                follow = ("form", f)
         else:
             n = clamp_int(b.get("dice"), 0, DICE.MAX_POOL, 0)
             parts = [["Dice", n]]
@@ -710,7 +870,13 @@ def me_roll(me):
             raise R.RuleError(str(e))
         res["label"] = label
         res["parts"] = parts
-        out["rid"] = add_roll(row["campaign_id"], row["id"], _who(row, c), row["color"], "sr", res)
+        if extra:
+            res["note"] = " · ".join(extra)
+        out["rid"] = add_roll(row["campaign_id"], row["id"], display_name(row, c), row["color"], "sr", res)
+        if follow and follow[0] == "spell":
+            R.after_cast(c, follow[1], ctx, clamp_int(b.get("drain"), 0, 20, 0))
+        elif follow:
+            R.after_form(c, follow[1], ctx)
         return "Rolled."
     try:
         char_tx(me["id"], False, mutate)
@@ -760,9 +926,19 @@ def me_initiative(me):
         d = R.derive(c)
         if plus3:
             R.spend_edge(c, 1)
-        res = DICE.initiative(d["initiative_score"], d["initiative_dice"], plus3)
-        res["label"] = "Initiative" + (" (+3 for 1 Edge)" if plus3 else "")
+        kind = str(body().get("kind") or "")
+        score, dice = d["initiative_score"], d["initiative_dice"]
+        label = "Initiative"
+        if kind == "matrix" and d["matrix"].get("device"):
+            score, dice, label = d["matrix"]["init_score"], d["matrix"]["init_dice"], f"Matrix initiative ({d['matrix']['mode']})"
+        elif kind == "astral" and d["astral_initiative"]:
+            score, dice, label = d["astral_initiative"]["score"], d["astral_initiative"]["dice"], "Astral initiative"
+        res = DICE.initiative(score, dice, plus3)
+        res["label"] = label + (" (+3 for 1 Edge)" if plus3 else "")
+        res["actions"] = {"major": 1, "minor": min(R.MAX_MINOR, 1 + dice)}
         add_roll(row["campaign_id"], row["id"], _who(row, c), row["color"], "init", res)
+        import fight
+        fight.tracker_set_player(row["campaign_id"], row["id"], res["total"], d)
         return "Rolled."
     try:
         char_tx(me["id"], False, mutate)

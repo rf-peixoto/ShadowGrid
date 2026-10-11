@@ -692,3 +692,54 @@ details { background: #111c1f; border-radius: var(--radius); }
 .wiki-body h2 { color: var(--accent); }
 .wiki-body h3 { color: var(--ar); }
 .swatch { border-radius: 2px; }
+
+/* ===================================================================== core-book update: statuses, store, tracker, combat */
+.status-chips { display: inline-flex; flex-wrap: wrap; gap: .25rem; }
+.status-chip { display: inline-flex; align-items: center; gap: .25rem; font-size: .75rem; padding: .05rem .45rem; border-radius: 999px;
+  border: 1px solid var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); white-space: nowrap; }
+.status-chip .x, .chip .x { border: 0; background: transparent; color: var(--muted); padding: 0 .1rem; font-size: .9rem; line-height: 1; cursor: pointer; }
+.status-chip .x:hover, .chip .x:hover { color: var(--danger); }
+.status-edit { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
+.status-edit select { max-width: 9rem; }
+.chips-list { display: flex; flex-wrap: wrap; gap: .3rem; }
+.chip.small { font-size: .72rem; padding: .05rem .4rem; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: .15rem .8rem; }
+.check-grid label.check { justify-content: flex-start; font-size: .88rem; }
+.weapon-line { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+.weapon-line select { max-width: 13rem; }
+.weapon-line label { display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; color: var(--muted); }
+.weapon-line input { width: 3.6rem; }
+.chip.bad { border-color: var(--phys); color: var(--phys); }
+.store-sub { grid-column: 1 / -1; margin: .6rem 0 0; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ar); border-bottom: 1px solid var(--line); padding-bottom: .2rem; }
+.item-card .stats { display: block; font-family: "Share Tech Mono", monospace; font-size: .76rem; color: var(--ar); margin: 0; }
+.item-card p.stats { font-family: "Share Tech Mono", monospace; font-size: .76rem; color: var(--ar); margin: 0; }
+.item-card.locked { opacity: .62; }
+.item-card .why { color: var(--warn); font-size: .78rem; margin: 0; }
+.item-card .buy-opts { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+.item-card .buy-opts label { display: inline-flex; align-items: center; gap: .3rem; font-size: .78rem; color: var(--muted); }
+.item-card .buy-opts input { width: 4rem; }
+.item-card .buy .col { gap: 0; }
+.store-head label.check { white-space: nowrap; }
+.tracker { display: flex; flex-direction: column; gap: .2rem; }
+.tr-row { display: flex; align-items: center; gap: .35rem; padding: .2rem .35rem; border-radius: 6px; border: 1px solid transparent; font-size: .85rem; }
+.tr-row.current { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.tr-row.mine { font-weight: 700; }
+.tr-row.dim { opacity: .6; }
+.tr-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-row b { font-family: "Share Tech Mono", monospace; min-width: 1.6rem; text-align: right; }
+.tr-row .tr-total { width: 3.3rem; padding: .1rem .3rem; font-family: "Share Tech Mono", monospace; }
+.tr-row button.small { padding: .1rem .3rem; }
+.npc-box { flex-basis: 100%; display: flex; flex-direction: column; gap: .15rem; padding: .3rem 0; }
+.npc-box pre { margin: .2rem 0 0; font-family: inherit; font-size: .75rem; }
+.spirit { border-top: 1px solid var(--line); padding: .5rem 0; display: flex; flex-direction: column; gap: .25rem; }
+.log-entry.attack { border-left-color: var(--accent) !important; }
+.log-entry .atk-row { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.log-entry .atk-row .k { color: var(--muted); min-width: 5.5rem; font-size: .75rem; }
+.log-entry .atk-row b { margin-left: auto; font-size: .75rem; }
+p.why { color: var(--warn); }
+.tr-row.gm { flex-direction: column; align-items: stretch; gap: .1rem; }
+.tr-row .tr-line { display: flex; align-items: center; gap: .35rem; min-width: 0; }
+.tr-row .tr-line.tr-actions { justify-content: space-between; padding-left: 1rem; }
+.tr-row .tr-line.tr-actions button.small { font-size: .72rem; }
+dialog label.check { flex-direction: row; align-items: center; }
+.tr-row .tr-line.tr-actions .row { flex-wrap: nowrap; }

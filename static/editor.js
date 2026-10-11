@@ -14,6 +14,8 @@ const S = {
   sceneDirty: true, sceneZoom: 1, frame: null,
   fogQueue: null, fogTimer: null,
   version: null, pollTimer: null, pollInterval: 6000, playersSig: '', rollsSig: '', follow: false, pingFrame: null, iso: {}, sceneIso: null,
+  rt: { doors: new Set(), markers: new Set(), all: false },   // runtime fields the editor itself changed since the last save
+  tracker: null, templateNpc: null,
 };
 
 const canvas = $('map'), ctx2d = canvas.getContext('2d'), wrap = $('canvas-wrap');
@@ -50,7 +52,7 @@ function currentView() {
   for (const p of S.ctx.players) {
     if (p.currentMapId !== MAP_ID) continue;
     const t = (p.state.maps || {})[MAP_ID]?.token;
-    if (t) tokens.push({ c: t.c, r: t.r, color: p.color, name: p.name, me: p.id === S.viewAs, cm: p.cm });
+    if (t) tokens.push({ c: t.c, r: t.r, color: p.color, name: p.name, me: p.id === S.viewAs, cm: p.cm, statuses: p.statuses });
   }
   const p = player();
   if (!p) return { mode: 'gm', tokens, rooms: showRooms };
@@ -172,6 +174,7 @@ function pushUndo() { UNDO.push(JSON.stringify(S.map.data)); if (UNDO.length > 4
 function undo() {
   if (S.mode !== 'edit' || !UNDO.length) { toast('Nothing to undo.'); return; }
   S.map.data = JSON.parse(UNDO.pop());
+  S.rt.all = true;
   markDirty(); renderRoomList(); renderRoomSelects(); renderLegend(); if (S.selected) renderInspector();
 }
 
@@ -185,7 +188,12 @@ async function saveMap() {
   if (!S.map) return;
   $('save-state').textContent = 'Saving…';
   try {
-    await api(`/api/maps/${MAP_ID}`, 'PUT', { name: S.map.name, width: S.map.width, height: S.map.height, cellSize: S.map.cellSize, settings: S.map.settings, data: S.map.data, campaignId: S.map.campaignId });
+    const runtime = S.rt.all ? { doors: allDoorKeys(), markers: markers().map(m => m.id) } : { doors: [...S.rt.doors], markers: [...S.rt.markers] };
+    const sent = { doors: new Set(S.rt.doors), markers: new Set(S.rt.markers), all: S.rt.all };
+    await api(`/api/maps/${MAP_ID}`, 'PUT', { name: S.map.name, width: S.map.width, height: S.map.height, cellSize: S.map.cellSize, settings: S.map.settings, data: S.map.data, campaignId: S.map.campaignId, runtime });
+    for (const k of sent.doors) S.rt.doors.delete(k);
+    for (const k of sent.markers) S.rt.markers.delete(k);
+    if (sent.all) S.rt.all = false;
     S.dirty = false; $('save-state').textContent = 'Saved';
   } catch (e) { $('save-state').textContent = 'Save failed, retrying'; S.saveTimer = setTimeout(saveMap, 3000); }
 }
@@ -231,8 +239,9 @@ async function moveMarker(m, c, r) {
 async function updateMarkerLive(m, fields) {
   Object.assign(m, fields);
   if (fields.cm === null) delete m.cm;
+  if (fields.statuses === null) delete m.statuses;
   invalidate();
-  if (S.mode === 'edit') { markDirty(); return; }
+  if (S.mode === 'edit') { if ('cm' in fields || 'statuses' in fields) S.rt.markers.add(m.id); markDirty(); return; }
   try { const r = await api(`/api/maps/${MAP_ID}/marker`, 'POST', { id: m.id, ...fields }); if (r.marker.cm) m.cm = r.marker.cm; } catch (e) { toast(e.message); }
 }
 async function toggleDoorAt(c, r, e, lock) {
@@ -243,11 +252,19 @@ async function toggleDoorAt(c, r, e, lock) {
   else if (d.locked) { toast('That door is locked. Shift+click to unlock it.'); return; }
   else d.open = !d.open;
   invalidate();
-  if (S.mode === 'edit') { markDirty(); if (S.selected) renderInspector(); return; }
+  if (S.mode === 'edit') { S.rt.doors.add(doorKey(c, r, e)); markDirty(); if (S.selected) renderInspector(); return; }
   try { const res = await api(`/api/maps/${MAP_ID}/door`, 'POST', lock ? { c, r, edge: e, locked: d.locked } : { c, r, edge: e, open: d.open }); d.open = res.open; d.locked = res.locked; }
   catch (err) { Object.assign(d, before); toast(err.message); }
   invalidate(); if (S.selected) renderInspector();
 }
+/* doors are stored on one of the two cells of an edge: "c,r:edge" of the owning cell */
+function doorKey(c, r, e) {
+  const own = (getCell(c, r) || {}).doors;
+  if (own && own[e]) return `${key(c, r)}:${e}`;
+  const g = G(), n = g.neighbor(c, r, e), opp = g.hex ? (e + 3) % 6 : (e + 2) % 4;
+  return `${key(n.c, n.r)}:${opp}`;
+}
+function allDoorKeys() { const out = []; for (const k in cells()) for (const e in (cells()[k].doors || {})) out.push(`${k}:${e}`); return out; }
 function revealAll(val) {
   const p = player(); if (!p) return;
   confirmDialog(val ? `Reveal the whole map for ${p.name}? Secret cells included.` : `Hide everything from ${p.name}? Their token stays where it is.`,
@@ -283,6 +300,7 @@ function placeMarker(c, r) {
   const m = { id: Math.random().toString(36).slice(2, 10), c, r, type: S.markerType, color: $('marker-color').value, label: $('marker-label').value.trim() };
   const cm = cmFromAttrs(+$('marker-body').value, +$('marker-wil').value);
   if (cm) m.cm = cm;
+  if (S.templateNpc) { m.npc = JSON.parse(JSON.stringify(S.templateNpc.npc)); m.cm = JSON.parse(JSON.stringify(S.templateNpc.cm)); if (!m.label) m.label = S.templateNpc.npc.template; }
   if ($('link-on').checked) {
     if (!$('link-map').value) { toast('Pick a destination map first.'); return; }
     m.target = { mapId: $('link-map').value, c: +$('link-c').value || 0, r: +$('link-r').value || 0 };
@@ -297,9 +315,27 @@ function placeMarker(c, r) {
 }
 function cmFromAttrs(body, wil) {
   if (!(body > 0) && !(wil > 0)) return null;
-  return { pm: body > 0 ? 8 + Math.ceil(body / 2) : 0, sm: wil > 0 ? 8 + Math.ceil(wil / 2) : 0, ov: body > 0 ? body : 0, p: 0, s: 0 };
+  return { pm: body > 0 ? 8 + Math.ceil(body / 2) : 0, sm: wil > 0 ? 8 + Math.ceil(wil / 2) : 0, ov: body > 0 ? body * 2 : 0, p: 0, s: 0 };
 }
+/* NPC template for new markers (fetched once, copied into each marker) */
+function renderTemplateSelect() {
+  const sel = $('marker-template'); if (sel.options.length > 1) return;
+  const groups = {};
+  for (const t of SR.CAT.npcTemplates) (groups[t.kind] = groups[t.kind] || []).push(t);
+  for (const [k, list] of Object.entries(groups)) sel.append(h('optgroup', { label: k === 'Grunt' ? 'Grunts (Professional Rating)' : k + 's' }, list.map(t => option(t.key, t.pr != null ? `PR ${t.pr} · ${t.name}` : t.name))));
+}
+async function loadTemplate() {
+  const k = $('marker-template').value;
+  const t = SR.CAT.npcTemplates.find(x => x.key === k);
+  $('marker-force-wrap').hidden = !(t && t.force);
+  if (!k) { S.templateNpc = null; cmHint(); return; }
+  try { S.templateNpc = await api(`/api/npc-templates/${encodeURIComponent(k)}?force=${+$('marker-force').value || 3}`); cmHint(); }
+  catch (e) { toast(e.message); }
+}
+$('marker-template').onchange = loadTemplate;
+$('marker-force').onchange = loadTemplate;
 function cmHint() {
+  if (S.templateNpc) { const n = S.templateNpc.npc, cm = S.templateNpc.cm; $('marker-cm-hint').textContent = `New markers are ${n.template}: ${cm.grunt ? cm.pm + ' boxes (grunt)' : cm.pm + ' Physical, ' + cm.sm + ' Stun'}, DR ${n.dr}, init ${n.init} + ${n.init_dice}D6.`; return; }
   const cm = cmFromAttrs(+$('marker-body').value, +$('marker-wil').value);
   $('marker-cm-hint').textContent = cm ? `New markers get ${cm.pm ? cm.pm + ' Physical' : ''}${cm.pm && cm.sm ? ' and ' : ''}${cm.sm ? cm.sm + ' Stun' : ''} boxes${cm.ov ? ` (+${cm.ov} overflow)` : ''}.` : 'Leave empty for markers without a condition monitor.';
 }
@@ -417,7 +453,7 @@ function setMode(m) {
   if (isoPref(m) !== vp.iso) setIso(isoPref(m), false);
   { const g = document.querySelector(`.tool-group[data-mode="${m}"]`), before = g.querySelector('.fog-actions'); before ? g.insertBefore($('inspector'), before) : g.appendChild($('inspector')); }
   S.selected = null;
-  renderInspector(); renderPlayers(); renderLegend(); invalidate();
+  renderInspector(); renderPlayers(); renderLegend(); renderCombat(); invalidate();
   schedulePoll(m === 'play' ? 1500 : 6000);
 }
 $('mode-edit').onclick = () => setMode('edit');
@@ -532,7 +568,7 @@ function renderPlayers() {
   $('no-campaign').hidden = hasCampaign; $('players-panel').hidden = !hasCampaign; $('snapshots-panel').hidden = !hasCampaign; $('dice-panel').hidden = !hasCampaign;
   if (S.viewAs && !S.ctx.players.some(p => p.id === S.viewAs)) S.viewAs = '';
   renderViewAs(); refreshFogPanel();
-  const sig = JSON.stringify(S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status]));
+  const sig = JSON.stringify(S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses]));
   if (sig === S.playersSig || $('player-list').contains(document.activeElement)) return;
   S.playersSig = sig;
   const el = $('player-list'); el.innerHTML = '';
@@ -544,10 +580,13 @@ function renderPlayers() {
     const here = p.currentMapId === MAP_ID, elsewhere = p.currentMapId && S.ctx.allMaps.find(m => m.id === p.currentMapId);
     const cmLine = h('div.cmline', h('span', { style: { color: 'var(--phys)' } }, `P ${Math.min(p.cm.p, p.cm.pm)}/${p.cm.pm}`), h('span', { style: { color: 'var(--stun)' } }, `S ${p.cm.s}/${p.cm.sm}`),
       SR.healthTag(p.cm.status), h('span.grow'), SR.pips(p.edge.cur, p.edge.max));
+    const stLine = statusEditor(p.statuses || {}, (name, on, value) => setStatus({ kind: 'player', id: p.id }, name, on, value));
     el.append(h('div.player-row',
       h('div.row.tight', { style: { flexWrap: 'nowrap' } }, sw, h('a.grow', { href: `/game/${S.ctx.campaign.id}/sheet/${p.id}`, target: '_blank', title: 'Open the character sheet' }, p.name), rad),
       p.status !== 'approved' ? h('div', SR.statusTag(p.status)) : null,
-      cmLine,
+      cmLine, stLine,
+      here ? h('div.row.tight', h('button.small', { type: 'button', onclick: () => attackDialog({ kind: 'player', id: p.id }) }, '⚔ Attack…'),
+        h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, { kind: 'player', id: p.id }) }, 'Attack them…')) : null,
       h('div.row.tight.between', h('span.hint', here ? 'On this map' : elsewhere ? `On ${elsewhere.name}` : 'Not placed'),
         h('span.row.tight',
           here ? h('button.small', { type: 'button', title: 'Take the token off this map', onclick: async () => { await api(`/api/players/${p.id}/unplace`, 'POST', {}); reloadContext(); } }, 'Unplace') : null,
@@ -634,7 +673,15 @@ function renderInspector() {
     const inp = document.createElement('input'); inp.value = m.label || ''; inp.placeholder = 'label'; inp.className = 'grow';
     inp.onchange = () => updateMarkerLive(m, { label: inp.value.trim() });
     row.appendChild(inp);
+    row.appendChild(markerNpc(m));
     row.appendChild(markerCM(m));
+    row.appendChild(statusEditor(m.statuses || {}, (name, on, value) => {
+      if (S.mode === 'edit') { const st = Object.assign({}, m.statuses || {}); if (on) st[name] = value; else delete st[name]; updateMarkerLive(m, { statuses: Object.keys(st).length ? st : null }); renderInspector(); return; }
+      setStatus({ kind: 'marker', id: m.id }, name, on, value).then(r => { if (r) { m.statuses = r; if (!Object.keys(r).length) delete m.statuses; invalidate(); renderInspector(); } });
+    }));
+    if (S.mode === 'play' && S.ctx.campaign) row.appendChild(h('div.row.tight', h('button.small', { type: 'button', onclick: () => attackDialog({ kind: 'marker', id: m.id }) }, '⚔ Attack…'),
+      h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, { kind: 'marker', id: m.id }) }, 'Attack it…'),
+      S.tracker && S.tracker.active && !S.tracker.entries.some(e => e.ref === m.id) ? h('button.small.ghost', { type: 'button', onclick: () => trackerOp('add', { mapId: MAP_ID, markers: [m.id], roll: true }) }, '+ Initiative') : null));
     if (S.mode === 'edit') {
       const rmv = document.createElement('button'); rmv.textContent = 'Remove'; rmv.className = 'danger';
       rmv.onclick = () => { pushUndo(); S.map.data.markers = markers().filter(x => x !== m); markDirty(); renderInspector(); renderLegend(); };
@@ -648,11 +695,19 @@ function markerCM(m) {
   const box = h('div.cm-edit');
   if (m.cm) {
     const dmg = (track, n) => {
-      if (S.mode === 'edit') { pushUndo(); const k = track === 'stun' ? 's' : 'p'; m.cm[k] = Math.max(0, m.cm[k] + n); if (k === 's' && m.cm.s > m.cm.sm) { m.cm.p += m.cm.s - m.cm.sm; m.cm.s = m.cm.sm; } markDirty(); renderInspector(); return; }
+      if (S.mode === 'edit') {
+        pushUndo(); S.rt.markers.add(m.id);
+        if (m.cm.grunt) { m.cm.p = Math.max(0, Math.min(m.cm.pm, m.cm.p + n)); if (n > 0) m.cm.last = track === 'stun' ? 'S' : 'P'; }
+        else { const k = track === 'stun' ? 's' : 'p'; m.cm[k] = Math.max(0, m.cm[k] + n); if (k === 's' && m.cm.s > m.cm.sm) { m.cm.p += m.cm.s - m.cm.sm; m.cm.s = m.cm.sm; } }
+        markDirty(); renderInspector(); return;
+      }
       api(`/api/maps/${MAP_ID}/marker`, 'POST', { id: m.id, damage: { track, amount: n } }).then(r => { m.cm = r.marker.cm; invalidate(); renderInspector(); }).catch(e => toast(e.message));
     };
-    const set = (track, value) => dmg(track, value - (track === 'stun' ? m.cm.s : m.cm.p));
-    if (m.cm.pm) box.append(SR.monitor('physical', m.cm, { onSet: set, compact: true, showTools: false }), h('div.row.tight', h('button.small', { type: 'button', onclick: () => dmg('physical', 1) }, '+1 P'), h('button.small', { type: 'button', onclick: () => dmg('physical', -1) }, 'Heal P')));
+    const set = (track, value) => dmg(track, value - (track === 'stun' && !m.cm.grunt ? m.cm.s : m.cm.p));
+    if (m.cm.grunt) box.append(SR.monitor('physical', m.cm, { onSet: set, compact: true, showTools: false }), h('div.row.tight', h('button.small', { type: 'button', onclick: () => dmg('physical', 1) }, '+1 P'),
+      h('button.small', { type: 'button', onclick: () => dmg('stun', 1) }, '+1 S'), h('button.small', { type: 'button', onclick: () => dmg('physical', -1) }, 'Heal'),
+      m.npc && m.npc.pr != null && m.cm.p > m.npc.pr ? h('span.warn', { title: 'Damage exceeds their Professional Rating: Composure test or they bail' }, 'May flee') : null));
+    else if (m.cm.pm) box.append(SR.monitor('physical', m.cm, { onSet: set, compact: true, showTools: false }), h('div.row.tight', h('button.small', { type: 'button', onclick: () => dmg('physical', 1) }, '+1 P'), h('button.small', { type: 'button', onclick: () => dmg('physical', -1) }, 'Heal P')));
     if (m.cm.sm) box.append(SR.monitor('stun', m.cm, { onSet: set, compact: true, showTools: false }), h('div.row.tight', h('button.small', { type: 'button', onclick: () => dmg('stun', 1) }, '+1 S'), h('button.small', { type: 'button', onclick: () => dmg('stun', -1) }, 'Heal S')));
     const st = GridCore.cmStatus(m.cm);
     box.append(h('div.row.tight', SR.healthTag(st), h('button.small.ghost', { type: 'button', onclick: () => updateMarkerLive(m, { cm: null }).then(() => { delete m.cm; invalidate(); renderInspector(); }) }, 'Remove monitor')));
@@ -661,6 +716,216 @@ function markerCM(m) {
     box.append(h('div.row.tight', h('span.hint', 'Monitor:'), b, w, h('button.small', { type: 'button', onclick: () => { const cm = cmFromAttrs(+b.value, +w.value); if (!cm) { toast('Enter Body and/or Willpower.'); return; } updateMarkerLive(m, { cm }); renderInspector(); } }, 'Add')));
   }
   return box;
+}
+
+/* NPC stat block on a marker (core-book templates) */
+function markerNpc(m) {
+  const box = h('div.npc-box');
+  const pick = h('button.small', { type: 'button', onclick: () => pickTemplate(m) }, m.npc ? 'Change template…' : 'Apply NPC template…');
+  if (!m.npc) { box.append(h('div.row.tight', pick)); return box; }
+  const n = m.npc, A = n.attrs || {};
+  box.append(h('div.row.between', h('b', n.template || 'NPC'), pick),
+    h('div.hint', Object.entries(A).filter(([, v]) => v).map(([k, v]) => `${k.slice(0, 3).toUpperCase()} ${v}`).join(' · ')),
+    h('div.hint', `DR ${n.dr} · Init ${n.init} + ${n.init_dice}D6 · ${n.grunt ? `Grunt, PR ${n.pr} (group Edge ${n.edge})` : n.kind}` + (n.move ? ` · Move ${n.move}` : '')),
+    n.weapons.length ? h('div.hint', 'Weapons: ' + n.weapons.map(w => `${w.name} ${w.dv}${w.type}${w.grenade ? '' : ' AR ' + SR.arText(w.ar)}`).join('; ')) : null,
+    h('details', h('summary.hint', 'Skills & notes'), h('div.hint', Object.entries(n.skills || {}).map(([k, v]) => `${k} ${v}`).join(', ')), h('pre.hint', { style: { whiteSpace: 'pre-wrap' } }, n.notes || '')));
+  return box;
+}
+async function pickTemplate(m) {
+  const sel = h('select', option('', 'Pick a template…'));
+  const groups = {};
+  for (const t of SR.CAT.npcTemplates) (groups[t.kind] = groups[t.kind] || []).push(t);
+  for (const [k, list] of Object.entries(groups)) sel.append(h('optgroup', { label: k }, list.map(t => option(t.key, t.pr != null ? `PR ${t.pr} · ${t.name}` : t.name))));
+  const force = h('input', { type: 'number', min: 1, max: 12, value: 3 }), relabel = h('input', { type: 'checkbox', checked: !m.label });
+  const ok = await UI.modal('NPC template', h('div', h('p.hint', 'Sets this marker’s stats, weapons and condition monitor (damage is reset).'), h('label.stack', 'Template', sel),
+    h('label.stack', 'Force (spirits only)', force), h('label.check', relabel, 'Rename the marker after the template')), { ok: 'Apply', narrow: true });
+  if (!ok || !sel.value) return;
+  if (S.mode === 'edit') {
+    try { const t = await api(`/api/npc-templates/${encodeURIComponent(sel.value)}?force=${+force.value || 3}`); pushUndo(); m.npc = t.npc; m.cm = t.cm; if (relabel.checked) m.label = t.npc.template; S.rt.markers.add(m.id); markDirty(); renderInspector(); }
+    catch (e) { toast(e.message); }
+    return;
+  }
+  try { const r = await api(`/api/maps/${MAP_ID}/marker`, 'POST', { id: m.id, template: sel.value, force: +force.value || 3, relabel: relabel.checked }); Object.assign(m, r.marker); invalidate(); renderInspector(); }
+  catch (e) { toast(e.message); }
+}
+/* status checkboxes: chips you can remove plus a picker to add one */
+function statusEditor(statuses, onChange) {
+  const sel = h('select.small', option('', '+ status…'), Object.entries(SR.CAT.statuses).map(([k, v]) => option(k, `${v.icon} ${k}`)));
+  sel.onchange = async () => {
+    const name = sel.value; sel.value = ''; if (!name) return;
+    const meta = SR.CAT.statuses[name]; let value = true;
+    if (meta.value || meta.levels) { const v = await UI.prompt(name, meta.levels ? `Level (1-${meta.levels})` : 'Value (#)', { type: 'number', value: 1, min: 1 }); if (v === null) return; value = Math.max(1, +v || 1); }
+    onChange(name, true, value);
+  };
+  return h('div.status-edit', SR.statusChips(statuses, { onRemove: n => onChange(n, false) }), sel);
+}
+async function setStatus(target, status, on, value) {
+  try { const r = await api(`/api/maps/${MAP_ID}/status`, 'POST', { target, status, on, value: value === true ? 1 : value }); if (target.kind === 'player') reloadContext(); return r.statuses; }
+  catch (e) { toast(e.message); return null; }
+}
+
+// ------------------------------------------------------------ combat: initiative tracker
+async function trackerOp(op, body = {}) {
+  if (!S.ctx.campaign) return;
+  try { const r = await api(`/api/games/${S.ctx.campaign.id}/combat`, 'POST', { op, ...body }); S.tracker = r.tracker; renderCombat(); if (r.message) toast(r.message); }
+  catch (e) { toast(e.message); }
+}
+function combatants() {
+  const out = [];
+  for (const p of S.ctx.players) { const t = p.currentMapId === MAP_ID && (p.state.maps || {})[MAP_ID]?.token; if (t) out.push({ kind: 'player', id: p.id, name: p.name, c: t.c, r: t.r, color: p.color }); }
+  for (const m of markers()) if (m.npc || m.cm) out.push({ kind: 'marker', id: m.id, name: m.label || (m.npc && m.npc.template) || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name, c: m.c, r: m.r, color: m.color, hidden: m.hidden });
+  return out;
+}
+function renderCombat() {
+  const root = $('combat-root'); if (!root) return;
+  root.innerHTML = '';
+  $('combat-panel').hidden = !S.ctx.campaign || S.mode !== 'play';
+  const t = S.tracker;
+  if (!t || !t.active) {
+    root.append(h('p.hint', 'Track initiative and resolve attacks. You roll everything; damage lands on the monitors.'),
+      h('div.row.tight', h('button.small.primary', { type: 'button', onclick: startCombat }, 'Start combat…'), h('button.small', { type: 'button', onclick: () => attackDialog() }, '⚔ Attack…')));
+    return;
+  }
+  root.append(h('div.row.between', h('b', `Round ${t.round}`),
+    h('label.check', { title: 'Players see the order (hidden entries stay hidden)' }, h('input', { type: 'checkbox', checked: t.visible, onchange: e => trackerOp(e.target.checked ? 'show' : 'hide') }), 'Show to players')));
+  const list = h('div.tracker');
+  for (const e of t.entries) {
+    const total = h('input.tr-total', { type: 'number', value: e.total ?? '', placeholder: '—', title: 'Initiative score', onchange: ev => trackerOp('set', { id: e.id, total: ev.target.value }) });
+    list.append(h('div.tr-row.gm' + (e.current ? '.current' : '') + (e.hidden ? '.dim' : ''),
+      h('div.tr-line', h('span.dot', { style: { background: e.color } }),
+        h('a.grow', { href: '#', title: 'Make it their turn and show them on the map', onclick: ev => { ev.preventDefault(); trackerOp('turn', { id: e.id }); focusCombatant(e); } }, e.name, e.hidden ? ' 🔒' : ''),
+        total),
+      h('div.tr-line.tr-actions', e.minor ? h('span.hint', { title: '1 Major + Minor actions each round' }, `1+${e.minor} actions`) : h('span'),
+        h('span.row.tight',
+          h('button.small.ghost', { type: 'button', title: 'Roll initiative', onclick: () => trackerOp('roll', { id: e.id }) }, '🎲'),
+          e.kind !== 'player' ? h('button.small.ghost', { type: 'button', title: e.hidden ? 'Hidden from players: click to reveal' : 'Visible to players: click to hide', onclick: () => trackerOp('set', { id: e.id, hidden: !e.hidden }) }, e.hidden ? 'Reveal' : 'Hide') : null,
+          e.kind !== 'custom' ? h('button.small.ghost', { type: 'button', title: 'Attack with this combatant', onclick: () => attackDialog({ kind: e.kind, id: e.ref }) }, '⚔') : null,
+          h('button.small.ghost', { type: 'button', title: 'Remove from combat', onclick: () => trackerOp('remove', { id: e.id }) }, '✕')))));
+  }
+  if (!t.entries.length) list.append(h('p.hint', 'Nobody in the order yet.'));
+  root.append(list,
+    h('div.row.tight.mt', h('button.small.primary', { type: 'button', onclick: () => trackerOp('next') }, 'Next turn ›'), h('button.small', { type: 'button', onclick: () => trackerOp('roll') }, 'Roll NPCs'),
+      h('button.small', { type: 'button', onclick: () => trackerOp('round') }, 'New round'), h('button.small', { type: 'button', onclick: addToCombat }, '+ Add'),
+      h('button.small', { type: 'button', onclick: () => attackDialog() }, '⚔ Attack…'), h('button.small.danger', { type: 'button', onclick: () => trackerOp('end') }, 'End')),
+    h('p.hint', 'Initiative isn’t rerolled each round in SR6: “New round” goes back to the top. Players’ own initiative rolls fill in their score.'));
+}
+function focusCombatant(e) {
+  const c = combatants().find(x => x.kind === e.kind && x.id === e.ref);
+  if (c) { const p = G().cellCenter(c.c, c.r); vp.centerOn(p.x, p.y); S.selected = { c: c.c, r: c.r }; renderInspector(); requestDraw(); }
+}
+function combatantPicker(list, checkedFn) {
+  return h('div.check-grid', list.map(c => h('label.check', h('input', { type: 'checkbox', checked: checkedFn(c), dataset: { kind: c.kind, id: c.id } }), h('span.dot', { style: { background: c.color } }), c.name + (c.hidden ? ' (hidden)' : ''))));
+}
+async function startCombat() {
+  const list = combatants();
+  const picker = combatantPicker(list, () => true);
+  const roll = h('input', { type: 'checkbox', checked: true }), vis = h('input', { type: 'checkbox' });
+  const ok = await UI.modal('Start combat', h('div', list.length ? picker : h('p.hint', 'No tokens or enemy markers on this map. You can still add combatants later.'),
+    h('label.check.mt', roll, 'Roll initiative for the NPCs now'), h('label.check', vis, 'Show the order to players right away'),
+    h('p.hint', 'Players roll their own initiative from their dice panel; it lands here.')), { ok: 'Start' });
+  if (!ok) return;
+  const sel = [...picker.querySelectorAll('input:checked')].map(i => i.dataset);
+  await trackerOp('start', { players: sel.filter(x => x.kind === 'player').map(x => x.id), mapId: MAP_ID, markers: sel.filter(x => x.kind === 'marker').map(x => x.id), roll: roll.checked, visible: vis.checked });
+}
+async function addToCombat() {
+  const inT = new Set((S.tracker.entries || []).map(e => e.ref));
+  const list = combatants().filter(c => !inT.has(c.id));
+  const picker = combatantPicker(list, () => false);
+  const name = h('input', { placeholder: 'or a custom combatant…' }), score = h('input', { type: 'number', min: 0, value: 8, style: { width: '4rem' } }), dice = h('input', { type: 'number', min: 1, max: 5, value: 1, style: { width: '3.5rem' } });
+  const ok = await UI.modal('Add to combat', h('div', list.length ? picker : h('p.hint', 'Everyone on this map is already in.'),
+    h('div.row.tight.mt', name, h('label', 'Init', score), h('label', 'D6', dice))), { ok: 'Add' });
+  if (!ok) return;
+  const sel = [...picker.querySelectorAll('input:checked')].map(i => i.dataset);
+  await trackerOp('add', { players: sel.filter(x => x.kind === 'player').map(x => x.id), mapId: MAP_ID, markers: sel.filter(x => x.kind === 'marker').map(x => x.id), roll: true,
+    custom: name.value.trim() ? { name: name.value.trim(), score: +score.value, dice: +dice.value } : null });
+}
+
+// ------------------------------------------------------------ combat: GM-resolved attack
+function cellDistance(a, b) {
+  const g = G();
+  if (!g.hex) return Math.max(Math.abs(a.c - b.c), Math.abs(a.r - b.r));
+  const cube = p => { const x = p.c, z = p.r - (p.c - (p.c & 1)) / 2; return [x, -x - z, z]; };
+  const [x1, y1, z1] = cube(a), [x2, y2, z2] = cube(b);
+  return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+}
+function bandFor(m) { return m <= 3 ? 'Close' : m <= 50 ? 'Near' : m <= 250 ? 'Medium' : m <= 500 ? 'Far' : 'Extreme'; }
+async function attackDialog(attacker, target) {
+  if (!S.ctx.campaign) { toast('Assign this map to a game first.'); return; }
+  const list = combatants();
+  if (list.length < 2) { toast('You need at least two combatants on this map (runner tokens or markers with a monitor).'); return; }
+  const optKey = c => `${c.kind}:${c.id}`;
+  const attSel = h('select', list.map(c => option(optKey(c), c.name, attacker && attacker.kind === c.kind && attacker.id === c.id)));
+  const tgtSel = h('select', list.map(c => option(optKey(c), c.name, target && target.kind === c.kind && target.id === c.id)));
+  if (!target) {
+    const ak = attSel.value.split(':')[0];
+    const other = list.find(c => c.kind !== ak && !(c.kind === 'marker' && GridCore.cmStatus((markers().find(m => m.id === c.id) || {}).cm) === 'Dead')) || list.find(c => optKey(c) !== attSel.value);
+    if (other) tgtSel.value = optKey(other);
+  }
+  const weapon = h('select'), mode = h('select'), range = h('select', SR.RANGES.map(r => option(r, `${r} (${SR.CAT.store.rangeMeters[r]})`)));
+  const info = h('p.hint'), distInfo = h('span.hint');
+  let cellM = 2; try { cellM = +localStorage.getItem('sg.cellMeters') || 2; } catch { /* ignore */ }
+  const meters = h('input', { type: 'number', min: 0.5, step: 0.5, value: cellM, style: { width: '4rem' }, title: 'Meters per cell', onchange: () => { try { localStorage.setItem('sg.cellMeters', meters.value); } catch { /* ignore */ } suggestRange(); } });
+  const amod = h('input', { type: 'number', value: 0 }), dmod = h('input', { type: 'number', value: 0 }), smod = h('input', { type: 'number', value: 0 });
+  const amp = h('input', { type: 'number', min: 0, max: 10, value: 0 }), xdv = h('input', { type: 'number', value: 0 }), dice = h('input', { type: 'number', min: 0, placeholder: 'auto' });
+  const wild = h('input', { type: 'checkbox' }), hidden = h('input', { type: 'checkbox' }), unopp = h('input', { type: 'checkbox' }), apply = h('input', { type: 'checkbox', checked: true });
+  let options = [], dr = 0;
+  const pos = v => list.find(c => optKey(c) === v);
+  function suggestRange() {
+    const a = pos(attSel.value), b = pos(tgtSel.value); if (!a || !b) return;
+    const d = cellDistance(a, b), m = d * (+meters.value || 2);
+    distInfo.textContent = `${d} cells ≈ ${m} m`;
+    range.value = bandFor(m); describe();
+  }
+  async function loadOptions() {
+    const [kind, id] = attSel.value.split(':');
+    try { const r = await api(`/api/maps/${MAP_ID}/attack-options`, 'POST', { who: { kind, id } }); options = r.options; }
+    catch (e) { toast(e.message); options = []; }
+    weapon.innerHTML = '';
+    options.forEach(o => weapon.append(option(o.key, `${o.name} · ${o.pool} dice · DV ${o.dv}`)));
+    await loadDr(); drawModes(); suggestRange();
+  }
+  async function loadDr() {
+    const [kind, id] = tgtSel.value.split(':');
+    try { dr = (await api(`/api/maps/${MAP_ID}/attack-options`, 'POST', { who: { kind, id } })).dr; } catch { dr = 0; }
+  }
+  function drawModes() {
+    const o = options.find(x => x.key === weapon.value) || {};
+    mode.innerHTML = '';
+    (o.modes || []).forEach(m => mode.append(option(m, `${m} · ${SR.CAT.store.firingModes[m].name}`)));
+    mode.disabled = !(o.modes || []).length;
+    amp.disabled = !o.spell;
+    describe();
+  }
+  function describe() {
+    const o = options.find(x => x.key === weapon.value); if (!o) { info.textContent = ''; return; }
+    const i = SR.RANGES.indexOf(range.value), fm = mode.value ? SR.CAT.store.firingModes[mode.value] : null;
+    let ar = o.ar ? o.ar[i] : null;
+    if (ar != null && fm) ar = Math.max(0, ar + fm.ar);
+    const ammo = o.clip ? ` · ${o.loaded}/${o.clip} loaded${fm ? `, uses ${fm.rounds}` : ''}` : o.qty ? ` · ${o.qty} left` : '';
+    const edge = ar != null ? (ar - dr >= 4 ? ' → attacker may gain 1 Edge' : dr - ar >= 4 ? ' → defender may gain 1 Edge' : '') : '';
+    info.textContent = ar == null ? `Can’t attack at ${range.value} range with this.` : `AR ${ar} vs DR ${dr}${edge}${ammo}${o.spell ? ` · drain ${o.drain}${+amp.value ? ' + ' + 2 * amp.value : ''}` : ''}${o.grenade ? ' · blast ' + o.grenade.join('/') : ''}`;
+  }
+  attSel.onchange = loadOptions; tgtSel.onchange = async () => { await loadDr(); suggestRange(); };
+  weapon.onchange = drawModes; mode.onchange = describe; range.onchange = describe; amp.oninput = describe;
+  const body = h('div',
+    h('div.form-grid', h('label', 'Attacker', attSel), h('label', 'Target', tgtSel), h('label', 'Weapon / spell', weapon), h('label', 'Firing mode', mode),
+      h('label', h('span', 'Range ', distInfo), range), h('label', 'Meters per cell', meters)),
+    info,
+    h('details', h('summary', 'Modifiers'), h('div.form-grid', h('label', 'Attack dice ±', amod), h('label', 'Defense dice ±', dmod), h('label', 'Soak dice ±', smod),
+      h('label', 'Extra DV', xdv), h('label', 'Amp Up (spells)', amp), h('label', 'NPC dice (override)', dice))),
+    h('div.row', h('label.check', wild, 'Wild Die'), h('label.check', { title: 'Optional rule for grunts below PR 3: they don’t roll to defend' }, unopp, 'Unopposed (grunt)'),
+      h('label.check', hidden, 'Hidden roll'), h('label.check', apply, 'Apply damage')));
+  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: () => loadOptions() });
+  if (!await okP) return;
+  const [ak, ai] = attSel.value.split(':'), [tk, ti] = tgtSel.value.split(':');
+  try {
+    const r = await api(`/api/maps/${MAP_ID}/attack`, 'POST', { attacker: { kind: ak, id: ai }, target: { kind: tk, id: ti }, weapon: weapon.value, mode: mode.disabled ? null : mode.value,
+      range: range.value, attackMod: +amod.value || 0, defenseMod: +dmod.value || 0, soakMod: +smod.value || 0, extraDv: +xdv.value || 0, amp: +amp.value || 0,
+      dice: dice.value === '' ? null : +dice.value, wild: wild.checked, hidden: hidden.checked, unopposed: unopp.checked, apply: apply.checked });
+    toast(r.result.summary, 6000);
+    renderRolls(r.rolls);
+    await reloadContext();
+  } catch (e) { toast(e.message, 5000); }
 }
 
 // ------------------------------------------------------------ legend
@@ -772,7 +1037,17 @@ function applyContext(c, full) {
   for (const np of c.players) { if (S.fogQueue && S.fogQueue.pid === np.id) continue; const lp = S.ctx.players.find(p => p.id === np.id); if (lp) Object.assign(lp, np); else S.ctx.players.push(np); }
   S.ctx.players = S.ctx.players.filter(p => c.players.some(np => np.id === p.id));
   if (full) S.map.data = c.map.data;
-  else if (!S.dirty) for (const k in c.map.data.cells) { const nc = c.map.data.cells[k], lc = cells()[k]; if (lc && lc.doors && nc.doors) for (const e in lc.doors) if (nc.doors[e]) { lc.doors[e].open = nc.doors[e].open; if (nc.doors[e].locked) lc.doors[e].locked = true; else delete lc.doors[e].locked; } }
+  else {
+    // live state changed elsewhere (players opening doors, combat damage, statuses) wins unless the editor changed it itself
+    for (const k in c.map.data.cells) { const nc = c.map.data.cells[k], lc = cells()[k]; if (lc && lc.doors && nc.doors) for (const e in lc.doors) if (nc.doors[e] && !S.rt.all && !S.rt.doors.has(`${k}:${e}`)) { lc.doors[e].open = nc.doors[e].open; if (nc.doors[e].locked) lc.doors[e].locked = true; else delete lc.doors[e].locked; } }
+    const byId = Object.fromEntries(c.map.data.markers.map(m => [m.id, m]));
+    for (const m of markers()) {
+      const sm = byId[m.id]; if (!sm || S.rt.all || S.rt.markers.has(m.id)) continue;
+      for (const k of ['cm', 'statuses', 'npc']) { if (k === 'npc' && S.mode === 'edit' && S.dirty) continue; if (sm[k]) m[k] = sm[k]; else delete m[k]; }
+      if (S.mode === 'play') { m.c = sm.c; m.r = sm.r; m.label = sm.label; if (sm.hidden) m.hidden = true; else delete m.hidden; }
+    }
+  }
+  S.tracker = c.tracker; renderCombat();
   renderPlayers(); renderSnapshots(); renderLinkMaps(); renderLegend(); invalidate();
   if (S.selected) renderInspector();
   const p = player();
@@ -803,7 +1078,8 @@ async function boot() {
   $('marker-color').value = colors().markerDefault;
   $('legend-toggle').checked = S.map.settings.legendVisible !== false;
   $('rooms-toggle').checked = S.map.settings.showRoomLabels !== false;
-  renderPaintSwatches(); renderDoorSwatches(); renderMarkerTypes(); renderLinkMaps(); renderRoomList(); renderSnapshots();
+  renderPaintSwatches(); renderDoorSwatches(); renderMarkerTypes(); renderLinkMaps(); renderRoomList(); renderSnapshots(); renderTemplateSelect();
+  S.tracker = c.tracker;
   $('link-id').value = newLinkId();
   if (c.rolls) renderRolls(c.rolls);
   const q = new URLSearchParams(location.search);

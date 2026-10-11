@@ -141,18 +141,23 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <li><a href="#players">For players</a></li>
       <li class="sub"><a href="#join">Join a game</a></li>
       <li class="sub"><a href="#build">Build your runner</a></li>
-      <li class="sub"><a href="#gear">Gear and the store</a></li>
+      <li class="sub"><a href="#skills">Skills and knowledge</a></li>
+      <li class="sub"><a href="#contacts">Contacts</a></li>
+      <li class="sub"><a href="#gear">Store, gear and ammo</a></li>
+      <li class="sub"><a href="#magic">Magic and resonance</a></li>
+      <li class="sub"><a href="#matrix">Matrix</a></li>
       <li class="sub"><a href="#map">On the map</a></li>
-      <li class="sub"><a href="#dice">Rolling dice</a></li>
-      <li class="sub"><a href="#runs">Runs</a></li>
+      <li class="sub"><a href="#dice">Dice, combat, healing</a></li>
+      <li class="sub"><a href="#runs">Runs and lifestyle</a></li>
       <li><a href="#gm">For the game master</a></li>
       <li class="sub"><a href="#start">Start a game</a></li>
       <li class="sub"><a href="#maps">Build maps</a></li>
       <li class="sub"><a href="#invite">Invite players</a></li>
       <li class="sub"><a href="#review">Approve sheets</a></li>
       <li class="sub"><a href="#play">Run the session</a></li>
+      <li class="sub"><a href="#combat">Combat</a></li>
       <li class="sub"><a href="#contracts">Give out runs</a></li>
-      <li class="sub"><a href="#rewards">Dice, rewards, Edge</a></li>
+      <li class="sub"><a href="#rewards">Money, Karma, Edge</a></li>
       <li><a href="#rules">Rules reference</a></li>
       <li><a href="#keys">Keyboard shortcuts</a></li>
     </ol>
@@ -163,15 +168,15 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
     <section id="how">
       <h2>How it works</h2>
       <p>There are two kinds of accounts. The <strong>game master</strong> runs the server and signs in as <code>admin</code>. <strong>Players</strong> join through an invite link, and their account only opens the game they were invited to.</p>
-      <p>A game holds its maps, its runners and the runs (contracts) the GM hands out. Everything updates live: when the GM opens a door, reveals a room or pays out a run, players see it within a second or two without reloading.</p>
-      <p>The rules follow Shadowrun 6th edition: dice pools with hits and glitches, the Wild Die, Edge Boosts, Physical and Stun condition monitors, and Karma for advancement.</p>
+      <p>A game holds its maps, its runners and the runs (contracts) the GM hands out. Everything updates live: when the GM opens a door, resolves an attack or pays out a run, players see it within a second or two without reloading.</p>
+      <p>The rules follow the <strong>Shadowrun Sixth World core rulebook</strong>: metatype limits and abilities, skills with specializations and expertise, every weapon, armor, implant, vehicle, spell, power, spirit and complex form from the book, dice pools with the Wild Die and Edge, Attack Rating against Defense Rating, ammo, drain and fading, healing, and NPCs by Professional Rating. The app does the arithmetic; the table keeps the judgment calls.</p>
     </section>
 
     <!-- ================================================================ PLAYERS -->
     <section id="players">
       <span class="who player">Players</span>
       <h2>For players</h2>
-      <p>The top bar has everything you need during a session. Use the tabs to switch between <span class="ui">Map</span>, <span class="ui">Character</span>, <span class="ui">Store</span>, <span class="ui">Runs</span> and <span class="ui">Wiki</span>. On the right you can always see your health, Edge, Karma and nuyen.</p>
+      <p>The top bar has everything you need during a session. Use the tabs to switch between <span class="ui">Map</span>, <span class="ui">Character</span>, <span class="ui">Store</span>, <span class="ui">Runs</span> and <span class="ui">Wiki</span>. On the right you always see your health, Edge, Karma and nuyen.</p>
 
       <h3 id="join">Join a game</h3>
       <div class="pair">
@@ -184,90 +189,147 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <p>You can change your password any time from the menu with your name in the top right corner.</p>
         </div>
         <figure>
-          <a class="shot narrow" href="img/player-invite.png"><img src="img/player-invite.png" width="492" height="598" alt="Invite page asking for a username and password to join the game Seattle 2081"></a>
+          <a class="shot narrow" href="img/player-invite.png"><img src="img/player-invite.png" width="492" height="598" alt="Invite page asking for a username and password to join the game Seattle 2081" loading="lazy"></a>
         </figure>
       </div>
 
       <h3 id="build">Build your runner</h3>
-      <p>A new character starts as a <strong>draft</strong>. While it's a draft you can change anything freely, and everything you buy is refunded in full if you remove it. When you're happy with it, click <span class="ui">Submit for approval</span>. Your GM reviews it and either approves it or sends it back with a note.</p>
+      <p>A new character starts as a <strong>draft</strong>. While it's a draft you edit freely, everything you buy is refunded in full if you return it, and the store sells anything up to Availability 6. When you're done, click <span class="ui">Submit for approval</span>. Your GM approves the sheet or sends it back with a note.</p>
       <figure>
-        <a class="shot" href="img/player-overview.png"><img src="img/player-overview.png" width="1907" height="875" alt="Character overview with name, metatype, role, lifestyle, portrait and quick stats"></a>
-        <figcaption>The Overview: identity, portrait, quick stats, Karma and nuyen, and a history of every change.</figcaption>
+        <a class="shot" href="img/player-overview.png"><img src="img/player-overview.png" width="1440" height="900" alt="Character overview with name, role, metatype, lifestyle, quick stats and Karma and nuyen" loading="lazy"></a>
+        <figcaption>The Overview: identity, lifestyle, quick stats (including your actions per round), Karma and nuyen, and the history of every change.</figcaption>
       </figure>
-      <p>The sheet is split into sections in the left column:</p>
       <ul>
-        <li><strong>Overview</strong>: name, metatype, role, magic type, tradition, lifestyle and portrait. It also shows your quick stats and a history of every Karma and nuyen change.</li>
-        <li><strong>Attributes</strong>: set the base ratings. Metatype minimums, your role and your cyberware are applied automatically, and the Modifiers column shows where each bonus comes from. <span class="ui">Auto roll attributes</span> rolls a fresh set.</li>
-        <li><strong>Skills</strong>: rank and specialization for each skill. The pool on the right is what you'll roll: linked attribute + rank, +2 for a matching specialization.</li>
-        <li><strong>Qualities</strong>: positive qualities cost Karma and negative ones give Karma. Their effects (like +1 Body for Toughness) are applied for you.</li>
-        <li><strong>Magic &amp; Resonance</strong>: spells, adept powers (with a Power Point counter) and foci (bonding costs Karma).</li>
-        <li><strong>Gear</strong>, <strong>Combat</strong>, <strong>Contacts</strong> and <strong>Background &amp; notes</strong>.</li>
+        <li><strong>Metatype</strong> sets your attribute maximums and gives its abilities for free: elves and orks see in low light, dwarfs and trolls see heat, dwarfs resist toxins, orks and trolls are Built Tough, trolls have dermal deposits.</li>
+        <li><strong>Magic / Resonance</strong>: Mundane, Magician, Aspected Magician, Adept, Mystic Adept or Technomancer. Magicians pick a tradition (Hermetic drains with Logic, Shamanic with Charisma) and may follow a mentor spirit.</li>
+        <li><strong>Role</strong> is just a label, such as Street Samurai or Decker. It gives no bonuses in Sixth World.</li>
       </ul>
       <div class="pair">
         <figure>
-          <a class="shot" href="img/player-attributes.png"><img src="img/player-attributes.png" width="1451" height="811" alt="Attributes table with base values and role modifiers"></a>
-          <figcaption>Attributes. The Street Samurai role adds +1 Body and +1 Agility.</figcaption>
+          <a class="shot" href="img/player-attributes.png"><img src="img/player-attributes.png" width="1440" height="858" alt="Attributes table with base value, metatype maximum, augmentation bonus, rating and Raise buttons with Karma costs" loading="lazy"></a>
+          <figcaption>Attributes show your metatype's maximum. Augmentations add up to +4, and Essence drops with every implant.</figcaption>
         </figure>
         <figure>
-          <a class="shot" href="img/player-skills.png"><img src="img/player-skills.png" width="1445" height="760" alt="Skills table with ranks, specialization dropdown and dice pools"></a>
-          <figcaption>Skills, with a specialization being chosen for Firearms.</figcaption>
-        </figure>
-        <figure>
-          <a class="shot" href="img/player-qualities.png"><img src="img/player-qualities.png" width="1452" height="802" alt="Qualities picker showing current qualities and positive qualities with Karma costs"></a>
-          <figcaption>Qualities show their effect and their Karma cost.</figcaption>
-        </figure>
-        <figure>
-          <a class="shot" href="img/player-contacts.png"><img src="img/player-contacts.png" width="1454" height="432" alt="Contacts table with one gang contact"></a>
-          <figcaption>Contacts: click a row to edit it.</figcaption>
+          <a class="shot" href="img/player-qualities.png"><img src="img/player-qualities.png" width="1440" height="812" alt="Qualities with the elf's racial Low-Light Vision and chosen qualities" loading="lazy"></a>
+          <figcaption>Qualities. Racial abilities are listed first; leveled qualities have − and + buttons.</figcaption>
         </figure>
       </div>
+      <p>Derived values are calculated for you: Composure, Judge Intentions, Memory, Lift/Carry, movement, Initiative (plus Matrix and astral initiative), condition monitors, wound modifiers and Defense Rating.</p>
       <div class="note warn">
-        <p><strong>After approval</strong>, your sheet is locked to normal play. Attributes and skills go up by spending Karma (new rating × 5), a specialization costs 5 Karma and a new spell 5 Karma. Purchases are final. Metatype, role, magic type and qualities can only be changed by the GM.</p>
+        <p><strong>After approval</strong> you improve with Karma: an attribute or skill costs the new rating × 5, a specialization or expertise 5, a knowledge skill 3, a spell or complex form 5, and a positive quality twice its cost. Purchases are final. Metatype, magic type, tradition and aspect can only be changed by the GM.</p>
       </div>
 
-      <h3 id="gear">Gear and the store</h3>
-      <p>Everything from weapons to medkits is bought in the <span class="ui">Store</span> tab. Filter by category or search, and the price is taken from your nuyen. For something that isn't on the list, use <span class="ui">Custom item…</span>; custom items are marked so your GM can spot them.</p>
+      <h3 id="skills">Skills and knowledge</h3>
+      <p>Each skill shows its rank, a <strong>specialization</strong> (+2 dice when it applies) and an <strong>expertise</strong> (+3). Expertise grows out of a specialization once the skill is at rank 5: <span class="ui">Make expertise</span> turns your specialization into expertise and frees the slot for a new specialization. The pool on the right is what you roll. Some skills, like Astral or Cracking, can't be used untrained.</p>
       <figure>
-        <a class="shot" href="img/player-store.png"><img src="img/player-store.png" width="1887" height="792" alt="Store showing medkits with ratings, prices and Buy buttons"></a>
-        <figcaption>The store. Items you can't afford show "Not enough ¥".</figcaption>
+        <a class="shot" href="img/player-skills.png"><img src="img/player-skills.png" width="1440" height="900" alt="Skills table with ranks, specialization dropdowns, an expertise in Pistols and dice pools" loading="lazy"></a>
+        <figcaption>Firearms 6 with expertise in Pistols (+3) and a new specialization in Rifles (+2).</figcaption>
       </figure>
-      <p>Your items appear in the <strong>Gear</strong> section of your sheet. Weapons and armor can be <strong>equipped</strong> or stored. Only equipped armor counts toward your Armor rating, and only equipped weapons appear in the dice roller. Medkits have a <span class="ui">Use</span> button.</p>
+      <p>Below the skills, add <strong>knowledge skills</strong> (no ranks: they let you use Perception or Memory on the subject) and <strong>languages</strong> at Basic, Specialist (+2), Expert (+3) or Native. One native language is free at creation.</p>
       <figure>
-        <a class="shot" href="img/player-gear.png"><img src="img/player-gear.png" width="1452" height="751" alt="Gear section with armor rating, essence, an equipped pistol and armor jacket"></a>
-        <figcaption>Gear. During character creation, <span class="ui">Return</span> refunds the full price.</figcaption>
+        <a class="shot" href="img/player-knowledge.png"><img src="img/player-knowledge.png" width="1440" height="900" alt="Knowledge skills and languages with add fields" loading="lazy"></a>
+      </figure>
+
+      <h3 id="contacts">Contacts</h3>
+      <p>Contacts are how you get gear. Each contact has a <strong>Connection</strong> and a <strong>Loyalty</strong> (1-12) and a list of what they can <strong>source</strong>: weapons, armor, cyberware, magic, vehicles, and so on. A fixer can find anything. A contact can get an item whose Availability is <em>lower</em> than their Connection.</p>
+      <figure>
+        <a class="shot" href="img/player-contacts.png"><img src="img/player-contacts.png" width="1440" height="421" alt="Contacts table with a fixer, an arms dealer and a street doc waiting for GM confirmation" loading="lazy"></a>
+        <figcaption>Contacts added or changed after approval wait for the GM to confirm them before they unlock anything.</figcaption>
+      </figure>
+
+      <h3 id="gear">Store, gear and ammo</h3>
+      <p>The <span class="ui">Store</span> tab has every item from the core book, by category: weapons, ammunition and explosives, accessories, armor, electronics, cyberdecks and software, IDs, tools, security gear, medical supplies, cyberware, bioware, magic items, vehicles and drones. Each card shows the game stats, the Availability (L means a license is needed, I means illegal) and the price. Rated items have a rating box, implants a grade (used, alphaware, betaware, deltaware), and ammo is sold in boxes of 10.</p>
+      <figure>
+        <a class="shot" href="img/player-store.png"><img src="img/player-store.png" width="1440" height="900" alt="Store with blades: stats, availability, quantity and Buy buttons" loading="lazy"></a>
+        <figcaption><span class="ui">Only what I can get</span> hides what your contacts can't find.</figcaption>
+      </figure>
+      <p>After approval, legal items up to Availability 2 are always on sale; everything else needs a contact. Untick the filter to see what a new contact would unlock: locked cards say exactly what kind of contact you'd need.</p>
+      <figure>
+        <a class="shot" href="img/player-store-locked.png"><img src="img/player-store-locked.png" width="1440" height="900" alt="Cyberware cards locked with the reason: needs a contact for Cyberware with a higher Connection" loading="lazy"></a>
+        <figcaption>Locked items name the contact they need. Trolls pay 10% more for everything, dwarfs for armor.</figcaption>
+      </figure>
+      <p>Your items appear in the <strong>Gear</strong> section of your sheet, grouped by category:</p>
+      <ul>
+        <li><strong>Equip</strong> weapons and armor. Your best body armor plus helmets, shields and implants add to your Defense Rating.</li>
+        <li><strong>Reload</strong> guns from your ammo stacks. The rounds loaded and the ammo type (APDS, explosive, gel and so on) are shown and change the weapon's Attack Rating and damage.</li>
+        <li>Rolling an attack spends the ammo by firing mode, and throwing a grenade or throwing knife uses it up.</li>
+        <li>Vehicles and drones have their stats and a damage monitor. Foci are bonded from here or from the Magic section.</li>
+        <li><strong>Sell</strong> gives you the game's buy-back percentage, again through a contact who could handle the item (implants included). During creation, <span class="ui">Return</span> refunds the full price instead.</li>
+      </ul>
+      <figure>
+        <a class="shot" href="img/player-gear.png"><img src="img/player-gear.png" width="1440" height="900" alt="Gear section with an equipped katana, a pistol with 13 of 15 rounds loaded and ammo stacks" loading="lazy"></a>
+        <figcaption>A pistol with 13/15 rounds loaded, two ammo stacks and grenades.</figcaption>
+      </figure>
+
+      <h3 id="magic">Magic and resonance</h3>
+      <p>Awakened characters get a <strong>Magic</strong> section: Magic and its maximum, spell Attack Rating, drain pool and astral initiative; spells and rituals from the book (with drain values); adept powers with levels and a Power Point counter; foci to bond; spirits; and initiation with metamagics.</p>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/player-magic.png"><img src="img/player-magic.png" width="1440" height="900" alt="Magic section of a shaman: Magic 6, spell AR 11, drain pool 10, spells with drain values and a bonded power focus" loading="lazy"></a>
+          <figcaption>A shaman's spells and a bonded power focus.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/player-spirits.png"><img src="img/player-spirits.png" width="1440" height="900" alt="A summoned Force 3 fire spirit with services, attributes, attacks and powers" loading="lazy"></a>
+          <figcaption>A summoned spirit with its stats for its Force.</figcaption>
+        </figure>
+      </div>
+      <ul>
+        <li><strong>Casting</strong> from the dice roller rolls drain right after, and applies it: Stun, or Physical when the Drain Value is higher than your Magic. Amp Up and bigger areas add to the drain.</li>
+        <li><strong>Summon</strong> rolls Conjuring + Magic against the spirit; net hits are services and the spirit's hits are your drain.</li>
+        <li><strong>Initiate</strong> costs 10 + the new grade in Karma, raises your Magic maximum and adds a metamagic.</li>
+        <li>Implants cost Essence, and every point of Essence lost lowers Magic by 1.</li>
+      </ul>
+      <p>Technomancers get a <strong>Resonance</strong> section instead: living persona, complex forms (threading rolls fading afterwards), sprites to compile and register, and submersion with echoes.</p>
+
+      <h3 id="matrix">Matrix</h3>
+      <p>The <strong>Matrix</strong> section picks your active device: a cyberdeck, a commlink or, for technomancers, the living persona. It shows Attack, Sleaze, Data Processing and Firewall, Matrix Attack and Defense Ratings, Matrix initiative for AR, cold-sim or hot-sim, the device's Matrix condition monitor and your running programs. A cyberdeck takes Data Processing and Firewall from your cyberjack. The Matrix itself is played on a map.</p>
+      <figure>
+        <a class="shot" href="img/player-matrix.png"><img src="img/player-matrix.png" width="1440" height="706" alt="Matrix section with an Erika deck, a cyberjack providing Data Processing and Firewall, Matrix damage boxes and two programs" loading="lazy"></a>
       </figure>
 
       <h3 id="map">On the map</h3>
-      <p>Once the GM places your token, the <span class="ui">Map</span> tab shows only what your runner has seen. The fog lifts as you explore, and closed doors block your sight.</p>
+      <p>Once the GM places your token, the <span class="ui">Map</span> tab shows only what your runner has seen. The fog lifts as you explore, and closed doors block your sight. Icons above tokens and enemies show their statuses, such as Prone or Burning.</p>
       <figure>
-        <a class="shot" href="img/player-map.png"><img src="img/player-map.png" width="1908" height="893" alt="Player map view in isometric mode with condition monitors and dice roller in the sidebar"></a>
-        <figcaption>A hex map in the isometric view. The sidebar has your condition, the dice roller and the table log.</figcaption>
+        <a class="shot" href="img/player-map.png"><img src="img/player-map.png" width="1440" height="900" alt="Player map in the isometric view with the initiative order, condition monitors and the dice roller with a pistol selected" loading="lazy"></a>
+        <figcaption>During combat the sidebar shows the initiative order when the GM shares it. Enemies the GM keeps hidden aren't listed.</figcaption>
       </figure>
       <ul>
         <li><strong>Move</strong>: drag your token, click any room you can reach (a dotted line shows the path), or use the arrow keys.</li>
-        <li><strong>Doors</strong>: the buttons in the sidebar open the doors next to you. You can also click a door on your own cell. Locked doors need the GM.</li>
-        <li><strong>Travel</strong>: standing on a stairway or portal shows a <span class="ui">Travel</span> button that takes you to the next map.</li>
+        <li><strong>Doors</strong>: the buttons in the sidebar open the doors next to you, or click a door on your own cell. Locked doors need the GM.</li>
+        <li><strong>Travel</strong>: standing on a stairway or portal shows a <span class="ui">Travel</span> button to the next map.</li>
         <li><strong>Ping</strong>: double-click a cell to flash it for the whole table.</li>
-        <li><strong>View</strong>: <span class="ui">Isometric view</span> in the sidebar switches between the tilted view and a flat top-down one.</li>
-        <li><strong>Damage</strong>: click the boxes of your Physical and Stun monitors to mark damage you take.</li>
+        <li><strong>View</strong>: <span class="ui">Isometric view</span> switches between the tilted view and a flat one.</li>
       </ul>
 
-      <h3 id="dice">Rolling dice</h3>
-      <p>The roller is in the map sidebar and in the <strong>Combat</strong> section of your sheet. Pick a pool from your sheet: a skill, a weapon, a spell, Defense, Damage resistance and so on. The roller shows how many dice that is and why. Your wound modifier is applied automatically.</p>
-      <ul>
-        <li><strong>Wild Die</strong>: on a 5 or 6 it counts as 3 hits; on a 1 your 5s don't count.</li>
-        <li><strong>Threshold</strong>: the hits you need. The result says SUCCESS or FAILURE, and shows net hits.</li>
-        <li><strong>Push</strong>: spend 4 Edge before rolling to add your Edge rating to the pool, with 6s exploding.</li>
-        <li><strong>Free roll</strong>: any number of dice, for anything that isn't on your sheet.</li>
-      </ul>
-      <p>Hits are green and 1s are red: <span class="die hit">6</span><span class="die">3</span><span class="die hit">5</span><span class="die one">1</span><span class="die wild hit">5</span>. After rolling you can spend Edge on <strong>one</strong> boost for that roll. Click dice to select them, then choose the boost. Every roll appears in the table log for everyone.</p>
-
-      <h3 id="runs">Runs</h3>
-      <p>The <span class="ui">Runs</span> tab lists the contracts the GM gave you, with their tasks and progress. Tasks marked <span style="color:var(--accent)">*</span> are mandatory. The GM ticks tasks as they happen, and when the run is closed your reward is added to your nuyen automatically.</p>
+      <h3 id="dice">Dice, combat and healing</h3>
+      <p>The roller is in the map sidebar and in the <strong>Combat</strong> section of your sheet. Pick a pool from your sheet: a skill (with specialization or expertise), a weapon, a spell, Defense, Damage resistance and more. Your wound modifier is applied automatically.</p>
       <figure>
-        <a class="shot" href="img/player-runs.png"><img src="img/player-runs.png" width="1458" height="387" alt="An active run with a progress bar, three tasks and a reward"></a>
+        <a class="shot" href="img/player-roller.png"><img src="img/player-roller.png" width="942" height="586" alt="Dice roller with a pistol in semi-automatic mode at Near range, AR 8, DV 4P and 1 of 15 rounds loaded, a 6-hit result and Edge Boost buttons, next to the table log" loading="lazy"></a>
+        <figcaption>Attacking with a pistol: pick the firing mode and range to see the Attack Rating and damage. The rounds are spent when you roll.</figcaption>
       </figure>
-      <p>The <span class="ui">Wiki</span> tab has rules summaries and every item, spell, power and focus in the game, with a search box.</p>
+      <ul>
+        <li><strong>Firing modes</strong>: single shot uses 1 round; semi-auto 2 (−2 AR, +1 DV); burst 4 (−4 AR, +2 DV); full auto 10 (−6 AR).</li>
+        <li><strong>Wild Die</strong>: on a 5 or 6 it counts as 3 hits; on a 1 your 5s don't count.</li>
+        <li><strong>Threshold</strong>: the hits you need. The result says SUCCESS or FAILURE and shows net hits.</li>
+        <li><strong>Push</strong>: spend 4 Edge before rolling to add your Edge rating, with 6s exploding. After rolling you can spend Edge on <strong>one</strong> boost: click dice to select them, then choose.</li>
+        <li><strong>Initiative</strong> lets you pick physical, Matrix or astral initiative, and shows your actions: 1 Major and 1 Minor, plus 1 Minor per Initiative Die (5 Minor at most). If the GM is running combat, your score goes straight into the order.</li>
+      </ul>
+      <figure>
+        <a class="shot" href="img/player-combat.png"><img src="img/player-combat.png" width="1440" height="900" alt="Combat section with condition monitors, the healing panel, Edge, combat values and statuses" loading="lazy"></a>
+        <figcaption>Condition monitors (Physical shows the overflow boxes), healing, Edge, combat values and the statuses the GM has set.</figcaption>
+      </figure>
+      <p><strong>Healing</strong> follows the book. First aid and medkits roll Biotech + Logic against 5 − the patient's Essence; a Heal spell rolls Sorcery + Magic. Each works once per set of injuries and never heals drain. You can treat yourself or an ally. Rest rolls Body + Willpower per hour for Stun and Body + Body per day for Physical, with +2 when someone trained in Biotech looks after you.</p>
+
+      <h3 id="runs">Runs and lifestyle</h3>
+      <p>The <span class="ui">Runs</span> tab lists the contracts the GM gave you, with their tasks and progress. Tasks marked <span style="color:var(--accent)">*</span> are mandatory. When the GM closes the run, your reward is added to your nuyen.</p>
+      <figure>
+        <a class="shot" href="img/player-runs.png"><img src="img/player-runs.png" width="1458" height="387" alt="An active run with a progress bar, three tasks and a reward" loading="lazy"></a>
+      </figure>
+      <p>Your <strong>lifestyle</strong> is charged by the GM at the start of each month (Street is free, Squatter 500¥, Low 2,000¥, Middle 5,000¥, High 10,000¥, Luxury 100,000¥). If you can't pay, your nuyen goes negative: you're in debt.</p>
+      <p>The <span class="ui">Wiki</span> tab has rules summaries, statuses, actions, and every item, spell, power, spirit, complex form, quality and NPC in the game, with a search box.</p>
+      <figure>
+        <a class="shot" href="img/wiki.png"><img src="img/wiki.png" width="1606" height="601" alt="Wiki with a search box and rules topics" loading="lazy"></a>
+      </figure>
     </section>
 
     <!-- ================================================================ GM -->
@@ -285,11 +347,11 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           </ol>
         </div>
         <figure>
-          <a class="shot narrow" href="img/gm-sign-in.png"><img src="img/gm-sign-in.png" width="445" height="432" alt="Sign-in form with username admin"></a>
+          <a class="shot narrow" href="img/gm-sign-in.png"><img src="img/gm-sign-in.png" width="445" height="432" alt="Sign-in form with username admin" loading="lazy"></a>
         </figure>
       </div>
       <figure>
-        <a class="shot" href="img/gm-home.png"><img src="img/gm-home.png" width="1258" height="382" alt="Empty home page inviting the GM to create the first game"></a>
+        <a class="shot" href="img/gm-home.png"><img src="img/gm-home.png" width="1258" height="382" alt="Empty home page inviting the GM to create the first game" loading="lazy"></a>
         <figcaption>The home page before the first game exists.</figcaption>
       </figure>
 
@@ -297,11 +359,11 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <p>On a game, use <span class="ui">New map</span> to draw one from scratch or <span class="ui">Generate map</span> for a procedural one. The generator offers rooms and corridors, winding passages and caves, on square or hex grids, with a live preview. The same seed always produces the same map.</p>
       <div class="pair">
         <figure>
-          <a class="shot" href="img/gm-generate-map.png"><img src="img/gm-generate-map.png" width="1142" height="785" alt="Map generator dialog with options and a preview"></a>
+          <a class="shot" href="img/gm-generate-map.png"><img src="img/gm-generate-map.png" width="1142" height="785" alt="Map generator dialog with options and a preview" loading="lazy"></a>
           <figcaption>The generator.</figcaption>
         </figure>
         <figure>
-          <a class="shot" href="img/gm-map-editor.png"><img src="img/gm-map-editor.png" width="1912" height="902" alt="Map editor in Edit mode with paint tools and a generated map"></a>
+          <a class="shot" href="img/gm-map-editor.png"><img src="img/gm-map-editor.png" width="1912" height="902" alt="Map editor in Edit mode with paint tools and a generated map" loading="lazy"></a>
           <figcaption>The editor in Edit mode.</figcaption>
         </figure>
       </div>
@@ -310,29 +372,39 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Paint</strong>, <strong>Rectangle</strong> and <strong>Erase</strong> draw rooms.</li>
         <li><strong>Secret</strong> hides cells from the map station; players only find them by walking in.</li>
         <li><strong>Door</strong> adds doors on cell edges.</li>
-        <li><strong>Marker</strong> places enemies, loot, NPCs, objectives and portals to other maps. Give an enemy a <strong>Body</strong> and <strong>Willpower</strong> and it gets real Physical and Stun condition monitors.</li>
+        <li><strong>Marker</strong> places enemies, loot, NPCs, objectives and portals to other maps. Pick an <strong>NPC template</strong> and new markers get that NPC's stats, weapons and condition monitor. For a quick enemy, a Body and Willpower are enough for a monitor.</li>
         <li><strong>Room</strong> names a group of cells.</li>
       </ul>
-      <p>Changes save automatically, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes them.</p>
+      <p>Changes save automatically, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes them. Autosave never undoes what happened live meanwhile: doors players opened and damage or statuses from combat are kept.</p>
 
       <h3 id="invite">Invite players</h3>
       <p><span class="ui">Invite player</span> creates a single-use link that is valid for 7 days. Send one link to each player. Unused links are listed on the game page under <strong>Invite links</strong>, where you can copy or revoke them.</p>
 
       <h3 id="review">Approve character sheets</h3>
-      <p>A sheet a player submits shows a <span style="color:var(--warn)">Waiting for approval</span> tag on the home page, the game page and in the map editor. Open it with <span class="ui">Review sheet</span>.</p>
+      <p>A submitted sheet shows a <span style="color:var(--warn)">Waiting for approval</span> tag on the home page, the game page and in the map editor. A runner with new or changed contacts shows how many are waiting for you to confirm.</p>
       <figure>
-        <a class="shot" href="img/gm-runners.png"><img src="img/gm-runners.png" width="1318" height="408" alt="Runners table with one sheet waiting for approval, condition bars, Edge, Karma and nuyen"></a>
-        <figcaption>The Runners tab: status, condition, Edge, Karma, nuyen and location for each runner.</figcaption>
+        <a class="shot" href="img/gm-runners.png"><img src="img/gm-runners.png" width="1440" height="576" alt="Runners table with a sheet waiting for approval, a contact to confirm, condition bars, Edge, Karma and nuyen, and the buttons to award, refresh Edge, charge lifestyle and set the store's buy-back rate" loading="lazy"></a>
+        <figcaption>The Runners tab. The buttons at the top award Karma and nuyen, refresh Edge, charge the monthly lifestyle and set how much the store pays for sold gear.</figcaption>
       </figure>
-      <figure>
-        <a class="shot" href="img/gm-review-sheet.png"><img src="img/gm-review-sheet.png" width="1317" height="495" alt="GM view of a submitted sheet with Approve sheet, Send back and Set Karma buttons"></a>
-        <figcaption>The GM view of a sheet: approve it, send it back with a note, or set values directly.</figcaption>
-      </figure>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/gm-review-sheet.png"><img src="img/gm-review-sheet.png" width="1440" height="1000" alt="GM view of a submitted sheet with Approve sheet, Send back and Set Karma buttons" loading="lazy"></a>
+          <figcaption>The GM view of a sheet: approve it, send it back with a note, or set values directly.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/gm-confirm-contact.png"><img src="img/gm-confirm-contact.png" width="1440" height="475" alt="Contacts on the GM view with a Confirm button for a contact waiting for approval" loading="lazy"></a>
+          <figcaption>Confirming a contact the player added after approval.</figcaption>
+        </figure>
+      </div>
       <ul>
-        <li><span class="ui">Approve sheet</span> locks the character into normal play and fills their Edge.</li>
+        <li><span class="ui">Approve sheet</span> locks the character into normal play, fills their Edge and confirms their contacts.</li>
         <li><span class="ui">Send back…</span> returns it to draft with a note the player sees.</li>
-        <li>As GM you can change anything on any sheet for free, at any time. <span class="ui">Set Karma / Nuyen / Edge…</span> sets exact values. <span class="ui">Give an item…</span> (in Gear) adds a store preset or a custom item without charging the player.</li>
+        <li>As GM you can change anything on any sheet for free. <span class="ui">Set Karma / Nuyen / Edge…</span> sets exact values, including initiation and submersion grades.</li>
+        <li><span class="ui">Give an item…</span> (in Gear) adds anything from the store, at any rating, grade and quantity, or a custom item. No nuyen and no contact needed.</li>
       </ul>
+      <figure>
+        <a class="shot" href="img/gm-give.png"><img src="img/gm-give.png" width="1440" height="1000" alt="Give an item dialog with the Cyberware category open and Wired Reflexes 2 selected, with a grade option" loading="lazy"></a>
+      </figure>
 
       <h3 id="play">Run the session</h3>
       <p>Switch the map editor to <strong>Play</strong> mode during the game. It opens in the isometric view; toggle it with <kbd>I</kbd>.</p>
@@ -341,27 +413,64 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Reveal</strong> and <strong>Hide</strong>: paint a runner's fog with a brush, or reveal a whole room. The same buttons exist under <em>Everyone</em> for the whole party.</li>
         <li><strong>Doors</strong>: click to open or close, and <kbd>Shift</kbd>+click to lock.</li>
         <li><strong>Token</strong>: place or move the selected runner's token.</li>
-        <li><strong>Markers</strong>: drag enemies around, then click one to mark damage on its condition monitor. Health bars show above every token and enemy, with KO, DYING and DEAD labels.</li>
+        <li><strong>Markers</strong> and <strong>Select</strong>: click an enemy to open its inspector: its NPC stat block, its condition monitor, its statuses and attack buttons.</li>
+        <li><strong>Statuses</strong>: under each runner in the sidebar and in a marker's inspector, add Prone, Burning, Zapped, Cover and the rest. Their icons appear on the map for everyone. Only you can set and clear them.</li>
         <li><strong>Snapshots</strong>: save and restore the whole game state (positions, exploration and doors).</li>
       </ul>
+      <figure>
+        <a class="shot" href="img/gm-npc-marker.png"><img src="img/gm-npc-marker.png" width="1440" height="1000" alt="Marker inspector of a Sons of Sauron Brute grunt with 9 of 10 boxes filled, a May flee warning, Burning and Prone statuses and attack buttons" loading="lazy"></a>
+        <figcaption>An NPC from the core-book templates. Grunts have a single monitor, take −1 die per 2 boxes and may flee once their damage exceeds their Professional Rating.</figcaption>
+      </figure>
+      <p><strong>NPC templates</strong> cover every grunt in the core book from Professional Rating 0 to 10, the critters, and spirits of any Force. <span class="ui">Apply NPC template…</span> in the inspector turns any marker into one.</p>
+
+      <h3 id="combat">Combat</h3>
+      <p>The <strong>Combat</strong> panel in Play mode runs the initiative tracker. <span class="ui">Start combat…</span> picks the runners and enemies on this map and rolls the NPCs' initiative. Players' own initiative rolls land in the order automatically.</p>
+      <figure>
+        <a class="shot" href="img/gm-combat.png"><img src="img/gm-combat.png" width="1440" height="1000" alt="Combat panel with round 1, four combatants with initiative scores and actions, Show to players ticked, and Next turn, Roll NPCs, New round, Add, Attack and End buttons" loading="lazy"></a>
+        <figcaption>The tracker: the current combatant is highlighted. Initiative isn't rerolled between rounds in Sixth World.</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Show to players</strong> shares the order on their map. Enemies you mark <span class="ui">Hide</span> stay off their list until you click <span class="ui">Reveal</span>.</li>
+        <li>Each entry shows its actions (1 Major plus its Minor actions). Click a name to make it their turn and find them on the map; type a score to override it.</li>
+        <li><span class="ui">Next turn</span>, <span class="ui">New round</span>, <span class="ui">Roll NPCs</span>, <span class="ui">+ Add</span> (including custom combatants) and <span class="ui">End</span>.</li>
+      </ul>
+      <p><strong>Attacks</strong> are resolved by you, with every roll made by the server. Open <span class="ui">⚔ Attack…</span> from the tracker, a runner or a marker:</p>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/gm-attack.png"><img src="img/gm-attack.png" width="1440" height="1000" alt="Attack dialog: attacker, target, weapon, firing mode, range 11 cells about 22 meters Near, AR 8 versus DR 4 with a note that the attacker may gain 1 Edge" loading="lazy"></a>
+          <figcaption>The range band is suggested from the distance on the map. AR against DR shows who may earn Edge (you decide).</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/gm-attack-result.png"><img src="img/gm-attack-result.png" width="1440" height="1000" alt="Result: Ana hits the Lieutenant with an Ares Predator VI, the damage on the marker's monitor and the Prone status added" loading="lazy"></a>
+          <figcaption>The damage lands on the monitor, with Prone, Zapped, Burning and similar statuses added.</figcaption>
+        </figure>
+      </div>
+      <ol class="steps">
+        <li>The attacker rolls their weapon pool (runners use their sheet, NPCs their template). The runner's ammo is spent.</li>
+        <li>The target defends with Reaction + Intuition (Willpower + Intuition against direct spells, Reaction + Willpower against indirect ones). Ties go to the attacker.</li>
+        <li>The Damage Value is the weapon's DV + net hits (+ firing mode and ammo); the target soaks with Body. Direct spells can't be soaked.</li>
+        <li>The rest goes to the right monitor, Stun overflowing into Physical. A combat spell also rolls the caster's drain.</li>
+      </ol>
+      <p>Under <em>Modifiers</em> you can add dice to any test, extra DV or Amp Up, override an NPC's pool, use the Wild Die, roll unopposed against weak grunts, keep the roll hidden, or roll without applying damage. The full breakdown goes to the table log.</p>
 
       <h3 id="contracts">Give out runs</h3>
       <p>On the <span class="ui">Runs</span> tab, <span class="ui">New run</span> asks for a name, a reward per runner, a description the players see, the tasks and the runners who take the job.</p>
       <figure>
-        <a class="shot" href="img/gm-new-run.png"><img src="img/gm-new-run.png" width="1141" height="692" alt="New run dialog with name, reward, description and three tasks"></a>
+        <a class="shot" href="img/gm-new-run.png"><img src="img/gm-new-run.png" width="1141" height="692" alt="New run dialog with name, reward, description and three tasks" loading="lazy"></a>
       </figure>
-      <p>Tick tasks as they happen. The payout scales with the share of tasks done, and every mandatory task must be ticked before the run can be completed. <span class="ui">Complete &amp; pay…</span> suggests the payout (you can change it) and pays it to <strong>each</strong> assigned runner. You can also abandon, reopen or delete a run.</p>
+      <p>Tick tasks as they happen. The payout scales with the share of tasks done, and every mandatory task must be ticked before the run can be completed. <span class="ui">Complete &amp; pay…</span> suggests the payout (you can change it) and pays it to <strong>each</strong> assigned runner.</p>
 
-      <h3 id="rewards">Dice, rewards and Edge</h3>
+      <h3 id="rewards">Money, Karma and Edge</h3>
       <figure>
-        <a class="shot" href="img/gm-dice-log.png"><img src="img/gm-dice-log.png" width="1905" height="450" alt="GM roller with a label, threshold and hidden roll option, next to the table log"></a>
+        <a class="shot" href="img/gm-dice-log.png"><img src="img/gm-dice-log.png" width="1905" height="450" alt="GM roller with a label, threshold and hidden roll option, next to the table log" loading="lazy"></a>
         <figcaption>The GM roller. The roll marked with a lock is hidden from players.</figcaption>
       </figure>
       <ul>
-        <li><strong>Dice &amp; log</strong>: roll a pool or initiative for NPCs. Tick <em>Hidden roll</em> to keep the result to yourself.</li>
-        <li><strong>Award Karma / Nuyen</strong>: give to one runner, several or everyone at once. Negative amounts take it away. Each award has a reason that the runner sees in their history.</li>
-        <li><strong>Edge</strong>: only the GM refreshes Edge. Use <strong>−</strong>, <strong>+</strong> and <strong>↻</strong> next to each runner, or <span class="ui">Refresh everyone's Edge</span>.</li>
-        <li><strong>History</strong>: every Karma and nuyen change in the game, from purchases to run rewards.</li>
+        <li><strong>Award Karma / Nuyen</strong>: give to one runner, several or everyone. Negative amounts take it away. Each award has a reason the runner sees in their history.</li>
+        <li><strong>Charge monthly lifestyle</strong>: each runner pays their lifestyle (SINner and a suprathyroid gland cost more). Nuyen can go negative.</li>
+        <li><strong>Store buys at …%</strong>: what players get when they sell gear.</li>
+        <li><strong>Edge</strong>: only you refresh or award Edge. Use <strong>−</strong>, <strong>+</strong> and <strong>↻</strong> next to each runner, or <span class="ui">Refresh everyone's Edge</span>. Edge from Attack Rating against Defense Rating is shown in the attack result but awarded by hand.</li>
+        <li><strong>History</strong>: every Karma and nuyen change in the game.</li>
       </ul>
     </section>
 
@@ -370,10 +479,9 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h2>Rules reference</h2>
       <h4>Dice</h4>
       <ul>
-        <li>A 5 or 6 is a hit.</li>
-        <li><strong>Glitch</strong>: more than half of the dice show 1. <strong>Critical glitch</strong>: a glitch with no hits.</li>
+        <li>A 5 or 6 is a hit. <strong>Glitch</strong>: more than half of the dice show 1. <strong>Critical glitch</strong>: a glitch with no hits.</li>
         <li><strong>Wild Die</strong>: on a 5 or 6 it counts as 3 hits; on a 1, none of the 5s in the roll count.</li>
-        <li>A skill you don't have rolls the attribute −1. A wound modifier of −1 die applies for every 3 boxes filled on each monitor.</li>
+        <li>An untrained skill rolls the attribute −1. Specialization +2, expertise +3.</li>
       </ul>
       <h4>Edge Boosts (one per roll)</h4>
       <table>
@@ -390,22 +498,38 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <tr><td class="cost">5</td><td>2s count as glitches on a target's test · special effect</td><td>Spend Edge…</td></tr>
         </tbody>
       </table>
-      <p>You can hold at most 7 Edge. The GM refreshes it, usually at the start of a session.</p>
+      <p>You can hold at most 7 Edge. The GM refreshes and awards it.</p>
+      <h4>Combat</h4>
+      <ul>
+        <li>Ranges: Close 0-3 m, Near 4-50 m, Medium 51-250 m, Far 251-500 m, Extreme 500+ m. No Attack Rating at a range means the weapon can't reach.</li>
+        <li>Defense Rating = Body + armor (best body armor, plus helmet, shield, implants and qualities).</li>
+        <li>Damage after soaking higher than Body knocks the target Prone. Electricity adds Zapped, fire Burning, cold Chilled, chemicals Corrosive.</li>
+        <li>Actions per round: 1 Major, 1 Minor + 1 per Initiative Die (max 5). 4 Minor make a Major.</li>
+      </ul>
       <h4>Condition monitors</h4>
       <ul>
-        <li><span style="color:var(--phys)">Physical</span>: 8 + Body ÷ 2. <span style="color:var(--stun)">Stun</span>: 8 + Willpower ÷ 2, rounded up.</li>
-        <li>A full Stun track knocks you unconscious, and further Stun overflows into Physical.</li>
-        <li>A full Physical track means dying. You then have overflow boxes equal to your Body; past those the character is dead.</li>
+        <li><span style="color:var(--phys)">Physical</span>: 8 + Body ÷ 2. <span style="color:var(--stun)">Stun</span>: 8 + Willpower ÷ 2, rounded up. −1 die per 3 boxes on each track.</li>
+        <li>A full Stun track knocks you out, and further Stun overflows into Physical.</li>
+        <li>A full Physical track means dying. Overflow boxes equal Body × 2; filling them is death.</li>
+      </ul>
+      <h4>Availability</h4>
+      <ul>
+        <li>Character creation: up to Availability 6.</li>
+        <li>After approval: legal items up to 2 are always available; otherwise you need a confirmed contact who covers the goods with a Connection higher than the Availability.</li>
+        <li>Implant grades: used (Essence ×1.1, price ×0.5, Availability −1), alphaware (×0.8, ×1.2, +1), betaware (×0.7, ×1.5, +2), deltaware (×0.5, ×2.5, +3).</li>
       </ul>
       <h4>Advancement after approval</h4>
       <table>
         <thead><tr><th>Karma</th><th>For</th></tr></thead>
         <tbody>
-          <tr><td class="cost">new × 5</td><td>Raise an attribute or a skill by one</td></tr>
-          <tr><td class="cost">5</td><td>A specialization</td></tr>
-          <tr><td class="cost">5</td><td>A new spell</td></tr>
+          <tr><td class="cost">new × 5</td><td>Raise an attribute or an active skill by one</td></tr>
+          <tr><td class="cost">5</td><td>A specialization, or turning it into expertise</td></tr>
+          <tr><td class="cost">3</td><td>A knowledge skill or a new language (+5 per language level)</td></tr>
+          <tr><td class="cost">5</td><td>A spell, ritual or complex form</td></tr>
+          <tr><td class="cost">2 × cost</td><td>A positive quality (or buying off a negative one)</td></tr>
+          <tr><td class="cost">10 + grade</td><td>Initiation or submersion</td></tr>
           <tr><td class="cost">Force × type</td><td>Bond a focus</td></tr>
-          <tr><td class="cost">1 → 2,000¥</td><td>Trade Karma for nuyen</td></tr>
+          <tr><td class="cost">1 → 2,000¥</td><td>Trade Karma for nuyen (5,000¥ with In Debt)</td></tr>
         </tbody>
       </table>
     </section>
@@ -447,7 +571,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
 
 <footer>
   <div class="inner">
-    <p>ShadowGrid combines the Shadowrun Manager character sheet and the GridMap fog-of-war maps. Setup and deployment notes are in the repository's README.</p>
+    <p>Setup and deployment notes are in the repository's README.</p>
     <p>Shadowrun is a trademark of Catalyst Game Labs and The Topps Company. This project is not affiliated with them. Fonts: Rajdhani, Barlow and Share Tech Mono, under the SIL Open Font License (see <code>fonts/</code>).</p>
   </div>
 </footer>

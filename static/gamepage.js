@@ -55,7 +55,9 @@ function renderPlayers() {
   root.append(h('div.section-head', h('h2', 'Runners'), h('div.row.tight',
     h('button.primary', { type: 'button', onclick: async () => { await SR.invite(CID, S.data.game.name); reload(); } }, 'Invite player'),
     h('button', { type: 'button', disabled: !ps.length, onclick: () => award(null) }, 'Award Karma / Nuyen…'),
-    h('button', { type: 'button', disabled: !ps.length, onclick: () => edge('all', 'refresh') }, 'Refresh everyone’s Edge'))));
+    h('button', { type: 'button', disabled: !ps.length, onclick: () => edge('all', 'refresh') }, 'Refresh everyone’s Edge'),
+    h('button', { type: 'button', disabled: !ps.length, onclick: chargeLifestyle, title: 'Start of a new month: every runner pays their lifestyle' }, 'Charge monthly lifestyle'),
+    h('button', { type: 'button', onclick: storeSettings, title: 'How much the store pays for gear players sell' }, `Store buys at ${(S.data.game.settings || {}).sellPct ?? 50}%`))));
   const waiting = ps.filter(p => p.status === 'waiting');
   if (waiting.length) root.append(h('div.banner.warn', h('p', h('b', `${waiting.length} sheet${waiting.length > 1 ? 's' : ''} waiting for your approval: `), waiting.map(p => p.name).join(', ')),
     h('a.btn.primary', { href: `/game/${CID}/sheet/${waiting[0].id}` }, 'Review')));
@@ -70,13 +72,13 @@ function renderPlayers() {
       tb.append(h('tr',
         h('td', h('div.player-name', h('span.dot', { style: { background: p.color } }), h('a', { href: `/game/${CID}/sheet/${p.id}` }, p.name)),
           h('div.hint', '@' + p.username, ' · ', [p.metatype, p.role].filter(Boolean).join(' '), ' · ', online ? h('span.good', 'online') : (p.lastSeen ? 'seen ' + timeAgo(p.lastSeen) : 'never signed in'))),
-        h('td', SR.statusTag(p.status)),
+        h('td', SR.statusTag(p.status), p.pendingContacts ? h('div', h('a.tag.waiting', { href: `/game/${CID}/sheet/${p.id}`, title: 'New or changed contacts to confirm' }, `${p.pendingContacts} contact${p.pendingContacts > 1 ? 's' : ''} to confirm`)) : null),
         h('td', h('div.row.tight', miniCM(p.cm), SR.healthTag(p.cm.status))),
         h('td.nowrap', h('div.row.tight', SR.pips(p.edge.cur, p.edge.max),
           h('button.small', { type: 'button', title: 'Take 1 Edge', disabled: !p.edge.cur, onclick: () => edge([p.id], 'lose') }, '−'),
           h('button.small', { type: 'button', title: 'Award 1 Edge (max 7)', disabled: p.edge.cur >= 7, onclick: () => edge([p.id], 'gain') }, '+'),
           h('button.small.ghost', { type: 'button', title: 'Refresh to Edge rating', onclick: () => edge([p.id], 'refresh') }, '↻'))),
-        h('td.right.num', p.karma), h('td.right.num.nowrap', money(p.nuyen)),
+        h('td.right.num', p.karma), h('td.right.num.nowrap', { class: p.nuyen < 0 ? 'bad' : '' }, money(p.nuyen)),
         h('td.hint', p.currentMapId ? h('a', { href: `/map/${p.currentMapId}?view=${p.id}` }, mapName(p.currentMapId) || 'map') : 'not placed'),
         h('td.right.nowrap',
           h('a.btn.small' + (p.status === 'waiting' ? '.primary' : ''), { href: `/game/${CID}/sheet/${p.id}` }, p.status === 'waiting' ? 'Review sheet' : 'Sheet'), ' ',
@@ -127,12 +129,26 @@ async function award(ids) {
   const sel = selector(ids);
   const karma = h('input', { type: 'number', value: 0 }), nuyen = h('input', { type: 'number', value: 0, step: 100 });
   const reason = h('input', { placeholder: 'e.g. Session 4, good roleplay', maxlength: 120 });
-  const ok = await UI.modal('Award Karma / Nuyen', h('div', h('p.hint', 'Use negative numbers to take Karma or Nuyen away (never below 0). It shows in each runner’s history.'),
+  const ok = await UI.modal('Award Karma / Nuyen', h('div', h('p.hint', 'Use negative numbers to take Karma or Nuyen away (never below 0, unless the runner is already in debt). It shows in each runner’s history.'),
     h('label.stack', 'Runners', sel), h('div.form-grid', h('label', 'Karma', karma), h('label', 'Nuyen', nuyen)), h('label.stack', 'Reason', reason)), { ok: 'Apply' });
   if (!ok) return;
   const who = sel.value();
   if (!who.length) { toast('Pick at least one runner.'); return; }
   try { const r = await api(`/api/games/${CID}/grant`, 'POST', { players: who.length === players().length ? 'all' : who, karma: +karma.value || 0, nuyen: +nuyen.value || 0, reason: reason.value }); toast(`Applied to ${r.count} runner${r.count > 1 ? 's' : ''}.`); reload(); }
+  catch (e) { toast(e.message); }
+}
+async function chargeLifestyle() {
+  const list = players().map(p => p.name).join(', ');
+  if (!await UI.confirm(`Charge one month of lifestyle to every runner (${list})? Runners who can't pay go into debt (negative nuyen).`, { ok: 'Charge' })) return;
+  try { const r = await api(`/api/games/${CID}/lifestyle`, 'POST', {}); toast(`Lifestyle charged to ${r.count} runner${r.count > 1 ? 's' : ''}. See the log for amounts.`); reload(); }
+  catch (e) { toast(e.message); }
+}
+async function storeSettings() {
+  const cur = (S.data.game.settings || {}).sellPct ?? 50;
+  const v = await UI.prompt('Store buy-back', 'Percentage of an item’s price the store pays when a runner sells it (0-100)', { type: 'number', value: cur, min: 0, ok: 'Save',
+    hint: 'Selling also needs a contact who could get that item.' });
+  if (v === null) return;
+  try { await api(`/api/games/${CID}/settings`, 'PUT', { sellPct: +v }); toast(`The store now pays ${Math.max(0, Math.min(100, +v))}%.`); reload(); }
   catch (e) { toast(e.message); }
 }
 async function edge(who, action) {

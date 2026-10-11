@@ -1,50 +1,55 @@
-"""Shadowrun 6E character model and every rule that changes a character.
+"""Shadowrun Sixth World character model and every rule that changes a character.
 
-A character is a plain dict (stored as JSON). ``derive()`` recomputes every
-derived number (ported from the original ``ShadowrunCharacter.recalculate``)
-and ``apply_action()`` is the single entry point for changes, so the server
-is the only place Karma and Nuyen ever move.
+A character is a plain dict stored as JSON (format version 2). ``derive()``
+recomputes every derived number and ``apply_action()`` is the single entry
+point for changes, so the server is the only place Karma, nuyen, ammo and
+damage ever move.
 
-Economy (agreed with the GM):
-- Until a sheet is approved the player may edit freely and every purchase is
-  refunded in full when removed.
-- After approval spending is final; attributes and skills only go up by
-  spending Karma (new rating x 5), specializations cost 5 Karma, new spells
-  cost 5 Karma, players can't take/remove qualities, and Karma/Nuyen only
-  change through in-app actions, run rewards and GM grants.
-- The GM (admin) can do anything, and never pays.
+Economy:
+- While a sheet is a draft the player edits freely; purchases are refunded in
+  full when removed. Store items are limited to Availability 6.
+- After GM approval: attributes and skills cost 5 x new rating, a
+  specialization or expertise 5, a knowledge skill 3, a spell or complex form
+  5, a positive quality 2 x its cost (removing a negative one 2 x its bonus),
+  initiation/submersion 10 + new grade. Store items need a contact whose
+  Connection beats the item's Availability (legal items up to 2 are always
+  available) and items sell back at the game's sell percentage.
+- The GM can do anything and never pays.
 """
 import copy
+import math
 import re
+import secrets
 
-from . import data as D
+from . import catalog as CAT
+from . import core6e as K
+from . import dice as DICE
+from . import gear6e as G
+from . import magic6e as M
 
+FORMAT = 2
 EDGE_CAP = 7
-ATTR_MIN, ATTR_MAX = 1, 10
-SKILL_MAX = 12
-KARMA_PER_RATING = 5
-KARMA_SPECIALIZATION = 5
-KARMA_SPELL = 5
-NUYEN_PER_KARMA = 2000
 MAX_LIST = 300
 PORTRAIT_MAX_CHARS = 450_000
-
-LOCKED_INFO = ("metatype", "role", "magic_type", "initiation_grade")
-FREE_INFO = ("name", "tradition", "mentor_spirit", "lifestyle", "age", "reputation", "background", "notes")
-
-
-# Metatype minimums (from the original recalculate()); Trolls also cap Logic at 5.
-METATYPE_MIN = {
-    "Dwarf": {"Body": 3, "Willpower": 3},
-    "Elf": {"Agility": 2, "Charisma": 3},
-    "Ork": {"Body": 3, "Strength": 3},
-    "Troll": {"Body": 5, "Strength": 5},
-}
-
-
-def effective_base(c, attr):
-    """Base rating counting metatype minimums (what raising an attribute starts from)."""
-    return max(_int(c["base_attributes"].get(attr)), METATYPE_MIN.get(c.get("metatype"), {}).get(attr, 0))
+ATTRS = K.BASE_ATTRS + ["Magic", "Resonance"]
+CORE_ATTRS = K.PHYSICAL + K.MENTAL
+MAGIC_TYPES = ["Mundane", "Magician", "Aspected Magician", "Adept", "Mystic Adept", "Technomancer"]
+AWAKENED = ("Magician", "Aspected Magician", "Adept", "Mystic Adept")
+CASTERS = ("Magician", "Aspected Magician", "Mystic Adept")
+ASPECTS = ["Sorcery", "Conjuring", "Enchanting"]
+LIFESTYLES = K.LIFESTYLES
+CONTACT_TYPES = ["Fixer", "Fence", "Arms Dealer", "Street Doc", "Talismonger", "Decker", "Mechanic", "Smuggler",
+                 "Mr. Johnson", "Corporate", "Police", "Gang", "Media", "Bartender", "Other"]
+SUPPLY = G.CONTACT_SUPPLY + ["Fixer"]
+LOCKED_INFO = ("metatype", "magic_type", "tradition", "aspect")
+ROLES = ["Adept", "Combat Mage", "Covert Ops Specialist", "Decker", "Face", "Rigger", "Street Samurai",
+         "Street Shaman", "Technomancer", "Weapons Specialist"]
+FREE_INFO = ("name", "role", "mentor_spirit", "lifestyle", "age", "reputation", "heat", "background", "notes")
+WOUND_STEP = 3
+MAX_INIT_DICE = 5
+MAX_MINOR = 5
+STATUS_NAMES = list(K.STATUSES)
+HEAL_METHODS = ("first_aid", "medkit", "magic", "natural_stun", "natural_physical")
 
 
 class RuleError(ValueError):
@@ -66,152 +71,287 @@ def _int(v, default=0):
         return default
 
 
-def _yes(v, default=False):
-    if v is None:
-        return default
-    return str(v).strip().lower() in ("yes", "true", "1")
-
-
 def _clip(s, n):
     return str(s if s is not None else "")[:n]
+
+
+def _half_up(n):
+    return (int(n) + 1) // 2
 
 
 def fmt_money(n):
     return f"{int(n):,}¥"
 
 
+def roll(n):
+    return DICE.new_roll(max(1, n)) if n > 0 else {"hits": 0, "dice": [], "pool": 0, "glitch": False, "critical": False}
+
+
+def hits_of(n):
+    return roll(n)["hits"] if n > 0 else 0
+
+
+# --------------------------------------------------------------------------- the character
 def new_character():
-    attrs = {a: 1 for a in D.ATTRIBUTES}
-    attrs["Magic"] = 0
-    attrs["Resonance"] = 0
-    attrs["Essence"] = 6.0
+    attrs = {a: 1 for a in K.BASE_ATTRS}
+    attrs.update({"Magic": 0, "Resonance": 0})
     return {
-        "name": "", "metatype": "Human", "role": "", "background": "", "notes": "",
-        "lifestyle": "Low", "karma": 50, "nuyen": 5000,
-        "magic_type": "Mundane", "tradition": "", "mentor_spirit": "", "initiation_grade": 0,
-        "age": 25, "reputation": 0, "portrait": None,
-        "base_attributes": attrs,
-        "skills": {s: 0 for s in D.SKILLS}, "specializations": {},
-        "qualities": [],
-        "gear": {c: [] for c in D.GEAR_CATEGORIES},
-        "contacts": [], "spells": [], "powers": [], "complex_forms": [], "foci": [],
-        "physical_damage": 0, "stun_damage": 0, "current_edge": 1,
+        "v": FORMAT, "name": "", "role": "", "metatype": "Human", "magic_type": "Mundane", "tradition": "", "aspect": "",
+        "mentor_spirit": "", "lifestyle": "Low", "age": 25, "reputation": 0, "heat": 0,
+        "background": "", "notes": "", "portrait": None, "karma": 50, "nuyen": 5000,
+        "attributes": attrs,
+        "skills": {s: 0 for s in K.SKILLS}, "specs": {}, "expertise": {},
+        "knowledge": [], "languages": [], "qualities": [], "inventory": [], "contacts": [],
+        "spells": [], "powers": [], "power_points_bought": 0, "complex_forms": [], "spirits": [], "sprites": [],
+        "initiation_grade": 0, "metamagics": [], "submersion_grade": 0, "echoes": [],
+        "matrix": {"mode": "AR", "device": ""},
+        "physical_damage": 0, "stun_damage": 0, "drain_stun": 0, "drain_phys": 0, "heal_used": {},
+        "current_edge": 1, "statuses": {}, "uid_seq": 0,
     }
 
 
+def _uid(c):
+    c["uid_seq"] = _int(c.get("uid_seq")) + 1
+    return f"i{c['uid_seq']}"
+
+
+_OLD_CAT = {"Weapons": "Ranged", "Armor": "Armor", "Cyberware": "Cyberware", "Bioware": "Bioware",
+            "Magic Items": "Magic", "Electronics": "Electronics", "Medkits": "Medical", "Other": "Survival"}
+
+
+def _migrate(c):
+    """Convert a format-1 sheet (the first ShadowGrid version) to format 2."""
+    n = new_character()
+    for k in ("name", "metatype", "magic_type", "tradition", "mentor_spirit", "lifestyle", "age", "reputation",
+              "background", "notes", "portrait", "karma", "nuyen", "physical_damage", "stun_damage",
+              "current_edge", "initiation_grade"):
+        if k in c:
+            n[k] = c[k]
+    if n["metatype"] not in K.METATYPES:
+        n["metatype"] = "Human"
+    if n["magic_type"] not in MAGIC_TYPES:
+        n["magic_type"] = "Mundane"
+    if n["tradition"] not in M.TRADITIONS:
+        n["tradition"] = ""
+    if n["lifestyle"] not in LIFESTYLES:
+        n["lifestyle"] = "Low"
+    for a in ATTRS:
+        n["attributes"][a] = _int((c.get("base_attributes") or {}).get(a), n["attributes"][a])
+    for s, r in (c.get("skills") or {}).items():
+        if s in K.SKILLS:
+            n["skills"][s] = max(0, min(K.SKILL_MAX, _int(r)))
+    for s, sp in (c.get("specializations") or {}).items():
+        if s in K.SKILLS and sp in K.SKILLS[s]["specs"]:
+            n["specs"][s] = sp
+    for q in c.get("qualities") or []:
+        if isinstance(q, str) and q in K.QUALITIES:
+            n["qualities"].append({"name": q, "level": 1, "choice": ""})
+    for ct in c.get("contacts") or []:
+        n["contacts"].append({"name": _clip(ct.get("name"), 80) or "Contact", "type": _clip(ct.get("type"), 40),
+                              "connection": max(1, min(12, _int(ct.get("connection"), 1))),
+                              "loyalty": max(1, min(12, _int(ct.get("loyalty"), 1))), "supply": [],
+                              "notes": _clip(ct.get("notes"), 4000), "verified": True})
+    names = {s["name"]: s for s in M.SPELLS}
+    for s in c.get("spells") or []:
+        nm = s.get("name")
+        n["spells"].append(_spell_entry(names[nm]) if nm in names else
+                           {"name": _clip(nm, 80) or "Spell", "category": "Combat", "drain": 3, "desc": _clip(s.get("description"), 300), "_custom": True})
+    pw = {p["name"]: p for p in M.ADEPT_POWERS}
+    for p in c.get("powers") or []:
+        if p.get("name") in pw:
+            n["powers"].append({"name": p["name"], "level": 1, "choice": ""})
+    for cat, items in (c.get("gear") or {}).items():
+        for it in items or []:
+            n["inventory"].append({"uid": _uid(n), "ref": None, "name": _clip(it.get("name"), 80) or "Item",
+                                   "cat": _OLD_CAT.get(cat, "Survival"), "sub": _clip(it.get("Type"), 40),
+                                   "desc": _clip(it.get("description"), 1000), "cost": _int(it.get("Price")),
+                                   "qty": 1, "_custom": True})
+    return n
+
+
 def normalize(c):
-    """Fill missing keys (forward compatible) and coerce types."""
+    """Fill missing keys (forward compatible), migrate old sheets, coerce types."""
+    if not isinstance(c, dict):
+        c = new_character()
+    if c.get("v") != FORMAT:
+        c = _migrate(c)
     base = new_character()
     for k, v in base.items():
         if k not in c:
             c[k] = copy.deepcopy(v)
-    for a in D.ATTRIBUTES:
-        c["base_attributes"].setdefault(a, base["base_attributes"][a])
-    for s in D.SKILLS:
+    for a in ATTRS:
+        c["attributes"].setdefault(a, base["attributes"][a])
+    for s in K.SKILLS:
         c["skills"].setdefault(s, 0)
-    for cat in D.GEAR_CATEGORIES:
-        c["gear"].setdefault(cat, [])
     c["karma"] = _int(c["karma"])
     c["nuyen"] = _int(c["nuyen"])
     return c
 
 
+# --------------------------------------------------------------------------- lookups
+SPELLS = {s["name"]: s for s in M.SPELLS}
+RITUALS = {r["name"]: r for r in M.RITUALS}
+POWERS = {p["name"]: p for p in M.ADEPT_POWERS}
+FORMS = {f["name"]: f for f in M.COMPLEX_FORMS}
+METAMAGICS = {m["name"]: m for m in M.METAMAGICS}
+ECHOES = {e["name"]: e for e in M.ECHOES}
+
+
+def _spell_entry(s):
+    return {k: s[k] for k in ("name", "category", "kind", "range", "type", "duration", "drain", "damage",
+                              "element", "area", "desc") if k in s}
+
+
+def qualities_of(c):
+    """Chosen qualities plus the metatype's racial ones (free, can't be removed)."""
+    meta = K.METATYPES.get(c.get("metatype")) or K.METATYPES["Human"]
+    out = [dict(q) for q in c.get("qualities") or [] if q.get("name") in K.QUALITIES]
+    for q in meta.get("qualities", []):
+        out.append({"name": q, "level": meta.get("quality_levels", {}).get(q, 1), "choice": "", "racial": True})
+    return out
+
+
+def _qeffect(qs, key, choice=None):
+    """Sum a quality effect; 'L' expressions scale with the level."""
+    total = 0
+    for q in qs:
+        eff = (K.QUALITIES[q["name"]].get("effects") or {}).get(key)
+        if eff is None:
+            continue
+        if choice is not None and q.get("choice") != choice:
+            continue
+        lvl = max(1, _int(q.get("level"), 1))
+        if isinstance(eff, str):
+            total += {"L": lvl, "-L": -lvl, "2*L": 2 * lvl}.get(eff, 0)
+        elif isinstance(eff, bool):
+            total += 1 if eff else 0
+        else:
+            total += eff
+    return total
+
+
+def _has_q(qs, name):
+    return any(q["name"] == name for q in qs)
+
+
+def natural_max(c, attr, qs=None):
+    qs = qs if qs is not None else qualities_of(c)
+    meta = K.METATYPES.get(c.get("metatype")) or K.METATYPES["Human"]
+    if attr == "Magic":
+        return 6 + _int(c.get("initiation_grade"))
+    if attr == "Resonance":
+        return 6 + _int(c.get("submersion_grade"))
+    mx = meta["max"].get(attr, K.DEFAULT_MAX)
+    mx += _qeffect(qs, "attr_max", attr)
+    return max(1, min(10, mx))
+
+
+def implants(c):
+    return [it for it in c["inventory"] if it.get("implant")]
+
+
+def items(c, *cats):
+    return [it for it in c["inventory"] if not cats or it.get("cat") in cats]
+
+
+def find_item(c, uid):
+    for it in c["inventory"]:
+        if it.get("uid") == uid:
+            return it
+    raise RuleError("That item is no longer in the inventory. Reload the page.")
+
+
+def power_level(c, name, choice=None):
+    return sum(max(1, _int(p.get("level"), 1)) for p in c.get("powers") or []
+               if p.get("name") == name and (choice is None or p.get("choice") == choice))
+
+
+def skill_attr(skill):
+    return K.SKILLS[skill]["attr"] if skill in K.SKILLS else "Agility"
+
+
 # --------------------------------------------------------------------------- derived stats
 def derive(c):
-    """Every derived value, from base attributes + metatype + role + qualities + gear.
-
-    Ported from the original single-pass ``recalculate()`` so gear bonuses
-    always stick (the original two-pass version silently dropped them).
-    """
-    attributes = dict(c["base_attributes"])
-    for a in D.ATTRIBUTES:
-        attributes.setdefault(a, 0)
-
-    for attr, lo in METATYPE_MIN.get(c.get("metatype"), {}).items():
-        attributes[attr] = max(lo, attributes[attr])
-    if c.get("metatype") == "Troll":
-        attributes["Logic"] = max(1, min(attributes["Logic"], 5))
-
-    bonuses = {a: [] for a in D.ATTRIBUTES}   # where each bonus came from, for the UI
+    """Every derived value of a character."""
+    qs = qualities_of(c)
+    base = c["attributes"]
+    mtype = c.get("magic_type")
+    A, bonuses, maxes = {}, {}, {}
+    for a in ATTRS:
+        mx = natural_max(c, a, qs)
+        lo = 0 if a in ("Magic", "Resonance") else 1
+        maxes[a] = mx
+        A[a] = max(lo, min(mx, _int(base.get(a), lo)))
+    if mtype not in AWAKENED:
+        A["Magic"] = 0
+    if mtype != "Technomancer":
+        A["Resonance"] = 0
 
     def bump(attr, amount, source):
-        attributes[attr] = attributes[attr] + amount
-        bonuses[attr].append([source, amount])
+        if amount:
+            bonuses.setdefault(attr, []).append([source, amount])
 
-    role = D.ROLES.get(c.get("role") or "")
-    if role:
-        for attr, bonus in role.items():
-            before = attributes[attr]
-            attributes[attr] = max(1, attributes[attr] + bonus)
-            bonuses[attr].append([f"Role: {c['role']}", attributes[attr] - before])
+    # Essence and its loss
+    mult = 2 if _has_q(qs, "Sensitive System") else 1
+    essence = 6.0 - sum(_num(it.get("essence")) * mult for it in implants(c))
+    essence = round(max(0.0, essence), 2)
+    loss = 0 if essence >= 6 else 6 - math.floor(essence + 1e-9)
+    for a in ("Magic", "Resonance"):
+        if A[a] and loss:
+            bump(a, -min(loss, A[a]), "Essence loss")
 
-    q_phys = q_stun = 0
-    for q in c["qualities"]:
-        for key, bonus in (D.QUALITY_EFFECTS.get(q) or {}).items():
-            if key == "karma":
-                continue
-            if key == "Physical Boxes":
-                q_phys += bonus
-            elif key == "Stun Boxes":
-                q_stun += bonus
-            elif key in attributes:
-                before = attributes[key]
-                attributes[key] = max(1, attributes[key] + bonus)
-                bonuses[key].append([q, attributes[key] - before])
+    # augmentations
+    init_dice = 1
+    for it in implants(c):
+        for a in CORE_ATTRS:
+            if it.get(a):
+                bump(a, _int(it[a]), it["name"])
+        init_dice += _int(it.get("init_dice"))
+    if mtype in ("Adept", "Mystic Adept"):
+        for p in c.get("powers") or []:
+            lvl = max(1, _int(p.get("level"), 1))
+            if p.get("name") == "Improved Physical Attribute" and p.get("choice") in K.PHYSICAL:
+                bump(p["choice"], lvl, "Improved Physical Attribute")
+            elif p.get("name") == "Improved Reflexes":
+                bump("Reaction", lvl, "Improved Reflexes")
+                init_dice += lvl
+    aug = {}
+    for a in ATTRS:
+        total = sum(b[1] for b in bonuses.get(a, []))
+        if a in CORE_ATTRS:
+            total = min(total, K.AUGMENTED_BONUS_MAX)
+        aug[a] = max(0, A[a] + total)
+    init_dice = max(1, min(MAX_INIT_DICE, init_dice))
 
-    essence_cost = sum(_num(i.get("Essence Cost")) for i in c["gear"]["Cyberware"] + c["gear"]["Bioware"])
-    attributes["Essence"] = round(max(0.0, _num(c["base_attributes"].get("Essence", 6.0), 6.0) - essence_cost), 2)
+    # armor and Defense Rating: best body armor + helmets/shields + implants + qualities + powers
+    worn = [it for it in items(c, "Armor") if it.get("equipped") and not it.get("mod")]
+    body_armor = max([_int(it.get("dr")) for it in worn if it.get("sub") != "Helmets & Shields"] or [0])
+    extra = sum(_int(it.get("dr")) for it in worn if it.get("sub") == "Helmets & Shields")
+    impl_dr = sum(_int(it.get("dr")) for it in implants(c) if not it.get("limb_mod"))
+    q_dr = _qeffect(qs, "dr")
+    p_dr = power_level(c, "Mystic Armor") if mtype in ("Adept", "Mystic Adept") else 0
+    armor = body_armor + extra + impl_dr + q_dr + p_dr
+    armor_parts = [p for p in (["Body armor", body_armor], ["Helmet/shield", extra], ["Implants", impl_dr],
+                               ["Qualities", q_dr], ["Mystic Armor", p_dr]) if p[1]]
 
-    init_dice_bonus = 0.0
-    for item in c["gear"]["Cyberware"] + c["gear"]["Bioware"] + c["powers"]:
-        for attr in D.ATTRIBUTES:
-            if attr == "Essence" or attr not in item:
-                continue
-            v = _num(item.get(attr), None)
-            if v is not None:
-                bump(attr, v, item.get("name", "?"))
-        if "Initiative Dice" in item:
-            init_dice_bonus += _num(item.get("Initiative Dice"))
-    for attr in D.ATTRIBUTES:
-        if attr != "Essence":
-            attributes[attr] = int(round(attributes[attr]))
-
-    armor = 0
-    for item in c["gear"]["Armor"]:
-        if _yes(item.get("Equipped"), True):
-            armor += _int(item.get("Rating"))
-    for p in c["powers"]:
-        if "Armor" in p:
-            armor += _int(p.get("Armor"))
-
-    accuracy = 0
-    for item in c["gear"]["Weapons"]:
-        if _yes(item.get("Equipped"), True):
-            accuracy = max(accuracy, _int(item.get("Accuracy")))
-
-    if c.get("magic_type") not in ("Mundane", "Technomancer"):
-        ess, magic = attributes["Essence"], attributes["Magic"]
-        for i in range(1, 7):
-            if ess < i:
-                magic = min(magic, 6 - i)
-        if magic != attributes["Magic"]:
-            bonuses["Magic"].append(["Essence loss", magic - attributes["Magic"]])
-        attributes["Magic"] = magic
-
-    for f in c["foci"]:
-        if _yes(f.get("Bonded")) and (f.get("Type") or f.get("type")) == "Power":
-            force = _int(f.get("Force", f.get("force")))
-            bump("Magic", force, f.get("name", "Power Focus"))
-
-    body, wil = attributes["Body"], attributes["Willpower"]
-    p_boxes = (body + 1) // 2 + 8 + q_phys
-    s_boxes = (wil + 1) // 2 + 8 + q_stun
-    overflow = max(1, body)
-
+    # condition monitors
+    limbs = sum(_int(it.get("phys_boxes")) for it in implants(c))
+    p_boxes = 8 + _half_up(aug["Body"]) + _qeffect(qs, "phys_boxes") + limbs
+    s_boxes = max(2, 8 + _half_up(aug["Willpower"]) + _qeffect(qs, "stun_boxes"))
+    overflow = 2 * aug["Body"] + _qeffect(qs, "overflow")
     pd = max(0, _int(c.get("physical_damage")))
     sd = max(0, _int(c.get("stun_damage")))
-    wound = -(min(pd, p_boxes) // 3 + min(sd, s_boxes) // 3)
-    if pd > p_boxes + overflow:
+    ignore = sum(_int(it.get("ignore_boxes")) for it in implants(c))
+    ignore += power_level(c, "Pain Resistance") if mtype in ("Adept", "Mystic Adept") else 0
+    wp = max(0, min(pd, p_boxes) - ignore) // WOUND_STEP
+    ws = max(0, min(sd, s_boxes) - ignore) // WOUND_STEP
+    wound = wp + ws
+    if wound and _has_q(qs, "High Pain Tolerance"):
+        wound = max(0, wound - 1)
+    if _has_q(qs, "Low Pain Tolerance"):
+        wound *= 2
+    wound = -wound
+    if pd >= p_boxes + overflow:
         status = "Dead"
     elif pd >= p_boxes:
         status = "Dying"
@@ -222,31 +362,125 @@ def derive(c):
     else:
         status = "OK"
 
-    pp_avail = attributes["Magic"] if c.get("magic_type") in ("Adept", "Mystic Adept") else 0
+    # magic
+    trad_attr = M.TRADITIONS.get(c.get("tradition") or "", "Logic")
+    pp_avail = 0.0
+    if mtype == "Adept":
+        pp_avail = float(aug["Magic"])
+    elif mtype == "Mystic Adept":
+        pp_avail = float(min(_int(c.get("power_points_bought")), aug["Magic"]))
+    pp_avail += sum(1 for m in c.get("metamagics") or [] if m == "Power Point")
     pp_used = 0.0
-    for p in c["powers"]:
-        pp_used += _num(p.get("Cost", p.get("cost", 1)) or 1, 1.0)
+    for p in c.get("powers") or []:
+        meta = POWERS.get(p.get("name")) or {}
+        cost = meta.get("cost", 1)
+        if p.get("name") == "Improved Ability" and p.get("choice") in ("Close Combat", "Firearms", "Exotic Weapons", "Athletics"):
+            cost = meta.get("combat_cost", cost)
+        pp_used += cost * (max(1, _int(p.get("level"), 1)) if meta.get("levels") else 1)
+    bonded = [it for it in c["inventory"] if it.get("focus") and it.get("bonded")]
+    power_focus = max([_int(it.get("force")) for it in bonded if it.get("focus") == "Power"] or [0])
 
-    gear_value = 0.0
-    for cat in D.GEAR_CATEGORIES:
-        for item in c["gear"][cat]:
-            gear_value += _num(item.get("Price"))
+    # matrix
+    mx = matrix_stats(c, aug)
 
+    # unarmed
+    unarmed_dv = _half_up(aug["Strength"])
+    phys_unarmed = bool(_qeffect(qs, "unarmed_physical")) or power_level(c, "Killing Hands") > 0
+    for it in implants(c):
+        if it.get("unarmed_dv"):
+            dvp = CAT.parse_dv(it["unarmed_dv"])
+            if dvp:
+                unarmed_dv = max(unarmed_dv, dvp[0])
+                phys_unarmed = True
+    unarmed_dv += _qeffect(qs, "unarmed_dv_bonus") + (power_level(c, "Critical Strike") if mtype in ("Adept", "Mystic Adept") else 0)
+    unarmed_ar = aug["Reaction"] + aug["Strength"] + max([_int(it.get("unarmed_ar")) for it in implants(c)] or [0])
+
+    lifestyle_mult = 1.0
+    for q in qs:
+        lifestyle_mult *= (K.QUALITIES[q["name"]].get("effects") or {}).get("lifestyle_mult", 1)
+    for it in implants(c):
+        if it.get("lifestyle_mult"):
+            lifestyle_mult *= _num(it["lifestyle_mult"], 1)
+
+    knowledge_free = aug["Logic"]
     return {
-        "attributes": attributes,
-        "bonuses": {a: b for a, b in bonuses.items() if b},
+        "attributes": aug, "base": A, "max": maxes, "bonuses": bonuses, "essence": essence,
+        "qualities": qs, "vision": sorted({(K.QUALITIES[q["name"]].get("effects") or {}).get("vision") for q in qs
+                                            if (K.QUALITIES[q["name"]].get("effects") or {}).get("vision")} |
+                                           {it["vision"] for it in implants(c) if it.get("vision")}),
         "physical_boxes": p_boxes, "stun_boxes": s_boxes, "overflow_boxes": overflow,
-        "physical_damage": pd, "stun_damage": sd,
-        "wound_modifier": wound, "status": status,
-        "initiative_score": attributes["Reaction"] + attributes["Intuition"],
-        "initiative_dice": 1 + int(init_dice_bonus),
-        "armor_rating": armor, "weapon_accuracy": accuracy,
-        "defense_rating": attributes["Body"] + armor,
-        "edge_max": attributes["Edge"], "current_edge": _int(c.get("current_edge")),
-        "power_points_available": pp_avail, "power_points_used": round(pp_used, 2),
-        "gear_value": int(gear_value),
-        "lifestyle_cost": D.LIFESTYLE_NUYEN.get(c.get("lifestyle"), 0),
+        "physical_damage": pd, "stun_damage": sd, "wound_modifier": wound, "status": status,
+        "initiative_score": aug["Reaction"] + aug["Intuition"], "initiative_dice": init_dice,
+        "major_actions": 1, "minor_actions": min(MAX_MINOR, 1 + init_dice),
+        "astral_initiative": {"score": aug["Logic"] + aug["Intuition"], "dice": 2} if mtype in AWAKENED else None,
+        "matrix": mx,
+        "armor": armor, "armor_parts": armor_parts, "defense_rating": aug["Body"] + armor,
+        "unarmed": {"dv": unarmed_dv, "type": "P" if phys_unarmed else "S", "ar": unarmed_ar},
+        "composure": aug["Willpower"] + aug["Charisma"], "judge_intentions": aug["Willpower"] + aug["Intuition"],
+        "memory": aug["Logic"] + aug["Intuition"], "lift_carry": aug["Body"] + aug["Willpower"],
+        "lift_kg": aug["Strength"] ** 2 * 10, "overhead_kg": aug["Strength"] ** 2 * 5,
+        "movement": {"walk": 10, "sprint": 15, "per_hit": 1},
+        "edge_max": min(EDGE_CAP, aug["Edge"]), "current_edge": _int(c.get("current_edge")),
+        "tradition_attr": trad_attr, "spell_ar": aug["Magic"] + aug.get(trad_attr, 0),
+        "drain_pool": aug["Willpower"] + (aug.get(trad_attr, 0) if mtype in CASTERS else aug["Body"]),
+        "power_focus": power_focus,
+        "fading_pool": aug["Willpower"] + aug["Logic"],
+        "form_ar": c["skills"].get("Electronics", 0) + aug["Resonance"],
+        "power_points_available": round(pp_avail, 2), "power_points_used": round(pp_used, 2),
+        "knowledge_free": knowledge_free, "knowledge_used": len(c.get("knowledge") or []) + len(c.get("languages") or []),
+        "spirit_force_limit": aug["Magic"] * 3, "sprite_limit": aug["Resonance"],
+        "gear_value": int(sum(_int(it.get("cost")) * (1 if it.get("unit") else max(1, _int(it.get("qty"), 1)))
+                              for it in c["inventory"])),
+        "lifestyle_cost": lifestyle_cost(c, lifestyle_mult), "lifestyle_mult": round(lifestyle_mult, 3),
+        "vehicles": [{"uid": it["uid"], "boxes": 8 + _half_up(_int(it.get("body"))), "damage": _int(it.get("damage"))}
+                     for it in items(c, "Vehicles", "Drones") if not it.get("mod")],
+        "statuses": c.get("statuses") or {},
     }
+
+
+def lifestyle_cost(c, mult=1.0):
+    return int(round(LIFESTYLES.get(c.get("lifestyle"), 0) * mult))
+
+
+def matrix_stats(c, aug):
+    """Matrix attributes of the active device (cyberdeck, commlink or living persona)."""
+    m = c.get("matrix") or {}
+    mode = m.get("mode") if m.get("mode") in M.MATRIX_INIT else "AR"
+    jacks = [it for it in implants(c) if it.get("data_processing")]
+    links = [it for it in c["inventory"] if it.get("sub") == "Commlinks" or it.get("ref", "") == "cyberware-commlink-headware"]
+    decks = [it for it in c["inventory"] if it.get("sub") == "Cyberdecks"]
+    dev = None
+    if m.get("device") == "persona" and c.get("magic_type") == "Technomancer":
+        dev = "persona"
+    else:
+        dev = next((it for it in decks + links if it.get("uid") == m.get("device")), None) or (decks[0] if decks else (links[0] if links else None))
+    out = {"mode": mode, "device": None, "attack": 0, "sleaze": 0, "data_processing": 0, "firewall": 0,
+           "device_rating": 0, "slots": 0, "programs": [], "boxes": 0, "damage": 0}
+    if dev == "persona":
+        out.update({"device": "persona", "name": "Living persona", "attack": aug["Charisma"], "sleaze": aug["Intuition"],
+                    "data_processing": aug["Logic"], "firewall": aug["Willpower"], "device_rating": aug["Resonance"],
+                    "slots": 0, "damage": _int(m.get("persona_damage"))})
+    elif dev:
+        jack = max(jacks, key=lambda it: _int(it.get("data_processing")), default=None)
+        link_best = max(links, key=lambda it: _int(it.get("data_processing")), default=None)
+        dp_src = jack or link_best
+        out.update({"device": dev["uid"], "name": dev["name"],
+                    "attack": _int(dev.get("attack")), "sleaze": _int(dev.get("sleaze")),
+                    "data_processing": _int((dp_src or dev).get("data_processing")),
+                    "firewall": _int((dp_src or dev).get("firewall")),
+                    "device_rating": _int(dev.get("device_rating")),
+                    "slots": _int(dev.get("program_slots")), "damage": _int(dev.get("matrix_damage"))})
+    else:
+        return out
+    out["boxes"] = 8 + _half_up(out["device_rating"])
+    out["ar"] = out["attack"] + out["sleaze"]
+    out["dr"] = out["data_processing"] + out["firewall"]
+    attr, dice = M.MATRIX_INIT[mode]
+    out["init_score"] = aug["Intuition"] + (aug["Reaction"] if attr == "Reaction" else out["data_processing"])
+    out["init_dice"] = dice
+    out["programs"] = [{"uid": it["uid"], "name": it.get("choice") or it["name"], "running": bool(it.get("running"))}
+                       for it in c["inventory"] if it.get("sub") == "Software" and it.get("ref", "").startswith("cyberdecks-software-cyberprogram")]
+    return out
 
 
 def condition_summary(c, d=None):
@@ -256,146 +490,238 @@ def condition_summary(c, d=None):
 
 
 # --------------------------------------------------------------------------- dice pools
+def _skill_parts(c, d, skill, attr=None, focus=None, extra_attr=None):
+    """Skill + attribute (+2 specialization / +3 expertise when ``focus`` matches)."""
+    A = d["attributes"]
+    attr = attr or skill_attr(skill)
+    rank = c["skills"].get(skill, 0)
+    parts = [[attr, A.get(attr, 0)]]
+    if rank > 0:
+        parts.append([skill, rank])
+        if focus and c["expertise"].get(skill) == focus:
+            parts.append([f"Expertise ({focus})", K.EXPERTISE_BONUS])
+        elif focus and c["specs"].get(skill) == focus:
+            parts.append([f"Specialization ({focus})", K.SPEC_BONUS])
+    elif K.SKILLS.get(skill, {}).get("untrained", True):
+        parts.append([f"{skill} (untrained)", -1])
+    else:
+        return None
+    for p in c.get("powers") or []:
+        if p.get("name") == "Improved Ability" and p.get("choice") == skill and c.get("magic_type") in ("Adept", "Mystic Adept"):
+            parts.append(["Improved Ability", min(max(1, _int(p.get("level"), 1)), math.ceil(rank * 1.5))])
+    return parts
+
+
+def _pool(key, group, label, parts, **meta):
+    o = {"key": key, "group": group, "label": label, "parts": parts, "value": max(0, sum(p[1] for p in parts))}
+    o.update(meta)
+    return o
+
+
+def weapon_items(c):
+    """Items that can be used to attack (weapons, implant weapons, throwables)."""
+    out = []
+    for it in c["inventory"]:
+        if it.get("cat") in ("Melee", "Ranged") and it.get("equipped", True) and it.get("dv"):
+            out.append(it)
+        elif it.get("implant") and isinstance(it.get("weapon"), dict):
+            out.append(it)
+        elif it.get("cat") == "Ammo & Explosives" and it.get("dv_gz") and it.get("sub") == "Grenades":
+            out.append(it)
+    return out
+
+
+def weapon_profile(c, d, it, mode=None, rng=None, ammo_type=None):
+    """Attack pool, Attack Rating, DV and ammo use of one weapon."""
+    w = it.get("weapon") if isinstance(it.get("weapon"), dict) else it
+    skill = w.get("skill") or "Close Combat"
+    focus = w.get("spec")
+    parts = _skill_parts(c, d, skill, focus=focus)
+    if parts is None:
+        return None
+    grenade = bool(it.get("dv_gz"))
+    if grenade:
+        dv_text = it.get("dv_gz")
+        ar = CAT.parse_ar(it.get("ar") or "8/8/4/—/—")
+    else:
+        dv_text = w.get("dv")
+        ar = CAT.parse_ar(w.get("ar"))
+    dvp = CAT.parse_dv(dv_text)
+    dv, dtype, flag = dvp if dvp else (0, "P", "")
+    modes = CAT.modes_list(it.get("modes"))
+    if mode == "":            # stats without a firing mode applied (the roller adds the chosen mode)
+        mode = None
+    else:
+        mode = mode if mode in modes else (modes[0] if modes else None)
+    loaded = it.get("loaded") or {}
+    atype = loaded.get("type") or "Regular"
+    ammo = G.AMMO_TYPES.get(atype) or G.AMMO_TYPES["Regular"]
+    ar_mod = 0
+    dv_mod = 0
+    notes = []
+    if mode:
+        fm = G.FIRING_MODES[mode]
+        ar_mod += fm["ar"]
+        dv_mod += fm["dv"]
+    if it.get("clip"):
+        ar_mod += ammo["ar"]
+        dv_mod += ammo["dv"]
+        if ammo.get("stun"):
+            dtype = "S"
+        if ammo.get("elec"):
+            flag = "e"
+        if atype != "Regular":
+            notes.append(f"{atype} ammo")
+    if power_level(c, "Enhanced Accuracy") and c.get("magic_type") in ("Adept", "Mystic Adept"):
+        ar_mod += 2
+        notes.append("Enhanced Accuracy +2 AR")
+    if it.get("cat") == "Melee" or (it.get("implant") and it.get("weapon")):
+        crit = power_level(c, "Critical Strike") if c.get("magic_type") in ("Adept", "Mystic Adept") else 0
+        if crit:
+            dv_mod += crit
+            notes.append(f"Critical Strike +{crit} DV")
+    ars = [None if a is None else max(0, a + ar_mod) for a in ar]
+    elem = {"e": "Electricity", "f": "", "c": "Cold"}.get(flag, "")
+    return {"skill": skill, "parts": parts, "ar": ars, "ar_at": (ars[G.RANGES.index(rng)] if rng in G.RANGES else ars[0]),
+            "dv": dv + dv_mod, "type": dtype, "element": elem, "mode": mode, "modes": modes,
+            "rounds": G.FIRING_MODES[mode]["rounds"] if mode and it.get("clip") else 0,
+            "loaded": loaded.get("rounds") if it.get("clip") else None, "clip": it.get("clip"),
+            "consumable": bool(it.get("consumable") or grenade), "blast": it.get("blast"),
+            "grenade": [it.get("dv_gz"), it.get("dv_close"), it.get("dv_near")] if grenade else None,
+            "notes": notes}
+
+
+def unarmed_profile(c, d):
+    parts = _skill_parts(c, d, "Close Combat", focus="Unarmed Combat")
+    u = d["unarmed"]
+    return {"skill": "Close Combat", "parts": parts, "ar": [u["ar"], None, None, None, None], "ar_at": u["ar"],
+            "dv": u["dv"], "type": u["type"], "element": "", "mode": None, "modes": [], "rounds": 0,
+            "loaded": None, "clip": None, "consumable": False, "notes": []}
+
+
+def spell_profile(c, d, sp, amp=0):
+    """Casting pool, Attack Rating, base DV and drain of a spell."""
+    parts = _skill_parts(c, d, "Sorcery", attr="Magic", focus="Spellcasting")
+    if parts is None:
+        return None
+    if d["power_focus"]:
+        parts.append(["Power focus", d["power_focus"]])
+    combat = sp.get("category") == "Combat"
+    amp = max(0, _int(amp)) if combat else 0
+    base_dv = 0
+    if combat and sp.get("kind") == "Indirect":
+        base_dv = _half_up(d["attributes"]["Magic"]) + amp
+    elif combat:
+        base_dv = amp
+    elem = sp.get("element") or ""
+    return {"skill": "Sorcery", "parts": parts, "ar_at": d["spell_ar"], "ar": [d["spell_ar"]] * 5,
+            "dv": base_dv, "type": sp.get("damage") or "P", "element": elem, "direct": sp.get("kind") == "Direct",
+            "mana": sp.get("type") == "M", "drain": _int(sp.get("drain")) + amp * M.AMP_UP_DRAIN, "combat": combat}
+
+
 def pools(c, d=None):
     """Every pool a player can pick in the dice roller, computed from the sheet."""
     d = d or derive(c)
     A = d["attributes"]
     out = []
-
-    def add(key, group, label, parts):
-        out.append({"key": key, "group": group, "label": label, "parts": parts,
-                    "value": max(0, sum(p[1] for p in parts))})
-
-    def skill_parts(skill, attr=None, spec=False):
-        attr = attr or D.SKILL_ATTRIBUTE.get(skill, "Agility")
-        rank = c["skills"].get(skill, 0)
-        parts = [[attr, A.get(attr, 0)]]
-        if rank > 0:
-            parts.append([skill, rank])
-            if spec:
-                parts.append([f"Specialization ({c['specializations'].get(skill)})", 2])
-        else:
-            parts.append([f"{skill} (untrained)", -1])
-        return parts
-
-    for skill in D.SKILLS:
-        add(f"skill:{skill}", "Skills", skill, skill_parts(skill))
-        spec = c["specializations"].get(skill)
-        if spec and c["skills"].get(skill, 0) > 0:
-            add(f"spec:{skill}", "Skills", f"{skill} [{spec}]", skill_parts(skill, spec=True))
-
-    for i, w in enumerate(c["gear"]["Weapons"]):
-        if not _yes(w.get("Equipped"), True):
+    for skill in K.SKILLS:
+        parts = _skill_parts(c, d, skill)
+        if parts is not None:
+            out.append(_pool(f"skill:{skill}", "Skills", skill, parts))
+        for focus, kind in ((c["specs"].get(skill), "spec"), (c["expertise"].get(skill), "exp")):
+            if focus and c["skills"].get(skill, 0) > 0:
+                out.append(_pool(f"{kind}:{skill}:{focus}", "Skills", f"{skill} ({focus})", _skill_parts(c, d, skill, focus=focus)))
+    for it in weapon_items(c):
+        prof = weapon_profile(c, d, it, "")
+        if prof:
+            out.append(_pool(f"weapon:{it['uid']}", "Weapons", it["name"], prof["parts"], weapon=True, modes=prof["modes"],
+                             ar=prof["ar"], dv=f"{prof['dv']}{prof['type']}", loaded=prof["loaded"], clip=prof["clip"],
+                             consumable=prof["consumable"], qty=_int(it.get("qty"), 1), element=prof["element"]))
+    up = unarmed_profile(c, d)
+    out.append(_pool("weapon:unarmed", "Weapons", "Unarmed strike", up["parts"], weapon=True, modes=[], ar=up["ar"],
+                     dv=f"{up['dv']}{up['type']}"))
+    if c.get("magic_type") in CASTERS:
+        for i, sp in enumerate(c.get("spells") or []):
+            prof = spell_profile(c, d, sp)
+            if prof:
+                out.append(_pool(f"spell:{i}", "Magic", f"Cast {sp['name']}", prof["parts"], spell=True,
+                                 drain=prof["drain"], combat=prof["combat"]))
+        out.append(_pool("drain", "Magic", "Drain resistance", [["Willpower", A["Willpower"]], [d["tradition_attr"], A[d["tradition_attr"]]]]))
+    if c.get("magic_type") in ("Magician", "Mystic Adept") or (c.get("magic_type") == "Aspected Magician" and c.get("aspect") == "Conjuring"):
+        parts = _skill_parts(c, d, "Conjuring", attr="Magic", focus="Summoning")
+        if parts:
+            out.append(_pool("summon", "Magic", "Summon spirit", parts))
+        parts = _skill_parts(c, d, "Conjuring", attr="Magic", focus="Banishing")
+        if parts:
+            out.append(_pool("banish", "Magic", "Banish spirit", parts))
+    if c.get("magic_type") in AWAKENED:
+        out.append(_pool("astral_defense", "Magic", "Astral defense", [["Intuition", A["Intuition"]], ["Logic", A["Logic"]]]))
+    if c.get("magic_type") == "Technomancer":
+        for i, f in enumerate(c.get("complex_forms") or []):
+            sk = "Cracking" if f.get("name") == "Resonance Spike" else "Electronics"
+            parts = _skill_parts(c, d, sk, attr="Resonance")
+            if parts:
+                meta = FORMS.get(f.get("name")) or {}
+                out.append(_pool(f"form:{i}", "Resonance", f"Thread {f['name']}", parts, form=True, fade=meta.get("fade", 0)))
+        out.append(_pool("fading", "Resonance", "Fading resistance", [["Willpower", A["Willpower"]], ["Logic", A["Logic"]]]))
+        parts = _skill_parts(c, d, "Tasking", attr="Resonance", focus="Compiling")
+        if parts:
+            out.append(_pool("compile", "Resonance", "Compile sprite", parts))
+    mx = d["matrix"]
+    if mx.get("device"):
+        out.append(_pool("matrix_defense", "Matrix", "Matrix defense", [["Intuition", A["Intuition"]], ["Firewall", mx["firewall"]]]))
+    defense = [["Reaction", A["Reaction"]], ["Intuition", A["Intuition"]]]
+    cs = power_level(c, "Combat Sense") if c.get("magic_type") in ("Adept", "Mystic Adept") else 0
+    if cs:
+        defense.append(["Combat Sense", cs])
+    out.append(_pool("defense", "Combat", "Defense test", defense))
+    soak = [["Body", A["Body"]]] + [[it["name"], _int(it.get("soak"))] for it in implants(c) if _int(it.get("soak"))]
+    out.append(_pool("soak", "Combat", "Damage resistance", soak))
+    out.append(_pool("toxin", "Combat", "Toxin resistance", [["Body", A["Body"]], ["Willpower", A["Willpower"]]]))
+    out.append(_pool("first_aid", "Healing", "First aid / medkit", _skill_parts(c, d, "Biotech", focus="First Aid") or [["Logic", A["Logic"]], ["Biotech (untrained)", -1]]))
+    out.append(_pool("composure", "Attribute tests", "Composure", [["Willpower", A["Willpower"]], ["Charisma", A["Charisma"]]]))
+    out.append(_pool("judge", "Attribute tests", "Judge intentions", [["Willpower", A["Willpower"]], ["Intuition", A["Intuition"]]]))
+    mem = [["Logic", A["Logic"]], ["Intuition", A["Intuition"]]]
+    for it in implants(c):
+        if _int(it.get("memory_bonus")):
+            mem.append([it["name"], _int(it["memory_bonus"])])
+    out.append(_pool("memory", "Attribute tests", "Memory", mem))
+    out.append(_pool("lift", "Attribute tests", "Lift / carry", [["Body", A["Body"]], ["Willpower", A["Willpower"]]]))
+    out.append(_pool("surprise", "Attribute tests", "Surprise", [["Reaction", A["Reaction"]], ["Intuition", A["Intuition"]]]))
+    for a in ATTRS:
+        if a in ("Magic", "Resonance") and not A[a]:
             continue
-        skill = D.WEAPON_SKILL.get(w.get("Type"), "Firearms")
-        spec = c["specializations"].get(skill) == w.get("Type")
-        add(f"weapon:{i}", "Weapons", f"{w.get('name', 'Weapon')} ({skill})", skill_parts(skill, spec=spec))
-
-    if c.get("magic_type") not in ("Mundane", "Technomancer"):
-        for i, s in enumerate(c["spells"]):
-            stype = s.get("Type") or s.get("type") or ""
-            spec = c["specializations"].get("Sorcery") == f"{stype} Spells"
-            add(f"spell:{i}", "Spells", f"Cast {s.get('name', 'spell')}", skill_parts("Sorcery", spec=spec))
-        trad_attr = D.TRADITION_DRAIN.get(c.get("tradition") or "", "Willpower")
-        add("drain", "Magic", "Drain resistance", [["Willpower", A["Willpower"]], [trad_attr, A.get(trad_attr, 0)]])
-
-    add("defense", "Combat", "Defense test", [["Reaction", A["Reaction"]], ["Intuition", A["Intuition"]]])
-    add("soak", "Combat", "Damage resistance", [["Body", A["Body"]]])
-    add("composure", "Attribute tests", "Composure", [["Willpower", A["Willpower"]], ["Charisma", A["Charisma"]]])
-    add("judge", "Attribute tests", "Judge intentions", [["Willpower", A["Willpower"]], ["Intuition", A["Intuition"]]])
-    add("memory", "Attribute tests", "Memory", [["Logic", A["Logic"]], ["Intuition", A["Intuition"]]])
-    add("lift", "Attribute tests", "Lift / carry", [["Body", A["Body"]], ["Willpower", A["Willpower"]]])
-    for a in D.ATTRIBUTES:
-        if a in ("Essence",):
-            continue
-        add(f"attr:{a}", "Single attribute", a, [[a, A.get(a, 0)]])
+        out.append(_pool(f"attr:{a}", "Single attribute", a, [[a, A.get(a, 0)]]))
     return out
 
 
-def pool_by_key(c, key):
-    for p in pools(c):
+def pool_by_key(c, key, d=None):
+    for p in pools(c, d):
         if p["key"] == key:
             return p
     raise RuleError("That dice pool no longer exists on your sheet.")
 
 
-# --------------------------------------------------------------------------- item cleaning
-SAFE_KEY = re.compile(r"^[A-Za-z0-9 _()./+-]{1,40}$")
-
-
-def clean_item(raw, kind):
-    """Shape a gear/spell/power/focus dict coming from the browser."""
-    if not isinstance(raw, dict):
-        raise RuleError("Bad item.")
-    name = _clip(raw.get("name"), 80).strip()
-    if not name:
-        raise RuleError("A name is required.")
-    item = {"name": name, "description": _clip(raw.get("description"), 1000).strip()}
-    for k, v in list(raw.items())[:40]:
-        if k in ("name", "description") or not isinstance(k, str) or k.startswith("_"):
-            continue
-        if not SAFE_KEY.match(k):
-            continue
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            item[k] = v
-        elif v is not None and str(v).strip() != "":
-            item[k] = _clip(v, 200).strip()
-    if kind in D.EQUIPPABLE_CATEGORIES:
-        item["Equipped"] = "Yes" if _yes(raw.get("Equipped"), True) else "No"
-    if kind == "Focus":
-        item["Bonded"] = "Yes" if _yes(raw.get("Bonded")) else "No"
-    if "Price" in item:
-        p = _num(item["Price"], -1)
-        if p < 0:
-            raise RuleError("Price must be a number of nuyen.")
-        item["Price"] = int(p)
-    return item
-
-
-def predefined(kind, index):
-    src = {"Spell": D.PREDEFINED_SPELLS, "Power": D.PREDEFINED_POWERS, "Focus": D.PREDEFINED_FOCI}.get(kind) \
-        or D.PREDEFINED_GEAR.get(kind)
-    if src is None:
-        raise RuleError("Unknown category.")
-    i = _int(index, -1)
-    if not 0 <= i < len(src):
-        raise RuleError("Unknown item.")
-    raw = dict(src[i])
-    # predefined spells/powers/foci use lowercase keys; the editor uses capitalized ones
-    for lower, cap in (("type", "Type"), ("drain", "Drain"), ("force", "Force"), ("activation", "Activation"),
-                       ("effect", "Effect"), ("cost", "Cost")):
-        if lower in raw and cap not in raw:
-            raw[cap] = raw.pop(lower)
-    return raw
-
-
-def focus_bond_cost(f):
-    ftype = f.get("Type", f.get("type", ""))
-    return _int(f.get("Force", f.get("force"))) * D.FOCUS_BOND_MULTIPLIER.get(ftype, 1)
-
-
-# --------------------------------------------------------------------------- actions
+# --------------------------------------------------------------------------- context, money, karma
 class Ctx:
-    def __init__(self, approved, admin):
+    def __init__(self, approved, admin, sell_pct=50):
         self.approved = approved      # sheet approved by the GM
         self.admin = admin            # GM is the one acting
+        self.sell_pct = sell_pct      # % of the price the store pays for sold items
         self.ledger = []              # [(kind, delta, reason)]
-        self.log = []                 # table-log notes (shown in the roll log)
+        self.log = []                 # table-log notes
+        self.rolls = []               # extra roll records [(kind, data)] for the table log
 
     @property
     def locked(self):
         return self.approved and not self.admin
 
-    @property
-    def refunds(self):
-        return not self.approved
 
-
-def spend(c, ctx, kind, amount, reason):
+def spend(c, ctx, kind, amount, reason, allow_negative=False):
     """Charge karma/nuyen (players only; the GM never pays)."""
     if amount == 0 or ctx.admin:
         return
-    if amount > 0 and c[kind] < amount:
+    if amount > 0 and c[kind] < amount and not allow_negative:
         unit = "Karma" if kind == "karma" else "nuyen"
         have = c[kind] if kind == "karma" else fmt_money(c[kind])
         need = amount if kind == "karma" else fmt_money(amount)
@@ -409,6 +735,11 @@ def gain(c, ctx, kind, amount, reason):
         return
     c[kind] += amount
     ctx.ledger.append((kind, amount, reason))
+
+
+def karma_cost(ctx, amount):
+    """Advancement costs Karma only once the sheet is approved."""
+    return amount if ctx.approved and not ctx.admin else 0
 
 
 def _need_unlocked(ctx, what):
@@ -425,20 +756,26 @@ def _list_index(lst, idx):
 
 def apply_action(c, action, p, ctx):
     """Mutate character ``c`` according to ``action``; returns a short message."""
-    normalize(c)
     fn = ACTIONS.get(action)
     if not fn:
         raise RuleError("Unknown action.")
-    edge_max_before = derive(c)["edge_max"]
+    if action in ADMIN_ONLY and not ctx.admin:
+        raise RuleError("Only the GM can do that.")
+    edge_before = derive(c)["edge_max"]
     msg = fn(c, p or {}, ctx)
-    d = derive(c)
-    # keep damage inside what the monitors can hold
-    c["stun_damage"] = min(max(0, c["stun_damage"]), d["stun_boxes"])
-    c["physical_damage"] = min(max(0, c["physical_damage"]), d["physical_boxes"] + d["overflow_boxes"] + 1)
-    if not ctx.approved and d["edge_max"] != edge_max_before:
-        c["current_edge"] = d["edge_max"]           # during creation Edge follows the Edge attribute
-    c["current_edge"] = max(0, min(EDGE_CAP, c["current_edge"]))
+    clamp_state(c, ctx, edge_before)
     return msg or "Saved."
+
+
+def clamp_state(c, ctx=None, edge_before=None):
+    d = derive(c)
+    c["stun_damage"] = min(max(0, _int(c["stun_damage"])), d["stun_boxes"])
+    c["physical_damage"] = min(max(0, _int(c["physical_damage"])), d["physical_boxes"] + d["overflow_boxes"])
+    c["drain_stun"] = min(max(0, _int(c.get("drain_stun"))), c["stun_damage"])
+    c["drain_phys"] = min(max(0, _int(c.get("drain_phys"))), c["physical_damage"])
+    if ctx is not None and not ctx.approved and edge_before is not None and d["edge_max"] != edge_before:
+        c["current_edge"] = d["edge_max"]           # during creation Edge follows the Edge attribute
+    c["current_edge"] = max(0, min(EDGE_CAP, _int(c["current_edge"])))
 
 
 # ---- info
@@ -446,26 +783,38 @@ def a_set_info(c, p, ctx):
     for k in FREE_INFO + LOCKED_INFO:
         if k not in p:
             continue
-        if k in LOCKED_INFO and ctx.locked and p[k] != c.get(k):
-            raise RuleError(f"Your sheet is approved; ask the GM to change {k.replace('_', ' ')}.")
         v = p[k]
-        if k == "metatype" and v not in D.METATYPES:
+        if k in LOCKED_INFO and ctx.locked and v != c.get(k):
+            raise RuleError(f"Your sheet is approved; ask the GM to change {k.replace('_', ' ')}.")
+        if k == "metatype" and v not in K.METATYPES:
             raise RuleError("Unknown metatype.")
-        if k == "role" and v not in ("", *D.ROLES):
-            raise RuleError("Unknown role.")
-        if k == "magic_type" and v not in D.MAGIC_TYPES:
+        if k == "magic_type" and v not in MAGIC_TYPES:
             raise RuleError("Unknown magic type.")
-        if k == "tradition" and v not in ("", *D.TRADITIONS):
+        if k == "tradition" and v not in ("", *M.TRADITIONS):
             raise RuleError("Unknown tradition.")
-        if k == "lifestyle" and v not in D.LIFESTYLES:
+        if k == "aspect" and v not in ("", *ASPECTS):
+            raise RuleError("Unknown aspect.")
+        if k == "mentor_spirit" and v not in ("", *M.MENTOR_SPIRITS):
+            raise RuleError("Unknown mentor spirit.")
+        if k == "role" and v not in ("", *ROLES):
+            raise RuleError("Unknown role.")
+        if k == "lifestyle" and v not in LIFESTYLES:
             raise RuleError("Unknown lifestyle.")
-        if k in ("age", "reputation", "initiation_grade"):
-            v = max(0, min(999 if k == "age" else 99, _int(v)))
+        if k in ("age", "reputation", "heat"):
+            v = max(-99 if k == "reputation" else 0, min(999 if k == "age" else 99, _int(v)))
         elif k in ("background", "notes"):
             v = _clip(v, 20000)
         else:
             v = _clip(v, 80)
         c[k] = v
+    if c["magic_type"] not in AWAKENED:
+        c["attributes"]["Magic"] = 0
+    elif c["attributes"]["Magic"] < 1:
+        c["attributes"]["Magic"] = 1
+    if c["magic_type"] != "Technomancer":
+        c["attributes"]["Resonance"] = 0
+    elif c["attributes"]["Resonance"] < 1:
+        c["attributes"]["Resonance"] = 1
     return "Saved."
 
 
@@ -482,269 +831,649 @@ def a_set_portrait(c, p, ctx):
     return "Portrait updated."
 
 
-def a_pay_lifestyle(c, p, ctx):
-    cost = D.LIFESTYLE_NUYEN.get(c["lifestyle"], 0)
-    spend(c, ctx, "nuyen", cost, f"{c['lifestyle']} lifestyle, 1 month")
-    return f"Paid {fmt_money(cost)} for a month of {c['lifestyle']} lifestyle."
-
-
 def a_trade_karma(c, p, ctx):
     n = _int(p.get("amount"))
     if n <= 0:
         raise RuleError("Enter how much Karma to trade.")
     if c["karma"] < n:
         raise RuleError(f"You only have {c['karma']} Karma.")
+    rate = K.KARMA["nuyen_per_karma_in_debt"] if _has_q(qualities_of(c), "In Debt") else K.KARMA["nuyen_per_karma"]
     c["karma"] -= n
     ctx.ledger.append(("karma", -n, "Traded for nuyen"))
-    gain(c, ctx, "nuyen", n * NUYEN_PER_KARMA, f"Traded {n} Karma")
-    return f"Traded {n} Karma for {fmt_money(n * NUYEN_PER_KARMA)}."
+    gain(c, ctx, "nuyen", n * rate, f"Traded {n} Karma")
+    return f"Traded {n} Karma for {fmt_money(n * rate)}."
 
 
 # ---- attributes
+def _attr_ok(c, attr):
+    if attr not in ATTRS:
+        raise RuleError("Unknown attribute.")
+    if attr == "Magic" and c.get("magic_type") not in AWAKENED:
+        raise RuleError("Only Awakened characters have Magic.")
+    if attr == "Resonance" and c.get("magic_type") != "Technomancer":
+        raise RuleError("Only technomancers have Resonance.")
+
+
 def a_set_attribute(c, p, ctx):
     _need_unlocked(ctx, "base attributes")
     attr = p.get("attr")
-    if attr not in D.ATTRIBUTES or attr == "Essence":
-        raise RuleError("Unknown attribute.")
-    lo = 0 if attr in ("Magic", "Resonance") else ATTR_MIN
-    c["base_attributes"][attr] = max(lo, min(ATTR_MAX, _int(p.get("value"), lo)))
+    _attr_ok(c, attr)
+    lo = 1
+    c["attributes"][attr] = max(lo, min(natural_max(c, attr), _int(p.get("value"), lo)))
     return "Saved."
 
 
 def a_raise_attribute(c, p, ctx):
     attr = p.get("attr")
-    if attr not in D.ATTRIBUTES or attr == "Essence":
-        raise RuleError("Unknown attribute.")
-    cur = effective_base(c, attr)
-    if c.get("metatype") == "Troll" and attr == "Logic" and cur >= 5:
-        raise RuleError("Trolls can't raise Logic above 5.")
-    if cur >= ATTR_MAX:
-        raise RuleError(f"{attr} is already at the maximum ({ATTR_MAX}).")
-    cost = (cur + 1) * KARMA_PER_RATING
-    spend(c, ctx, "karma", cost, f"{attr} {cur} → {cur + 1}")
-    c["base_attributes"][attr] = cur + 1
-    return f"{attr} raised to {cur + 1}" + ("" if ctx.admin else f" for {cost} Karma.")
+    _attr_ok(c, attr)
+    cur = max(1, _int(c["attributes"].get(attr)))
+    mx = natural_max(c, attr)
+    if cur >= mx:
+        raise RuleError(f"{attr} is already at its maximum ({mx}) for a {c['metatype']}.")
+    cost = (cur + 1) * K.KARMA["attribute"]
+    spend(c, ctx, "karma", karma_cost(ctx, cost), f"{attr} {cur} → {cur + 1}")
+    c["attributes"][attr] = cur + 1
+    return f"{attr} raised to {cur + 1}" + (f" for {cost} Karma." if karma_cost(ctx, cost) else ".")
 
 
 def a_autoroll(c, p, ctx):
     _need_unlocked(ctx, "base attributes")
-    import secrets
     r = secrets.SystemRandom()
-    for attr in D.ATTRIBUTES:
-        if attr in ("Essence", "Magic", "Resonance"):
-            continue
-        c["base_attributes"][attr] = r.randint(1, 6)
-    return "Attributes rolled (metatype minimums apply automatically)."
+    for attr in K.BASE_ATTRS:
+        c["attributes"][attr] = r.randint(1, natural_max(c, attr))
+    return "Attributes rolled within your metatype's limits."
 
 
 # ---- skills
+def skill_max(c, skill, ctx):
+    aptitude = any(q["name"] == "Aptitude" and q.get("choice") == skill for q in qualities_of(c))
+    if not ctx.approved:
+        return K.SKILL_MAX_CREATION + (1 if aptitude else 0)
+    return K.SKILL_MAX + (1 if aptitude else 0)
+
+
 def a_set_skill(c, p, ctx):
     skill = p.get("skill")
-    if skill not in D.SKILLS:
+    if skill not in K.SKILLS:
         raise RuleError("Unknown skill.")
+    if any(q["name"] == "Incompetent" and q.get("choice") == skill for q in qualities_of(c)):
+        raise RuleError(f"You are Incompetent in {skill}.")
     cur = c["skills"].get(skill, 0)
-    rank = max(0, min(SKILL_MAX, _int(p.get("rank"), cur))) if "rank" in p else cur
-    spec = p.get("spec", c["specializations"].get(skill) or "")
-    spec = spec if spec in (D.SKILL_SPECIALIZATIONS.get(skill) or []) else ""
-    cur_spec = c["specializations"].get(skill) or ""
+    rank = max(0, min(skill_max(c, skill, ctx) if not ctx.admin else 12, _int(p.get("rank"), cur)))
     if ctx.locked:
         if rank < cur:
             raise RuleError("Approved sheets can't lower skills.")
-        cost = sum(r * KARMA_PER_RATING for r in range(cur + 1, rank + 1))
-        if spec and spec != cur_spec:
-            if rank == 0:
-                raise RuleError("Learn the skill before choosing a specialization.")
-            cost += KARMA_SPECIALIZATION
+        cost = sum(r * K.KARMA["skill"] for r in range(cur + 1, rank + 1))
         if cost:
-            spend(c, ctx, "karma", cost, f"{skill}" + (f" {cur} → {rank}" if rank != cur else "") +
-                  (f", specialization {spec}" if spec and spec != cur_spec else ""))
+            spend(c, ctx, "karma", cost, f"{skill} {cur} → {rank}")
     c["skills"][skill] = rank
-    if spec and rank > 0:
-        c["specializations"][skill] = spec
-    else:
-        c["specializations"].pop(skill, None)
+    if rank == 0:
+        c["specs"].pop(skill, None)
+        c["expertise"].pop(skill, None)
+    elif rank < K.EXPERTISE_MIN_RANK and skill in c["expertise"] and not ctx.approved:
+        c["expertise"].pop(skill, None)
     return "Saved."
 
 
+def _valid_focus(skill, name):
+    name = _clip(name, 40).strip()
+    if not name:
+        return ""
+    if name in K.SKILLS[skill]["specs"]:
+        return name
+    if skill == "Exotic Weapons":
+        return name
+    raise RuleError("Pick one of the listed specializations.")
+
+
+def a_set_spec(c, p, ctx):
+    """Choose (or clear) a skill's specialization."""
+    skill = p.get("skill")
+    if skill not in K.SKILLS:
+        raise RuleError("Unknown skill.")
+    spec = _valid_focus(skill, p.get("spec"))
+    cur = c["specs"].get(skill, "")
+    if spec == cur:
+        return "Saved."
+    if c["skills"].get(skill, 0) <= 0 and spec:
+        raise RuleError("Learn the skill before choosing a specialization.")
+    if spec and spec == c["expertise"].get(skill):
+        raise RuleError("You already have expertise in that.")
+    if ctx.locked:
+        if cur and not spec:
+            raise RuleError("Approved sheets can't drop a specialization.")
+        if cur:
+            raise RuleError("You already have a specialization here. Turn it into expertise first.")
+        spend(c, ctx, "karma", K.KARMA["specialization"], f"{skill} specialization: {spec}")
+    if spec:
+        c["specs"][skill] = spec
+    else:
+        c["specs"].pop(skill, None)
+    return f"Specialization: {spec}." if spec else "Specialization removed."
+
+
+def a_set_expertise(c, p, ctx):
+    """Turn the current specialization into expertise (+3), or clear it (draft/GM)."""
+    skill = p.get("skill")
+    if skill not in K.SKILLS:
+        raise RuleError("Unknown skill.")
+    if K.SKILLS[skill].get("exotic"):
+        raise RuleError("Exotic Weapons can't have expertise; take several specializations instead.")
+    if p.get("clear"):
+        _need_unlocked(ctx, "expertise")
+        c["expertise"].pop(skill, None)
+        return "Expertise removed."
+    spec = c["specs"].get(skill)
+    if not spec:
+        raise RuleError("Expertise grows out of a specialization: pick one first.")
+    if c["expertise"].get(skill):
+        raise RuleError("A skill can have only one expertise.")
+    if c["skills"].get(skill, 0) < K.EXPERTISE_MIN_RANK:
+        raise RuleError(f"Expertise needs {skill} at rank {K.EXPERTISE_MIN_RANK} or higher.")
+    spend(c, ctx, "karma", karma_cost(ctx, K.KARMA["expertise"]), f"{skill} expertise: {spec}")
+    c["expertise"][skill] = spec
+    c["specs"].pop(skill, None)
+    return f"{spec} is now expertise (+3). You may pick a new specialization."
+
+
+def a_add_knowledge(c, p, ctx):
+    name = _clip(p.get("name"), 60).strip()
+    if not name:
+        raise RuleError("Name the knowledge skill.")
+    if name.lower() in (k.lower() for k in c["knowledge"]):
+        raise RuleError("You already know that.")
+    if len(c["knowledge"]) >= 60:
+        raise RuleError("Too many knowledge skills.")
+    spend(c, ctx, "karma", karma_cost(ctx, K.KARMA["knowledge"]), f"Knowledge skill: {name}")
+    c["knowledge"].append(name)
+    return f"Learned {name}."
+
+
+def a_remove_knowledge(c, p, ctx):
+    _need_unlocked(ctx, "knowledge skills")
+    i = _list_index(c["knowledge"], p.get("index"))
+    return f"{c['knowledge'].pop(i)} removed."
+
+
+def a_set_language(c, p, ctx):
+    """Add a language or raise its level (Basic → Specialist → Expert; Native only at creation)."""
+    name = _clip(p.get("name"), 40).strip()
+    level = p.get("level") if p.get("level") in K.LANGUAGE_LEVELS else "Basic"
+    if not name:
+        raise RuleError("Name the language.")
+    cur = next((x for x in c["languages"] if x["name"].lower() == name.lower()), None)
+    if level == "Native" and ctx.locked:
+        raise RuleError("Native languages are chosen at character creation.")
+    if level == "Native" and not ctx.admin and sum(1 for x in c["languages"] if x["level"] == "Native" and x is not cur) >= 1:
+        raise RuleError("Only one native language at creation (qualities can add more; ask the GM).")
+    order = K.LANGUAGE_LEVELS
+    if cur:
+        if ctx.locked:
+            if order.index(level) <= order.index(cur["level"]):
+                raise RuleError("Approved sheets can only raise a language.")
+            if cur["level"] == "Native":
+                raise RuleError("It's already your native language.")
+            steps = order.index(level) - order.index(cur["level"])
+            spend(c, ctx, "karma", steps * K.KARMA["language_level"], f"{name} → {level}")
+        cur["level"] = level
+        return f"{name}: {level}."
+    if len(c["languages"]) >= 30:
+        raise RuleError("Too many languages.")
+    cost = K.KARMA["knowledge"] + (order.index(level) * K.KARMA["language_level"] if level != "Native" else 0)
+    spend(c, ctx, "karma", karma_cost(ctx, cost), f"Language: {name} ({level})")
+    c["languages"].append({"name": name, "level": level})
+    return f"Learned {name} ({level})."
+
+
+def a_remove_language(c, p, ctx):
+    _need_unlocked(ctx, "languages")
+    i = _list_index(c["languages"], p.get("index"))
+    return f"{c['languages'].pop(i)['name']} removed."
+
+
 # ---- qualities
-def _quality_side(q):
-    if q in D.QUALITIES["Positive"]:
-        return "Positive"
-    if q in D.QUALITIES["Negative"]:
-        return "Negative"
-    raise RuleError("Unknown quality.")
+def quality_karma(name, level=1):
+    q = K.QUALITIES[name]
+    return q["karma"] * (max(1, _int(level, 1)) if q.get("levels") else 1)
 
 
 def a_add_quality(c, p, ctx):
-    q = p.get("quality")
-    side = _quality_side(q)
-    if q in c["qualities"]:
-        raise RuleError("You already have that quality.")
+    name = p.get("quality")
+    if name not in K.QUALITIES:
+        raise RuleError("Unknown quality.")
+    q = K.QUALITIES[name]
+    level = max(1, min(q.get("levels", 1), _int(p.get("level"), 1)))
+    choice = _clip(p.get("choice"), 60).strip()
+    if q.get("choice") and not choice:
+        raise RuleError(f"{name} needs a choice ({q['choice']}).")
+    if any(x["name"] == name and x.get("choice", "") == choice for x in qualities_of(c)):
+        raise RuleError("You already have that quality. Change its level instead.")
+    karma = quality_karma(name, level)
     if ctx.locked:
-        raise RuleError("Qualities can only be changed by the GM once your sheet is approved.")
-    karma = (D.QUALITY_EFFECTS.get(q) or {}).get("karma", 0)
-    if side == "Positive":
-        spend(c, ctx, "karma", karma, f"Quality: {q}")
+        if karma < 0:
+            raise RuleError("New negative qualities can't be taken after approval (the GM can assign them).")
+        spend(c, ctx, "karma", karma * K.KARMA["quality_mult"], f"Quality: {name}")
     elif not ctx.admin:
-        gain(c, ctx, "karma", -karma, f"Quality: {q}")
-    c["qualities"].append(q)
-    return f"{q} added."
+        if karma > 0:
+            spend(c, ctx, "karma", karma, f"Quality: {name}")
+        elif karma < 0:
+            gain(c, ctx, "karma", -karma, f"Quality: {name}")
+    c["qualities"].append({"name": name, "level": level, "choice": choice})
+    return f"{name} added."
 
 
 def a_remove_quality(c, p, ctx):
-    q = p.get("quality")
-    side = _quality_side(q)
-    if q not in c["qualities"]:
-        raise RuleError("You don't have that quality.")
+    i = _list_index(c["qualities"], p.get("index"))
+    q = c["qualities"][i]
+    karma = quality_karma(q["name"], q.get("level"))
     if ctx.locked:
-        raise RuleError("Qualities can only be changed by the GM once your sheet is approved.")
-    karma = (D.QUALITY_EFFECTS.get(q) or {}).get("karma", 0)
-    if not ctx.admin:
-        if side == "Positive":
-            gain(c, ctx, "karma", karma, f"Refund: {q}")
+        if karma > 0:
+            raise RuleError("Positive qualities can't be dropped after approval.")
+        spend(c, ctx, "karma", -karma * K.KARMA["quality_mult"], f"Bought off: {q['name']}")
+    elif not ctx.admin:
+        if karma > 0:
+            gain(c, ctx, "karma", karma, f"Refund: {q['name']}")
+        elif karma < 0:
+            spend(c, ctx, "karma", -karma, f"Removed: {q['name']}")
+    c["qualities"].pop(i)
+    return f"{q['name']} removed."
+
+
+def a_set_quality_level(c, p, ctx):
+    i = _list_index(c["qualities"], p.get("index"))
+    q = c["qualities"][i]
+    meta = K.QUALITIES[q["name"]]
+    if not meta.get("levels"):
+        raise RuleError("That quality has no levels.")
+    new = max(1, min(meta["levels"], _int(p.get("level"), 1)))
+    old = max(1, _int(q.get("level"), 1))
+    if new == old:
+        return "Saved."
+    delta = quality_karma(q["name"], new) - quality_karma(q["name"], old)
+    if ctx.locked:
+        if meta["karma"] > 0 and new < old:
+            raise RuleError("Approved sheets can't lower a positive quality.")
+        if meta["karma"] < 0 and new > old:
+            raise RuleError("Approved sheets can't worsen a negative quality.")
+        spend(c, ctx, "karma", abs(delta) * K.KARMA["quality_mult"], f"{q['name']} level {old} → {new}")
+    elif not ctx.admin:
+        if delta > 0:
+            spend(c, ctx, "karma", delta, f"{q['name']} level {old} → {new}")
         else:
-            spend(c, ctx, "karma", -karma, f"Removed negative quality: {q}")
-    c["qualities"].remove(q)
-    return f"{q} removed."
+            gain(c, ctx, "karma", -delta, f"{q['name']} level {old} → {new}")
+    q["level"] = new
+    return "Saved."
 
 
-# ---- gear / store
+# ---- inventory and store
+def _merge_stack(c, it):
+    """Ammo and consumables bought again stack onto the same entry."""
+    if not (it.get("unit") or it.get("consumable")) or not it.get("ref"):
+        return None
+    for x in c["inventory"]:
+        if x.get("ref") == it["ref"] and x.get("rating") == it.get("rating") and x is not it:
+            x["qty"] = _int(x.get("qty"), 0) + _int(it.get("qty"), 1)
+            return x
+    return None
+
+
+def _store_access(c, ctx, it):
+    ok, why = CAT.access(c, it.get("avail"), it.get("legal", ""), G.CATEGORY_SUPPLY.get(it.get("cat"), "General"), ctx.approved)
+    return ok, why
+
+
 def a_buy(c, p, ctx):
-    cat = p.get("category")
-    if cat not in D.GEAR_CATEGORIES:
-        raise RuleError("Unknown store category.")
-    if len(c["gear"][cat]) >= MAX_LIST:
+    try:
+        e = CAT.entry(p.get("ref"))
+    except CAT.CatalogError as ex:
+        raise RuleError(str(ex))
+    qty = max(1, min(100, _int(p.get("qty"), 1)))
+    grade = p.get("grade") if p.get("grade") in G.IMPLANT_GRADES else "Standard"
+    if grade == "Used" and not CAT.is_implant(e):
+        grade = "Standard"
+    it = CAT.make_item(e, p.get("rating"), grade, c.get("metatype", ""), uid=_uid(c))
+    if not ctx.admin:
+        ok, why = _store_access(c, ctx, it)
+        if not ok:
+            raise RuleError(why)
+    if len(c["inventory"]) >= MAX_LIST:
         raise RuleError("Inventory is full.")
-    if p.get("index") is not None:
-        raw = predefined(cat, p["index"])
-        custom = False
-    else:
-        raw = p.get("item") or {}
-        custom = True
-    item = clean_item(raw, cat)
-    if custom:
-        item["_custom"] = True
-    free = ctx.admin and bool(p.get("free", True))
-    price = _int(item.get("Price"))
+    if CAT.is_implant(e) and qty > 1:
+        qty = 1
+    price = it["cost"] * qty
+    free = ctx.admin and p.get("free", True)
     if not free:
-        spend(c, ctx, "nuyen", price, f"Bought {item['name']}")
-    c["gear"][cat].append(item)
-    if free and ctx.admin:
-        return f"{item['name']} added to the inventory."
-    return f"Bought {item['name']} for {fmt_money(price)}."
+        spend(c, ctx, "nuyen", price, f"Bought {it['name']}" + (f" ×{qty}" if qty > 1 else ""))
+    if it.get("unit"):
+        it["qty"] = CAT.box_size(e) * qty
+    else:
+        it["qty"] = qty
+    if CAT.is_implant(e):
+        d = derive(c)
+        if d["essence"] - it.get("essence", 0) < 0 and not ctx.admin:
+            raise RuleError(f"Not enough Essence: {it['name']} costs {it['essence']} and you have {d['essence']}.")
+    if not _merge_stack(c, it):
+        if qty > 1 and not (it.get("unit") or it.get("consumable")):
+            for _ in range(qty - 1):
+                extra = copy.deepcopy(it)
+                extra["uid"] = _uid(c)
+                extra["qty"] = 1
+                c["inventory"].append(extra)
+            it["qty"] = 1
+        c["inventory"].append(it)
+    if CAT.is_implant(e) and ctx.approved and not ctx.admin:
+        boxes = max(1, int(round(it.get("essence", 0) * 3)))
+        ctx.log.append(f"had {it['name']} implanted (surgery: {boxes} boxes on each monitor).")
+        _surgery(c, boxes)
+    if free:
+        return f"{it['name']} added to the inventory."
+    return f"Bought {it['name']} for {fmt_money(price)}."
+
+
+def _surgery(c, boxes):
+    """Implant surgery fills boxes on both monitors (no overflow)."""
+    d = derive(c)
+    c["stun_damage"] = min(d["stun_boxes"] - 1, _int(c["stun_damage"]) + boxes) if d["stun_boxes"] > 1 else c["stun_damage"]
+    c["physical_damage"] = min(d["physical_boxes"] - 1, _int(c["physical_damage"]) + boxes) if d["physical_boxes"] > 1 else c["physical_damage"]
+
+
+CUSTOM_TEXT = ("sub", "desc", "dv", "ar", "modes", "ammo", "ammo_class", "skill", "spec", "focus", "dv_gz", "dv_close",
+               "dv_near", "blast", "choice")
+CUSTOM_NUM = ("dr", "capacity", "device_rating", "data_processing", "firewall", "attack", "sleaze", "program_slots",
+              "handling", "accel", "speed_interval", "top_speed", "body", "armor", "pilot", "sensor",
+              "init_dice", "soak", "Body", "Agility", "Reaction", "Strength", "Willpower", "Logic", "Intuition", "Charisma")
+
+
+def clean_custom(raw):
+    """Shape a custom item from the browser (GM gifts, draft homebrew)."""
+    if not isinstance(raw, dict):
+        raise RuleError("Bad item.")
+    name = _clip(raw.get("name"), 80).strip()
+    if not name:
+        raise RuleError("A name is required.")
+    cat = raw.get("cat") if raw.get("cat") in G.STORE_CATEGORIES else "Survival"
+    it = {"uid": "", "ref": None, "name": name, "cat": cat, "qty": max(1, min(9999, _int(raw.get("qty"), 1))),
+          "cost": max(0, _int(raw.get("cost"))), "_custom": True}
+    a, legal = CAT.parse_avail(raw.get("avail", "")) if str(raw.get("avail", "")).strip() else (0, "")
+    it["avail"], it["legal"] = a, legal
+    for k in CUSTOM_TEXT:
+        if raw.get(k) not in (None, ""):
+            it[k] = _clip(raw[k], 300 if k == "desc" else 60).strip()
+    for k in CUSTOM_NUM:
+        if raw.get(k) not in (None, ""):
+            it[k] = _int(raw[k])
+    if raw.get("essence") not in (None, "", 0, "0"):
+        it["essence"] = round(max(0.0, min(6.0, _num(raw["essence"]))), 2)
+        it["implant"] = True
+    if raw.get("consumable"):
+        it["consumable"] = True
+    if cat in ("Melee", "Ranged", "Armor"):
+        it["equipped"] = True
+    if it.get("ammo"):
+        cap, kind = CAT.parse_ammo(it["ammo"])
+        if cap:
+            it["clip"], it["clip_kind"] = cap, kind
+            it["loaded"] = {"rounds": 0, "type": "Regular"}
+    if cat in ("Vehicles", "Drones"):
+        it["damage"] = 0
+    if it.get("focus"):
+        it["bonded"] = False
+        it["force"] = max(1, _int(raw.get("force"), 1))
+    return it
+
+
+def a_buy_custom(c, p, ctx):
+    if ctx.approved and not ctx.admin:
+        raise RuleError("Custom items are only available during character creation. Ask the GM.")
+    it = clean_custom(p.get("item"))
+    it["uid"] = _uid(c)
+    if not ctx.admin or not p.get("free", True):
+        spend(c, ctx, "nuyen", it["cost"] * (1 if it.get("unit") else it["qty"]), f"Bought {it['name']}")
+    c["inventory"].append(it)
+    return f"{it['name']} added."
+
+
+def a_give(c, p, ctx):
+    """GM only: give a store item (with rating/grade/qty) or a custom item, free."""
+    if p.get("ref"):
+        q = dict(p)
+        q["free"] = True
+        return a_buy(c, q, ctx)
+    q = {"item": p.get("item"), "free": True}
+    return a_buy_custom(c, q, ctx)
 
 
 def a_edit_item(c, p, ctx):
-    cat = p.get("category")
-    if cat not in D.GEAR_CATEGORIES:
-        raise RuleError("Unknown category.")
-    i = _list_index(c["gear"][cat], p.get("index"))
-    old = c["gear"][cat][i]
-    new = clean_item(p.get("item") or {}, cat)
-    cosmetic = ("name", "description", "Equipped", "Price", "_custom")
-    if old.get("_custom") or (not ctx.admin and {k: v for k, v in new.items() if k not in cosmetic} != {k: v for k, v in old.items() if k not in cosmetic}):
-        new["_custom"] = True        # a player changed the item's stats: flag it for the GM
-    if ctx.locked:
-        # after approval only cosmetic fields and the equipped flag can change
-        keep = dict(old)
-        keep["name"] = new["name"]
-        keep["description"] = new["description"]
-        if cat in D.EQUIPPABLE_CATEGORIES:
-            keep["Equipped"] = new["Equipped"]
-        new = keep
-    elif not ctx.admin:
-        delta = _int(new.get("Price")) - _int(old.get("Price"))
-        if delta > 0:
-            spend(c, ctx, "nuyen", delta, f"Price change: {new['name']}")
-        elif delta < 0:
-            gain(c, ctx, "nuyen", -delta, f"Price change: {new['name']}")
-    c["gear"][cat][i] = new
+    it = find_item(c, p.get("uid"))
+    raw = p.get("item") or {}
+    name = _clip(raw.get("name"), 80).strip() or it["name"]
+    desc = _clip(raw.get("desc"), 1000)
+    if ctx.admin or (not ctx.approved and it.get("_custom")):
+        new = clean_custom({**it, **raw, "name": name})
+        for k in ("uid", "ref", "loaded", "bonded", "running", "damage", "matrix_damage", "grade", "rating", "unit", "choice"):
+            if k in it and k not in new:
+                new[k] = it[k]
+        if not ctx.admin and new["cost"] != it.get("cost"):
+            delta = new["cost"] * new["qty"] - _int(it.get("cost")) * _int(it.get("qty"), 1)
+            if delta > 0:
+                spend(c, ctx, "nuyen", delta, f"Price change: {name}")
+            elif delta < 0:
+                gain(c, ctx, "nuyen", -delta, f"Price change: {name}")
+        if not ctx.admin:
+            new["_custom"] = True
+        it.clear()
+        it.update(new)
+    else:
+        it["name"] = name
+        it["desc"] = desc
+    if "choice" in raw:
+        it["choice"] = _clip(raw.get("choice"), 60).strip()
     return "Item updated."
 
 
 def a_toggle_equipped(c, p, ctx):
-    cat = p.get("category")
-    if cat not in D.EQUIPPABLE_CATEGORIES:
+    it = find_item(c, p.get("uid"))
+    if it.get("cat") not in ("Melee", "Ranged", "Armor"):
         raise RuleError("Only weapons and armor can be equipped.")
-    i = _list_index(c["gear"][cat], p.get("index"))
-    it = c["gear"][cat][i]
-    it["Equipped"] = "No" if _yes(it.get("Equipped"), True) else "Yes"
-    return f"{it['name']} {'equipped' if it['Equipped'] == 'Yes' else 'stored'}."
+    it["equipped"] = not it.get("equipped", True)
+    return f"{it['name']} {'equipped' if it['equipped'] else 'stored'}."
+
+
+def _refund_value(it):
+    unit = _int(it.get("cost"))
+    if it.get("unit") == "rounds":
+        return int(unit * _int(it.get("qty")) / 10)
+    return unit * max(1, _int(it.get("qty"), 1))
 
 
 def a_remove_item(c, p, ctx):
-    cat = p.get("category")
-    if cat not in D.GEAR_CATEGORIES:
-        raise RuleError("Unknown category.")
-    i = _list_index(c["gear"][cat], p.get("index"))
-    item = c["gear"][cat].pop(i)
-    price = _int(item.get("Price"))
-    if ctx.refunds and not ctx.admin and price:
-        gain(c, ctx, "nuyen", price, f"Refund: {item['name']}")
-        return f"{item['name']} returned for {fmt_money(price)}."
-    return f"{item['name']} discarded."
+    it = find_item(c, p.get("uid"))
+    c["inventory"].remove(it)
+    if not ctx.approved and not ctx.admin:
+        val = _refund_value(it)
+        if val:
+            gain(c, ctx, "nuyen", val, f"Refund: {it['name']}")
+            return f"{it['name']} returned for {fmt_money(val)}."
+    return f"{it['name']} discarded."
 
 
-def a_use_medkit(c, p, ctx):
-    kits = c["gear"]["Medkits"]
-    if not kits:
-        raise RuleError("You have no medkit.")
-    i = _list_index(kits, p.get("index", 0))
-    kit = kits[i]
-    rating = 1
-    rs = str(kit.get("Rating", "1"))
-    try:
-        rating = int(rs.split()[-1]) if " " in rs else int(float(rs))
-    except (ValueError, IndexError):
-        pass
-    c["physical_damage"] = max(0, c["physical_damage"] - rating * 2)
-    c["stun_damage"] = max(0, c["stun_damage"] - rating)
-    qty = _int(kit.get("Quantity", 1), 1) - 1
-    name = kit.get("name", "Medkit")
-    if qty <= 0:
-        kits.pop(i)
-        tail = " It's used up."
+def a_sell_item(c, p, ctx):
+    """Sell an item to the store for the game's sell percentage (needs a contact who could handle it)."""
+    it = find_item(c, p.get("uid"))
+    if not ctx.approved:
+        return a_remove_item(c, p, ctx)
+    ok, why = _store_access(c, ctx, it)
+    if not ok and not ctx.admin:
+        raise RuleError("No contact will fence that. " + why)
+    qty = _int(p.get("qty"), 0)
+    if it.get("unit") or it.get("consumable"):
+        qty = max(1, min(_int(it.get("qty"), 1), qty or _int(it.get("qty"), 1)))
     else:
-        kit["Quantity"] = str(qty)
-        tail = f" {qty} use{'s' if qty != 1 else ''} left."
-    ctx.log.append(f"used {name}: healed up to {rating * 2} Physical and {rating} Stun.")
-    return f"{name} applied.{tail}"
-
-
-def a_rest(c, p, ctx):
-    c["stun_damage"] = max(0, c["stun_damage"] - 1)
-    return "Rested: 1 box of Stun healed."
-
-
-# ---- condition monitors
-def a_set_damage(c, p, ctx):
-    track = p.get("track")
-    if track not in ("physical", "stun"):
-        raise RuleError("Unknown track.")
-    d = derive(c)
-    v = max(0, _int(p.get("value")))
-    if track == "stun":
-        if v > d["stun_boxes"]:
-            over = v - d["stun_boxes"]
-            c["stun_damage"] = d["stun_boxes"]
-            c["physical_damage"] = c["physical_damage"] + over
-        else:
-            c["stun_damage"] = v
+        qty = max(1, _int(it.get("qty"), 1))
+    part = dict(it)
+    part["qty"] = qty
+    price = CAT.sell_price(part, ctx.sell_pct)
+    if it.get("implant") and not ctx.admin:
+        ctx.log.append(f"had {it['name']} removed and sold it.")
+    if it.get("bonded"):
+        it["bonded"] = False
+    if (it.get("unit") or it.get("consumable")) and qty < _int(it.get("qty"), 1):
+        it["qty"] = _int(it["qty"]) - qty
     else:
-        c["physical_damage"] = min(v, d["physical_boxes"] + d["overflow_boxes"] + 1)
-    return "Condition updated."
+        c["inventory"].remove(it)
+    gain(c, ctx, "nuyen", price, f"Sold {it['name']}" + (f" ×{qty}" if qty > 1 else "") + f" ({ctx.sell_pct}%)")
+    return f"Sold {it['name']} for {fmt_money(price)}."
 
 
-def a_damage(c, p, ctx):
-    """Add (positive) or heal (negative) boxes on a track, with Stun overflowing into Physical."""
-    track = p.get("track")
-    n = _int(p.get("amount"))
-    if track not in ("physical", "stun") or n == 0:
-        raise RuleError("Bad damage.")
-    key = f"{track}_damage"
-    a_set_damage(c, {"track": track, "value": max(0, c[key] + n)}, ctx)
-    word = "healed" if n < 0 else "taken"
-    return f"{abs(n)} {track.capitalize()} {word}."
+def a_reload(c, p, ctx):
+    """Fill a weapon from a compatible ammo stack (unloading other ammo types first)."""
+    w = find_item(c, p.get("uid"))
+    if not w.get("clip"):
+        raise RuleError("That weapon doesn't take ammunition.")
+    cls = w.get("ammo_class")
+    stacks = [x for x in c["inventory"] if x.get("ammo_for") and x.get("ammo_for") == cls and _int(x.get("qty")) > 0]
+    if p.get("ammo"):
+        stacks = [x for x in stacks if x.get("uid") == p.get("ammo")]
+    if w.get("fixed_ammo"):
+        stacks = [x for x in stacks if x.get("ammo_type") in (w["fixed_ammo"], None)] or stacks
+    if not stacks:
+        raise RuleError(f"You have no ammunition for the {w['name']}" + (f" ({cls})." if cls else "."))
+    src = stacks[0]
+    loaded = w.setdefault("loaded", {"rounds": 0, "type": "Regular"})
+    atype = src.get("ammo_type") or ("Regular" if not src.get("dv_gz") else src["name"])
+    if loaded.get("rounds") and loaded.get("type") != atype:
+        _unload(c, w)
+    room = w["clip"] - _int(loaded.get("rounds"))
+    if room <= 0:
+        raise RuleError("It's already full.")
+    n = min(room, _int(src.get("qty")))
+    src["qty"] = _int(src["qty"]) - n
+    loaded["rounds"] = _int(loaded.get("rounds")) + n
+    loaded["type"] = atype
+    loaded["src"] = src.get("ref")
+    if src["qty"] <= 0:
+        c["inventory"].remove(src)
+    return f"Loaded {n} {atype if not src.get('dv_gz') else ''} {'round' if n == 1 else 'rounds'} into the {w['name']}.".replace("  ", " ")
+
+
+def _unload(c, w):
+    loaded = w.get("loaded") or {}
+    n = _int(loaded.get("rounds"))
+    if n <= 0:
+        return 0
+    ref = loaded.get("src")
+    back = next((x for x in c["inventory"] if ref and x.get("ref") == ref), None)
+    if back:
+        back["qty"] = _int(back.get("qty")) + n
+    elif ref and ref in CAT.BY_ID:
+        it = CAT.make_item(CAT.BY_ID[ref], uid=_uid(c))
+        it["qty"] = n
+        c["inventory"].append(it)
+    loaded["rounds"] = 0
+    return n
+
+
+def a_unload(c, p, ctx):
+    w = find_item(c, p.get("uid"))
+    n = _unload(c, w)
+    return f"Unloaded {n} rounds." if n else "It was empty."
+
+
+def consume_attack(c, uid, mode):
+    """Spend the rounds (or the throwable) an attack uses. Returns a short note for the log."""
+    if uid in (None, "", "unarmed"):
+        return ""
+    it = find_item(c, uid)
+    if it.get("clip"):
+        modes = CAT.modes_list(it.get("modes"))
+        mode = mode if mode in modes else (modes[0] if modes else None)
+        need = G.FIRING_MODES[mode]["rounds"] if mode else 1
+        have = _int((it.get("loaded") or {}).get("rounds"))
+        if have <= 0:
+            raise RuleError(f"The {it['name']} is empty. Reload it first.")
+        if have < need and not (mode == "BF" and have >= 2):
+            raise RuleError(f"{G.FIRING_MODES[mode]['name']} needs {need} rounds; only {have} loaded.")
+        used = min(need, have)
+        it["loaded"]["rounds"] = have - used
+        return f"{used} {'round' if used == 1 else 'rounds'} fired, {have - used} left"
+    if it.get("consumable") or it.get("dv_gz"):
+        q = _int(it.get("qty"), 1) - 1
+        if q <= 0:
+            c["inventory"].remove(it)
+            return f"{it['name']} used up"
+        it["qty"] = q
+        return f"{q} {it['name']} left"
+    return ""
+
+
+def a_bond_focus(c, p, ctx):
+    it = find_item(c, p.get("uid"))
+    if not it.get("focus"):
+        raise RuleError("That isn't a focus.")
+    if c.get("magic_type") not in AWAKENED:
+        raise RuleError("Only Awakened characters can bond foci.")
+    cost = _int(it.get("force"), 1) * G.FOCUS_BOND_KARMA.get(it["focus"], 2)
+    if it.get("bonded"):
+        if ctx.locked:
+            raise RuleError("Unbonding after approval is a GM call.")
+        it["bonded"] = False
+        if not ctx.admin:
+            gain(c, ctx, "karma", cost, f"Unbonded {it['name']}")
+        return f"{it['name']} unbonded."
+    limit = derive(c)["attributes"]["Magic"]
+    if sum(1 for x in c["inventory"] if x.get("bonded")) >= limit and not ctx.admin:
+        raise RuleError(f"You can bond at most {limit} foci (your Magic).")
+    spend(c, ctx, "karma", cost, f"Bonded {it['name']}")
+    it["bonded"] = True
+    return f"{it['name']} bonded" + ("." if ctx.admin else f" for {cost} Karma.")
+
+
+def a_set_vehicle_damage(c, p, ctx):
+    it = find_item(c, p.get("uid"))
+    if it.get("cat") not in ("Vehicles", "Drones"):
+        raise RuleError("Not a vehicle.")
+    it["damage"] = max(0, min(8 + _half_up(_int(it.get("body"))), _int(p.get("value"))))
+    return "Vehicle condition updated."
+
+
+def a_set_program(c, p, ctx):
+    it = find_item(c, p.get("uid"))
+    if it.get("sub") != "Software":
+        raise RuleError("Not a program.")
+    if "choice" in p:
+        ch = p.get("choice") or ""
+        allowed = list(M.PROGRAMS["Basic"]) + (list(M.PROGRAMS["Hacking"]) if "hacking" in (it.get("ref") or "") else [])
+        if ch and ch not in allowed:
+            raise RuleError("Pick a program from the list.")
+        it["choice"] = ch
+    if "running" in p:
+        want = bool(p.get("running"))
+        if want:
+            d = derive(c)
+            running = sum(1 for x in c["inventory"] if x.get("running") and x is not it)
+            if running >= d["matrix"]["slots"]:
+                raise RuleError(f"Your device runs {d['matrix']['slots']} programs at once.")
+        it["running"] = want
+    return "Saved."
+
+
+def a_set_matrix(c, p, ctx):
+    m = c.setdefault("matrix", {"mode": "AR", "device": ""})
+    if p.get("mode") in M.MATRIX_INIT:
+        m["mode"] = p["mode"]
+    if "device" in p:
+        dev = str(p.get("device") or "")
+        if dev and dev != "persona":
+            find_item(c, dev)
+        m["device"] = dev
+    if "damage" in p:
+        d = derive(c)["matrix"]
+        v = max(0, min(d.get("boxes", 0), _int(p.get("damage"))))
+        if d.get("device") == "persona":
+            m["persona_damage"] = v
+        elif d.get("device"):
+            find_item(c, d["device"])["matrix_damage"] = v
+    return "Saved."
 
 
 # ---- contacts
@@ -753,16 +1482,33 @@ def a_save_contact(c, p, ctx):
     name = _clip(raw.get("name"), 80).strip()
     if not name:
         raise RuleError("A contact needs a name.")
-    contact = {"name": name, "type": _clip(raw.get("type"), 40), "loyalty": _clip(raw.get("loyalty"), 40),
-               "connection": _clip(raw.get("connection"), 40), "notes": _clip(raw.get("notes"), 4000)}
+    supply = [s for s in (raw.get("supply") or []) if s in SUPPLY][:20]
+    contact = {"name": name, "type": _clip(raw.get("type"), 40),
+               "connection": max(1, min(12, _int(raw.get("connection"), 1))),
+               "loyalty": max(1, min(12, _int(raw.get("loyalty"), 1))),
+               "supply": supply, "notes": _clip(raw.get("notes"), 4000), "verified": True}
     if p.get("index") is None:
         if len(c["contacts"]) >= MAX_LIST:
             raise RuleError("Too many contacts.")
+        if ctx.locked:
+            contact["verified"] = False
         c["contacts"].append(contact)
-        return f"{name} added."
+        return f"{name} added." + (" The GM must confirm the new contact before it can source gear." if ctx.locked else "")
     i = _list_index(c["contacts"], p["index"])
+    old = c["contacts"][i]
+    if ctx.locked:
+        changed = any(old.get(k) != contact[k] for k in ("connection", "loyalty", "supply"))
+        contact["verified"] = old.get("verified", True) and not changed
+    elif ctx.admin and "verified" in raw:
+        contact["verified"] = bool(raw["verified"])
     c["contacts"][i] = contact
-    return "Contact updated."
+    return "Contact updated." + (" Waiting for the GM to confirm the changes." if not contact["verified"] and not ctx.admin else "")
+
+
+def a_verify_contact(c, p, ctx):
+    i = _list_index(c["contacts"], p.get("index"))
+    c["contacts"][i]["verified"] = bool(p.get("verified", True))
+    return "Contact confirmed." if c["contacts"][i]["verified"] else "Contact marked as unconfirmed."
 
 
 def a_remove_contact(c, p, ctx):
@@ -770,51 +1516,82 @@ def a_remove_contact(c, p, ctx):
     return f"{c['contacts'].pop(i)['name']} removed."
 
 
-# ---- magic: spells, powers, foci
-def _add_magic(c, p, ctx, kind, key):
-    if len(c[key]) >= MAX_LIST:
-        raise RuleError("List is full.")
-    raw = predefined(kind, p["index"]) if p.get("index") is not None else (p.get("item") or {})
-    item = clean_item(raw, kind)
-    if p.get("index") is None:
-        item["_custom"] = True
-    return item
+# ---- magic: spells, rituals, powers, initiation
+def _caster(c):
+    if c.get("magic_type") not in CASTERS:
+        raise RuleError("Only magicians and mystic adepts cast spells.")
+    if c.get("magic_type") == "Aspected Magician" and c.get("aspect") != "Sorcery":
+        raise RuleError("Your aspect isn't Sorcery.")
 
 
-def a_save_spell(c, p, ctx):
-    if p.get("edit") is not None:
-        i = _list_index(c["spells"], p["edit"])
-        if ctx.locked:
-            raise RuleError("Learned spells can only be edited by the GM after approval.")
-        c["spells"][i] = clean_item(p.get("item") or {}, "Spell")
-        return "Spell updated."
-    item = _add_magic(c, p, ctx, "Spell", "spells")
-    if ctx.approved:
-        spend(c, ctx, "karma", KARMA_SPELL, f"Learned spell: {item['name']}")
-    c["spells"].append(item)
-    return f"Learned {item['name']}" + (f" for {KARMA_SPELL} Karma." if ctx.approved and not ctx.admin else ".")
+def a_learn_spell(c, p, ctx):
+    _caster(c)
+    name = p.get("name")
+    if name in SPELLS:
+        sp = _spell_entry(SPELLS[name])
+    elif name in RITUALS:
+        r = RITUALS[name]
+        sp = {"name": name, "category": "Ritual", "keywords": r["keywords"], "threshold": r["threshold"], "desc": r["desc"]}
+    elif p.get("custom") and (ctx.admin or not ctx.approved):
+        raw = p.get("custom") or {}
+        nm = _clip(raw.get("name"), 80).strip()
+        if not nm:
+            raise RuleError("Name the spell.")
+        sp = {"name": nm, "category": raw.get("category") if raw.get("category") in ("Combat", "Detection", "Health", "Illusion", "Manipulation") else "Manipulation",
+              "kind": raw.get("kind") if raw.get("kind") in ("Direct", "Indirect") else "", "drain": max(0, min(12, _int(raw.get("drain"), 3))),
+              "damage": raw.get("damage") if raw.get("damage") in ("P", "S") else "", "type": "M" if raw.get("type") == "M" else "P",
+              "range": _clip(raw.get("range"), 20), "duration": _clip(raw.get("duration"), 4), "desc": _clip(raw.get("desc"), 300), "_custom": True}
+    else:
+        raise RuleError("Unknown spell.")
+    if any(s["name"] == sp["name"] for s in c["spells"]):
+        raise RuleError("You already know that.")
+    if len(c["spells"]) >= MAX_LIST:
+        raise RuleError("Too many spells.")
+    spend(c, ctx, "karma", karma_cost(ctx, K.KARMA["spell"]), f"Learned {sp['name']}")
+    c["spells"].append(sp)
+    return f"Learned {sp['name']}" + (f" for {K.KARMA['spell']} Karma." if karma_cost(ctx, 5) else ".")
 
 
-def a_remove_spell(c, p, ctx):
+def a_forget_spell(c, p, ctx):
     _need_unlocked(ctx, "spells")
     i = _list_index(c["spells"], p.get("index"))
     return f"{c['spells'].pop(i)['name']} forgotten."
 
 
-def a_save_power(c, p, ctx):
-    if p.get("edit") is not None:
-        i = _list_index(c["powers"], p["edit"])
-        _need_unlocked(ctx, "adept powers")
-        c["powers"][i] = clean_item(p.get("item") or {}, "Power")
-        msg = "Power updated."
+def a_set_power(c, p, ctx):
+    """Add an adept power or change its level (index given)."""
+    if c.get("magic_type") not in ("Adept", "Mystic Adept"):
+        raise RuleError("Only adepts and mystic adepts have adept powers.")
+    if p.get("index") is not None:
+        i = _list_index(c["powers"], p["index"])
+        pw = c["powers"][i]
+        meta = POWERS.get(pw["name"]) or {}
+        new = max(1, min(meta.get("max", 99), _int(p.get("level"), 1)))
+        if ctx.locked and new < _int(pw.get("level"), 1):
+            raise RuleError("Approved sheets can't lower a power.")
+        pw["level"] = new if meta.get("levels") else 1
+        if "choice" in p and not ctx.locked:
+            pw["choice"] = _clip(p.get("choice"), 40)
     else:
-        item = _add_magic(c, p, ctx, "Power", "powers")
-        c["powers"].append(item)
-        msg = f"{item['name']} added."
+        name = p.get("name")
+        meta = POWERS.get(name)
+        if not meta:
+            raise RuleError("Unknown power.")
+        choice = _clip(p.get("choice"), 40).strip()
+        if meta.get("choice") and not choice:
+            raise RuleError(f"{name} needs a choice ({meta['choice']}).")
+        if meta.get("choice") == "Physical attribute" and choice not in K.PHYSICAL:
+            raise RuleError("Pick a Physical attribute.")
+        if meta.get("choice") == "Skill" and choice not in K.SKILLS:
+            raise RuleError("Pick a skill.")
+        if any(x["name"] == name and x.get("choice", "") == choice for x in c["powers"]):
+            raise RuleError("You already have that power.")
+        lvl = max(1, min(meta.get("max", 99), _int(p.get("level"), 1))) if meta.get("levels") else 1
+        c["powers"].append({"name": name, "level": lvl, "choice": choice})
     d = derive(c)
-    if ctx.locked and d["power_points_used"] > d["power_points_available"]:
-        raise RuleError(f"That needs {d['power_points_used']:g} Power Points; you have {d['power_points_available']}.")
-    return msg
+    if d["power_points_used"] > d["power_points_available"] + 1e-9 and not ctx.admin and ctx.approved:
+        raise RuleError(f"That needs {d['power_points_used']:g} Power Points; you have {d['power_points_available']:g}.")
+    return "Saved."
 
 
 def a_remove_power(c, p, ctx):
@@ -823,63 +1600,386 @@ def a_remove_power(c, p, ctx):
     return f"{c['powers'].pop(i)['name']} removed."
 
 
-def a_save_focus(c, p, ctx):
-    if p.get("edit") is not None:
-        _need_unlocked(ctx, "foci")
-        i = _list_index(c["foci"], p["edit"])
-        old = c["foci"][i]
-        new = clean_item(p.get("item") or {}, "Focus")
-        new["Bonded"] = old.get("Bonded", "No")
-        if not ctx.admin:
-            delta = _int(new.get("Price")) - _int(old.get("Price"))
-            if delta > 0:
-                spend(c, ctx, "nuyen", delta, f"Price change: {new['name']}")
-            elif delta < 0:
-                gain(c, ctx, "nuyen", -delta, f"Price change: {new['name']}")
-        c["foci"][i] = new
-        return "Focus updated."
-    item = _add_magic(c, p, ctx, "Focus", "foci")
-    item["Bonded"] = "No"
-    spend(c, ctx, "nuyen", _int(item.get("Price")), f"Bought focus: {item['name']}")
-    c["foci"].append(item)
-    return f"{item['name']} added. Bond it to use it."
+def a_buy_power_point(c, p, ctx):
+    if c.get("magic_type") != "Mystic Adept":
+        raise RuleError("Only mystic adepts buy power points.")
+    d = derive(c)
+    if _int(c.get("power_points_bought")) >= d["attributes"]["Magic"]:
+        raise RuleError("Mystic adepts can have at most Magic power points.")
+    spend(c, ctx, "karma", karma_cost(ctx, M.MYSTIC_PP_KARMA), "Power point")
+    c["power_points_bought"] = _int(c.get("power_points_bought")) + 1
+    return "Power point added."
 
 
-def a_bond_focus(c, p, ctx):
-    i = _list_index(c["foci"], p.get("index"))
-    f = c["foci"][i]
-    cost = focus_bond_cost(f)
-    if _yes(f.get("Bonded")):
-        if ctx.locked:
-            raise RuleError("Unbonding after approval is a GM call.")
-        f["Bonded"] = "No"
-        if not ctx.admin:
-            gain(c, ctx, "karma", cost, f"Unbonded {f['name']}")
-        return f"{f['name']} unbonded."
-    spend(c, ctx, "karma", cost, f"Bonded {f['name']}")
-    f["Bonded"] = "Yes"
-    return f"{f['name']} bonded" + ("." if ctx.admin else f" for {cost} Karma.")
+def a_initiate(c, p, ctx):
+    """Initiation (Awakened) or submersion (technomancers): 10 + new grade Karma, plus a metamagic/echo."""
+    tm = c.get("magic_type") == "Technomancer"
+    if not tm and c.get("magic_type") not in AWAKENED:
+        raise RuleError("Only Awakened characters and technomancers can initiate.")
+    key = "submersion_grade" if tm else "initiation_grade"
+    table = ECHOES if tm else METAMAGICS
+    lst = c["echoes"] if tm else c["metamagics"]
+    pick = p.get("pick")
+    if pick not in table:
+        raise RuleError("Pick a metamagic." if not tm else "Pick an echo.")
+    meta = table[pick]
+    if meta.get("adept_only") and c.get("magic_type") not in ("Adept", "Mystic Adept"):
+        raise RuleError(f"{pick} is for adepts.")
+    if pick in lst and not meta.get("repeatable"):
+        raise RuleError("You already have that.")
+    grade = _int(c.get(key)) + 1
+    cost = K.KARMA["submersion_base" if tm else "initiation_base"] + grade
+    spend(c, ctx, "karma", karma_cost(ctx, cost), f"{'Submersion' if tm else 'Initiation'} grade {grade}: {pick}")
+    c[key] = grade
+    lst.append(pick)
+    return f"{'Submerged' if tm else 'Initiated'} to grade {grade} ({pick})."
 
 
-def a_remove_focus(c, p, ctx):
-    i = _list_index(c["foci"], p.get("index"))
-    f = c["foci"][i]
-    if ctx.locked:
-        raise RuleError("Foci can only be removed by the GM after approval.")
-    if not ctx.admin:
-        if _yes(f.get("Bonded")):
-            gain(c, ctx, "karma", focus_bond_cost(f), f"Bond refund: {f['name']}")
-        if _int(f.get("Price")):
-            gain(c, ctx, "nuyen", _int(f.get("Price")), f"Refund: {f['name']}")
-    c["foci"].pop(i)
-    return f"{f['name']} removed."
+# ---- resonance
+def a_learn_form(c, p, ctx):
+    if c.get("magic_type") != "Technomancer":
+        raise RuleError("Only technomancers thread complex forms.")
+    name = p.get("name")
+    if name not in FORMS:
+        raise RuleError("Unknown complex form.")
+    if any(f["name"] == name for f in c["complex_forms"]):
+        raise RuleError("You already know that.")
+    spend(c, ctx, "karma", karma_cost(ctx, K.KARMA["complex_form"]), f"Complex form: {name}")
+    c["complex_forms"].append({"name": name, "choice": _clip(p.get("choice"), 40)})
+    return f"Learned {name}."
+
+
+def a_forget_form(c, p, ctx):
+    _need_unlocked(ctx, "complex forms")
+    i = _list_index(c["complex_forms"], p.get("index"))
+    return f"{c['complex_forms'].pop(i)['name']} forgotten."
+
+
+# ---- spirits and sprites
+def spirit_stats(kind, force):
+    """Stat block of a spirit of the given Force."""
+    s = M.SPIRITS[kind]
+    F = max(1, min(12, _int(force, 1)))
+    attrs = {a: max(1, F + off) for a, off in s["attrs"].items() if a not in ("Magic", "Essence")}
+    attrs["Magic"] = F
+    attrs["Essence"] = F
+    env = {"F": F}
+
+    def ev(expr):
+        try:
+            return int(eval(str(expr).replace("ceil", "_ceil"), {"__builtins__": {}, "_ceil": math.ceil}, env))  # noqa: S307 (data from our own table)
+        except Exception:
+            return 0
+
+    def ev_ar(expr):
+        vals = [ev(x) if x != "—" else 0 for x in str(expr).split("/")]
+        return "/".join(str(v) if v > 0 else "—" for v in vals)
+
+    return {"type": kind, "force": F, "attrs": attrs, "init": ev(s["init"]) + 0, "init_dice": s.get("init_dice", 2),
+            "dr": ev(s["dr"]), "cm": 8 + _half_up(F), "move": s.get("move"), "skills": {k: F for k in s["skills"]},
+            "powers": s["powers"], "optional": s.get("optional", []), "optional_count": F // 3,
+            "attacks": [{"name": a["name"], "dv": f"{ev(a['dv'])}{a['type']}", "ar": ev_ar(a["ar"]), "note": a.get("note", "")}
+                        for a in s.get("attacks", [])]}
+
+
+def a_summon(c, p, ctx):
+    """Summon a spirit: Conjuring + Magic vs Force x 2; services = net hits; drain = the spirit's hits."""
+    if c.get("magic_type") not in ("Magician", "Mystic Adept") and not (c.get("magic_type") == "Aspected Magician" and c.get("aspect") == "Conjuring"):
+        raise RuleError("You can't summon spirits.")
+    kind = p.get("type")
+    if kind not in M.SPIRITS:
+        raise RuleError("Unknown spirit type.")
+    d = derive(c)
+    force = max(1, min(d["attributes"]["Magic"] * 2, _int(p.get("force"), 1)))
+    active = sum(_int(s.get("force")) for s in c["spirits"])
+    if active + force > d["spirit_force_limit"] and not ctx.admin:
+        raise RuleError(f"Your spirits' total Force would exceed {d['spirit_force_limit']} (Magic x 3).")
+    pool = pool_by_key(c, "summon", d)
+    parts = pool["parts"] + ([["Wound modifier", d["wound_modifier"]]] if d["wound_modifier"] else [])
+    me = DICE.new_roll(max(1, sum(x[1] for x in parts)))
+    spirit = DICE.new_roll(force * 2)
+    net = me["hits"] - spirit["hits"]
+    drain_dv = spirit["hits"]
+    drain = resist_drain(c, d, drain_dv, "drain")
+    text = (f"summoned a Force {force} {kind} spirit: {me['hits']} vs {spirit['hits']} hits. "
+            + (f"{net} service{'s' if net != 1 else ''}." if net > 0 else "It refused to come.")
+            + f" Drain {drain_dv}: {drain['text']}.")
+    ctx.log.append(text)
+    me["label"] = f"Summon {kind} (Force {force})"
+    me["parts"] = parts
+    ctx.rolls.append(("sr", me))
+    if net > 0:
+        c["spirits"].append({"type": kind, "force": force, "services": net, "bound": False, "notes": ""})
+        return f"The {kind} spirit answers with {net} service{'s' if net != 1 else ''}. Drain: {drain['text']}."
+    return f"The summoning failed. Drain: {drain['text']}."
+
+
+def a_set_spirit(c, p, ctx):
+    i = _list_index(c["spirits"], p.get("index"))
+    s = c["spirits"][i]
+    if "services" in p:
+        s["services"] = max(0, min(30, _int(p["services"])))
+    if "bound" in p:
+        s["bound"] = bool(p["bound"])
+    if "notes" in p:
+        s["notes"] = _clip(p["notes"], 300)
+    if s["services"] <= 0 and p.get("release_when_done", True) and "services" in p:
+        c["spirits"].pop(i)
+        return "Services used up: the spirit departs."
+    return "Saved."
+
+
+def a_release_spirit(c, p, ctx):
+    i = _list_index(c["spirits"], p.get("index"))
+    return f"The {c['spirits'].pop(i)['type']} spirit is released."
+
+
+def a_compile(c, p, ctx):
+    """Compile a sprite: Tasking + Resonance vs Level x 2; tasks = net hits; fading = the sprite's hits."""
+    if c.get("magic_type") != "Technomancer":
+        raise RuleError("Only technomancers compile sprites.")
+    kind = p.get("type")
+    if kind not in M.SPRITES:
+        raise RuleError("Unknown sprite type.")
+    d = derive(c)
+    level = max(1, min(d["attributes"]["Resonance"] * 2, _int(p.get("level"), 1)))
+    if sum(1 for s in c["sprites"] if not s.get("registered")) >= 1 and not ctx.admin:
+        raise RuleError("You can have only one unregistered sprite at a time.")
+    pool = pool_by_key(c, "compile", d)
+    parts = pool["parts"] + ([["Wound modifier", d["wound_modifier"]]] if d["wound_modifier"] else [])
+    me = DICE.new_roll(max(1, sum(x[1] for x in parts)))
+    sprite = DICE.new_roll(level * 2)
+    net = me["hits"] - sprite["hits"]
+    fading = resist_drain(c, d, sprite["hits"], "fading")
+    ctx.log.append(f"compiled a level {level} {kind} sprite: {me['hits']} vs {sprite['hits']} hits. "
+                   + (f"{net} task{'s' if net != 1 else ''}." if net > 0 else "Compilation failed.")
+                   + f" Fading {sprite['hits']}: {fading['text']}.")
+    me["label"] = f"Compile {kind} sprite (level {level})"
+    me["parts"] = parts
+    ctx.rolls.append(("sr", me))
+    if net > 0:
+        c["sprites"].append({"type": kind, "level": level, "tasks": net, "registered": False})
+        return f"The {kind} sprite owes {net} task{'s' if net != 1 else ''}. Fading: {fading['text']}."
+    return f"Compilation failed. Fading: {fading['text']}."
+
+
+def a_set_sprite(c, p, ctx):
+    i = _list_index(c["sprites"], p.get("index"))
+    s = c["sprites"][i]
+    if "tasks" in p:
+        s["tasks"] = max(0, min(30, _int(p["tasks"])))
+    if "registered" in p:
+        want = bool(p["registered"])
+        if want and not s.get("registered"):
+            d = derive(c)
+            if sum(1 for x in c["sprites"] if x.get("registered")) >= d["sprite_limit"] and not ctx.admin:
+                raise RuleError(f"You can register at most {d['sprite_limit']} sprites (your Resonance).")
+        s["registered"] = want
+    if s["tasks"] <= 0 and "tasks" in p:
+        c["sprites"].pop(i)
+        return "Tasks used up: the sprite decompiles."
+    return "Saved."
+
+
+def a_release_sprite(c, p, ctx):
+    i = _list_index(c["sprites"], p.get("index"))
+    return f"The {c['sprites'].pop(i)['type']} sprite is released."
+
+
+# ---- drain / fading
+def resist_drain(c, d, dv, kind="drain"):
+    """Roll drain (or fading) resistance and apply it: Stun, or Physical when it exceeds Magic/Resonance."""
+    dv = max(0, _int(dv))
+    if dv <= 0:
+        return {"dv": 0, "hits": 0, "damage": 0, "track": None, "text": "no drain" if kind == "drain" else "no fading"}
+    if kind == "fading":
+        pool = d["fading_pool"]
+        cap = d["attributes"]["Resonance"]
+    else:
+        pool = d["drain_pool"]
+        cap = d["attributes"]["Magic"]
+    hits = hits_of(pool + (d["wound_modifier"] if d["wound_modifier"] else 0))
+    dmg = max(0, dv - hits)
+    track = "physical" if dv > cap else "stun"
+    if dmg:
+        take_damage(c, track, dmg, drain=True)
+    word = "Physical" if track == "physical" else "Stun"
+    return {"dv": dv, "hits": hits, "damage": dmg, "track": track,
+            "text": f"{hits} hits against {dv}" + (f", took {dmg} {word}" if dmg else ", no damage")}
+
+
+def after_cast(c, sp, ctx, extra_drain=0):
+    """Drain after casting a spell from the roller."""
+    d = derive(c)
+    dv = _int(sp.get("drain")) + max(0, _int(extra_drain))
+    res = resist_drain(c, d, dv, "drain")
+    ctx.log.append(f"drain from {sp['name']} ({dv}): {res['text']}.")
+    return res
+
+
+def after_form(c, f, ctx):
+    d = derive(c)
+    meta = FORMS.get(f.get("name")) or {}
+    res = resist_drain(c, d, meta.get("fade", 0), "fading")
+    ctx.log.append(f"fading from {f['name']} ({meta.get('fade', 0)}): {res['text']}.")
+    return res
+
+
+# ---- damage and healing
+def take_damage(c, track, amount, drain=False):
+    """Add boxes of damage, Stun overflowing into Physical. Resets the 'once per injuries' healing flags."""
+    amount = max(0, _int(amount))
+    if not amount:
+        return
+    d = derive(c)
+    if track == "stun":
+        sd = _int(c["stun_damage"]) + amount
+        if sd > d["stun_boxes"]:
+            over = sd - d["stun_boxes"]
+            sd = d["stun_boxes"]
+            c["physical_damage"] = min(d["physical_boxes"] + d["overflow_boxes"], _int(c["physical_damage"]) + over)
+            if drain:
+                c["drain_phys"] = _int(c.get("drain_phys")) + over
+        if drain:
+            c["drain_stun"] = _int(c.get("drain_stun")) + (sd - _int(c["stun_damage"]))
+        c["stun_damage"] = sd
+    else:
+        c["physical_damage"] = min(d["physical_boxes"] + d["overflow_boxes"], _int(c["physical_damage"]) + amount)
+        if drain:
+            c["drain_phys"] = _int(c.get("drain_phys")) + amount
+    if not drain:
+        c["heal_used"] = {}
+
+
+def heal_boxes(c, track, n, allow_drain=True):
+    """Heal boxes on a track. Overflow (Physical beyond the monitor) heals first."""
+    n = max(0, _int(n))
+    if track == "stun":
+        healable = _int(c["stun_damage"]) - (0 if allow_drain else _int(c.get("drain_stun")))
+        h = min(n, max(0, healable))
+        c["stun_damage"] = _int(c["stun_damage"]) - h
+        if allow_drain:
+            c["drain_stun"] = max(0, min(_int(c.get("drain_stun")) - h, c["stun_damage"]))
+    else:
+        healable = _int(c["physical_damage"]) - (0 if allow_drain else _int(c.get("drain_phys")))
+        h = min(n, max(0, healable))
+        c["physical_damage"] = _int(c["physical_damage"]) - h
+        if allow_drain:
+            c["drain_phys"] = max(0, min(_int(c.get("drain_phys")) - h, c["physical_damage"]))
+    return h
+
+
+def a_set_damage(c, p, ctx):
+    track = p.get("track")
+    if track not in ("physical", "stun"):
+        raise RuleError("Unknown track.")
+    d = derive(c)
+    v = max(0, _int(p.get("value")))
+    key = f"{track}_damage"
+    cur = _int(c[key])
+    if v > cur:
+        if track == "stun" and v > d["stun_boxes"]:
+            take_damage(c, "stun", v - cur)
+        else:
+            take_damage(c, track, v - cur)
+    else:
+        heal_boxes(c, track, cur - v)
+    return "Condition updated."
+
+
+def a_damage(c, p, ctx):
+    track = p.get("track")
+    n = _int(p.get("amount"))
+    if track not in ("physical", "stun") or n == 0:
+        raise RuleError("Bad damage.")
+    if n > 0:
+        take_damage(c, track, n)
+    else:
+        heal_boxes(c, track, -n)
+    return f"{abs(n)} {track.capitalize()} {'healed' if n < 0 else 'taken'}."
+
+
+def heal_threshold(patient_d):
+    return max(0, int(math.ceil(5 - patient_d["essence"] - 1e-9)))
+
+
+def apply_heal(c, method, hits, ctx):
+    """Apply a healing test's hits to a patient (after the healer rolled). Returns a description."""
+    d = derive(c)
+    used = c.setdefault("heal_used", {})
+    if method in ("first_aid", "medkit", "magic"):
+        if used.get(method):
+            raise RuleError(f"This set of injuries already received {method.replace('_', ' ')}.")
+        thr = heal_threshold(d)
+        net = hits - thr
+        used[method] = True
+        if net <= 0:
+            return f"{hits} hits vs threshold {thr}: no healing."
+        healed = []
+        over = max(0, _int(c["physical_damage"]) - d["physical_boxes"])
+        if method == "first_aid":
+            # 1 Stun per hit (not drain), or 1 Physical/Overflow per 2 hits; Overflow first, then Physical, then Stun
+            pts = net
+            hp = 0
+            while pts >= 2 and _int(c["physical_damage"]) - _int(c.get("drain_phys")) > 0:
+                hp += heal_boxes(c, "physical", 1, allow_drain=False)
+                pts -= 2
+            hs = heal_boxes(c, "stun", pts, allow_drain=False)
+            healed = [f"{hp} Physical" if hp else "", f"{hs} Stun" if hs else ""]
+        else:
+            pts = net
+            hp = heal_boxes(c, "physical", min(pts, over), allow_drain=False) if over else 0
+            pts -= hp
+            hp2 = heal_boxes(c, "physical", pts, allow_drain=False)
+            pts -= hp2
+            hs = heal_boxes(c, "stun", pts, allow_drain=False)
+            healed = [f"{hp} Overflow" if hp else "", f"{hp2} Physical" if hp2 else "", f"{hs} Stun" if hs else ""]
+        txt = ", ".join(x for x in healed if x) or "nothing left to heal"
+        return f"{hits} hits vs threshold {thr}: healed {txt}."
+    if method == "natural_stun":
+        h = heal_boxes(c, "stun", hits)
+        return f"an hour of rest: {hits} hits, healed {h} Stun."
+    if method == "natural_physical":
+        h = heal_boxes(c, "physical", hits)
+        return f"a day of rest: {hits} hits, healed {h} Physical."
+    raise RuleError("Unknown healing method.")
+
+
+def natural_pool(c, method, assisted=False):
+    d = derive(c)
+    A = d["attributes"]
+    if method == "natural_stun":
+        parts = [["Body", A["Body"]], ["Willpower", A["Willpower"]]]
+    else:
+        parts = [["Body", A["Body"]], ["Body", A["Body"]]]
+        over = max(0, d["physical_damage"] - d["physical_boxes"])
+        if over and d["wound_modifier"]:
+            parts.append(["Wound modifier", d["wound_modifier"]])
+    if assisted:
+        parts.append(["Medical attention", 2])
+    for it in implants(c):
+        if _int(it.get("heal_bonus")):
+            parts.append([it["name"], _int(it["heal_bonus"])])
+    return parts
+
+
+# ---- statuses (GM)
+def a_set_status(c, p, ctx):
+    name = p.get("status")
+    if name not in K.STATUSES:
+        raise RuleError("Unknown status.")
+    st = c.setdefault("statuses", {})
+    if p.get("on"):
+        meta = K.STATUSES[name]
+        val = _int(p.get("value"), 1) if (meta.get("value") or meta.get("levels")) else True
+        st[name] = val
+    else:
+        st.pop(name, None)
+    return f"{name} {'on' if p.get('on') else 'off'}."
 
 
 # ---- GM-only
 def a_admin_set(c, p, ctx):
-    """GM override for karma / nuyen / current edge (absolute values)."""
-    if not ctx.admin:
-        raise RuleError("Only the GM can do that.")
     for k in ("karma", "nuyen"):
         if k in p:
             v = _int(p[k], c[k])
@@ -888,23 +1988,42 @@ def a_admin_set(c, p, ctx):
                 c[k] = v
     if "current_edge" in p:
         c["current_edge"] = max(0, min(EDGE_CAP, _int(p["current_edge"])))
+    for k in ("initiation_grade", "submersion_grade"):
+        if k in p:
+            c[k] = max(0, min(20, _int(p[k])))
     return "Saved."
 
 
+def a_set_ammo(c, p, ctx):
+    """GM: set a weapon's loaded rounds directly."""
+    it = find_item(c, p.get("uid"))
+    if not it.get("clip"):
+        raise RuleError("That weapon doesn't take ammunition.")
+    it.setdefault("loaded", {"rounds": 0, "type": "Regular"})["rounds"] = max(0, min(it["clip"], _int(p.get("rounds"))))
+    return "Ammo updated."
+
+
 ACTIONS = {
-    "set_info": a_set_info, "set_portrait": a_set_portrait, "pay_lifestyle": a_pay_lifestyle,
-    "trade_karma": a_trade_karma,
+    "set_info": a_set_info, "set_portrait": a_set_portrait, "trade_karma": a_trade_karma,
     "set_attribute": a_set_attribute, "raise_attribute": a_raise_attribute, "autoroll": a_autoroll,
-    "set_skill": a_set_skill,
-    "add_quality": a_add_quality, "remove_quality": a_remove_quality,
-    "buy": a_buy, "edit_item": a_edit_item, "toggle_equipped": a_toggle_equipped, "remove_item": a_remove_item,
-    "use_medkit": a_use_medkit, "rest": a_rest, "set_damage": a_set_damage, "damage": a_damage,
-    "save_contact": a_save_contact, "remove_contact": a_remove_contact,
-    "save_spell": a_save_spell, "remove_spell": a_remove_spell,
-    "save_power": a_save_power, "remove_power": a_remove_power,
-    "save_focus": a_save_focus, "bond_focus": a_bond_focus, "remove_focus": a_remove_focus,
-    "admin_set": a_admin_set,
+    "set_skill": a_set_skill, "set_spec": a_set_spec, "set_expertise": a_set_expertise,
+    "add_knowledge": a_add_knowledge, "remove_knowledge": a_remove_knowledge,
+    "set_language": a_set_language, "remove_language": a_remove_language,
+    "add_quality": a_add_quality, "remove_quality": a_remove_quality, "set_quality_level": a_set_quality_level,
+    "buy": a_buy, "buy_custom": a_buy_custom, "give": a_give, "edit_item": a_edit_item,
+    "toggle_equipped": a_toggle_equipped, "remove_item": a_remove_item, "sell_item": a_sell_item,
+    "reload": a_reload, "unload": a_unload, "bond_focus": a_bond_focus, "set_vehicle_damage": a_set_vehicle_damage,
+    "set_program": a_set_program, "set_matrix": a_set_matrix,
+    "save_contact": a_save_contact, "remove_contact": a_remove_contact, "verify_contact": a_verify_contact,
+    "learn_spell": a_learn_spell, "forget_spell": a_forget_spell,
+    "set_power": a_set_power, "remove_power": a_remove_power, "buy_power_point": a_buy_power_point,
+    "initiate": a_initiate, "learn_form": a_learn_form, "forget_form": a_forget_form,
+    "summon": a_summon, "set_spirit": a_set_spirit, "release_spirit": a_release_spirit,
+    "compile": a_compile, "set_sprite": a_set_sprite, "release_sprite": a_release_sprite,
+    "set_damage": a_set_damage, "damage": a_damage,
+    "set_status": a_set_status, "admin_set": a_admin_set, "set_ammo": a_set_ammo,
 }
+ADMIN_ONLY = {"give", "verify_contact", "set_status", "admin_set", "set_ammo"}
 
 
 # --------------------------------------------------------------------------- edge outside rolls

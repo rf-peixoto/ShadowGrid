@@ -126,14 +126,30 @@ $('iso-toggle').onchange = e => setIso(e.target.checked);
 function applyView(v) {
   S.st.view = v; S.ghost = null; S.pathCache = null;
   $('map-empty').hidden = !!v.map;
-  if (!v.map) { S.map = null; $('p-help').textContent = 'Your GM has not placed you on a map yet. This page updates on its own.'; renderActions(); invalidate(); return; }
+  if (!v.map) { S.map = null; $('p-help').textContent = 'Your GM has not placed you on a map yet. This page updates on its own.'; renderActions(); renderTracker(); invalidate(); return; }
   $('p-help').textContent = v.token ? `${v.map.name}. Drag your token or click a room you can reach. Doors on your cell open below or by clicking them.` : `${v.map.name}. Waiting for the GM to place your token.`;
   const m = v.map;
   S.map = { gridType: m.gridType, width: m.width, height: m.height, cellSize: m.cellSize,
     settings: { colors: m.settings.colors, showGrid: m.settings.showGrid }, data: { cells: m.cells, markers: m.markers, rooms: [] } };
   S.explored = new Set(Object.keys(m.cells).filter(k => m.cells[k].vis === 'full'));
   if (!S.fitted || S.lastMapId !== m.id) { if (S.view === 'map') { focusToken(); S.fitted = true; S.lastMapId = m.id; } }
-  renderActions(); renderLegend(); invalidate();
+  renderActions(); renderLegend(); renderTracker(); invalidate();
+}
+/* initiative order, when the GM shows it */
+function renderTracker() {
+  const t = S.st && S.st.view.tracker, panel = $('tracker-panel');
+  panel.hidden = !t;
+  if (!t) return;
+  $('p-round').textContent = `round ${t.round}`;
+  const el = $('p-tracker'); el.innerHTML = '';
+  for (const e of t.entries) {
+    const mine = e.kind === 'player' && e.ref === S.st.me.id;
+    el.append(h('div.tr-row' + (e.current ? '.current' : '') + (mine ? '.mine' : ''), h('span.dot', { style: { background: e.color } }),
+      h('span.grow', e.name), e.minor ? h('span.hint', { title: '1 Major + Minor actions' }, `1+${e.minor}`) : null, h('b', e.total == null ? '—' : e.total)));
+  }
+  const me = t.entries.find(e => e.kind === 'player' && e.ref === S.st.me.id);
+  if (!me || me.total == null) el.append(h('p.hint', 'Roll your initiative from the dice panel.'));
+  else if (me.current) el.append(h('p.good', 'Your turn!'));
 }
 /* fit the map, then zoom in on our own token so the explored area is readable */
 function focusToken() {
@@ -147,7 +163,7 @@ function token() { return S.ghost || (S.st && S.st.view.token); }
 function viewModel() {
   const tokens = (S.st.view.others || []).map(o => ({ ...o, me: false }));
   const t = token();
-  if (t) tokens.push({ c: t.c, r: t.r, color: S.st.me.color, name: S.st.me.name, me: true, cm: S.st.me.cm });
+  if (t) tokens.push({ c: t.c, r: t.r, color: S.st.me.color, name: S.st.me.name, me: true, cm: S.st.me.cm, statuses: S.st.me.statuses });
   return { mode: 'player', explored: S.explored, mapStation: !!S.st.view.map.mapStation, tokens };
 }
 function pathTo(cell) {
@@ -329,47 +345,102 @@ window.addEventListener('keyup', ev => { if (ev.code === 'Space') { S.spaceDown 
 new ResizeObserver(() => requestDraw()).observe(wrap);
 
 // ================================================================ store
+function setStoreCat(c) { S.storeCat = c || 'All'; }
 function renderStore() {
   if (!CAT || !S.sheet) return;
-  const ch = S.sheet.char, locked = S.sheet.locked;
+  const ch = S.sheet.char, sh = S.sheet, approved = sh.approved;
   $('store-nuyen').textContent = money(ch.nuyen);
-  $('store-note').replaceChildren(locked ? h('div.banner', h('p', 'Your sheet is approved: purchases are final.')) :
-    h('div.banner.info', h('p', 'Character creation: anything you buy can be returned for a full refund from the Gear section of your character.')));
+  $('store-custom').hidden = approved;
+  $('store-note').replaceChildren(approved ? h('div.banner', h('p', `Purchases are final. You can buy legal gear up to Availability ${CAT.store.alwaysAvail}; anything else needs a contact who covers it with a Connection higher than its Availability. The store buys gear back at ${sh.sellPct}%.`,
+    h('button.small', { type: 'button', onclick: () => { setView('sheet'); sheetUI.go('contacts'); } }, 'My contacts ›'))) :
+    h('div.banner.info', h('p', `Character creation: everything up to Availability ${CAT.store.creationMaxAvail} is on sale, and anything you buy can be returned for a full refund from the Gear section of your character.`)));
   const cats = $('store-cats'); cats.innerHTML = '';
-  for (const c of ['All', ...CAT.gearCategories]) cats.append(h('button' + (S.storeCat === c ? '.active' : ''), { type: 'button', onclick: () => { S.storeCat = c; renderStore(); } }, c));
+  for (const c of ['All', ...CAT.store.categories]) cats.append(h('button' + (S.storeCat === c ? '.active' : ''), { type: 'button', onclick: () => { S.storeCat = c; renderStore(); } }, c));
   const q = $('store-search').value.trim().toLowerCase();
+  const only = $('store-avail-only').checked;
   const grid = $('store-grid'); grid.innerHTML = '';
-  const owned = {}; for (const c of CAT.gearCategories) for (const it of ch.gear[c] || []) owned[it.name] = (owned[it.name] || 0) + 1;
-  let n = 0;
-  for (const cat of CAT.gearCategories) {
-    if (S.storeCat !== 'All' && S.storeCat !== cat) continue;
-    CAT.gear[cat].forEach((it, i) => {
-      if (q && !JSON.stringify(it).toLowerCase().includes(q)) return;
-      n++;
-      const short = it.Price > ch.nuyen;
-      grid.append(h('div.item-card', h('div.cat', cat + (it.Type ? ' · ' + it.Type : '')), h('h4', it.name, owned[it.name] ? h('span.tag.approved', { style: { marginLeft: '.4rem' } }, `owned ×${owned[it.name]}`) : null),
-        SR.itemDetails(it, ['Type']),
-        h('div.buy', h('span.price' + (short ? '.short' : ''), money(it.Price)),
-          h('button.primary.small', { type: 'button', disabled: short, title: short ? `You need ${money(it.Price - ch.nuyen)} more` : '', onclick: () => buy(cat, { index: i }, it) }, short ? 'Not enough ¥' : 'Buy'))));
-    });
+  const owned = {}; for (const it of ch.inventory) if (it.ref) owned[it.ref] = (owned[it.ref] || 0) + (it.unit ? 1 : (it.qty || 1));
+  let n = 0, hidden = 0, lastSub = null;
+  for (const e of CAT.store.items) {
+    if (S.storeCat !== 'All' && S.storeCat !== e.cat) continue;
+    if (q && !(e.name + ' ' + e.sub + ' ' + (e.desc || '')).toLowerCase().includes(q)) continue;
+    const acc = sh.store[e.id] || [true, '', 0];
+    if (only && !acc[0]) { hidden++; continue; }
+    n++;
+    const sub = `${e.cat} · ${e.sub}`;
+    if (sub !== lastSub && !q) { grid.append(h('h3.store-sub', sub)); lastSub = sub; }
+    grid.append(storeCard(e, acc, owned[e.id]));
   }
-  if (!n) grid.append(h('p.empty', 'Nothing matches. Try another search, or create a custom item.'));
+  if (!n) grid.append(h('p.empty', hidden ? 'Nothing you can get here yet. Untick “Only what I can get” to see what your contacts would need.' : 'Nothing matches. Try another search.'));
+  else if (hidden) grid.append(h('p.hint', `${hidden} item${hidden > 1 ? 's' : ''} hidden: none of your contacts can get them.`));
 }
-async function buy(category, payload, it) {
-  if (S.sheet.locked && !await UI.confirm(`Buy ${it.name} for ${money(it.Price || 0)}? Purchases are final.`, { ok: 'Buy' })) return;
-  try {
-    const sh = await api('/api/me/sheet/action', 'POST', { action: 'buy', category, ...payload });
-    sheetUI.setSheet(sh);
-    toast(sh.message);
-  } catch (e) { toast(e.message, 4000); }
+function storeCard(e, acc, owned) {
+  const ch = S.sheet.char, ok = acc[0];
+  const rating = e.rating ? h('input', { type: 'number', min: e.rating[0], max: e.rating[1], value: e.rating[0], title: `Rating ${e.rating[0]}-${e.rating[1]}` }) : null;
+  const grade = e.implant ? h('select', { title: 'Implant grade' }, Object.keys(CAT.store.grades).map(g => option(g, g === 'Standard' ? 'Standard grade' : g))) : null;
+  const qty = !e.implant && !e.rating ? h('input', { type: 'number', min: 1, max: 100, value: 1, title: e.sub === 'Ammunition' ? 'Boxes of 10' : 'Quantity' }) : null;
+  const priceEl = h('span.price'), availEl = h('span.hint'), whyEl = h('p.why');
+  const btn = h('button.primary.small', { type: 'button' });
+  const metaMult = (ch.metatype === 'Troll' || (ch.metatype === 'Dwarf' && e.cat === 'Armor')) ? 1.1 : 1;
+  function calc() {
+    let cost = e.costN, av = e.availN, legal = e.legalN, ess = e.essenceN ?? null, r = 1;
+    if (e.byRating) {
+      r = Math.max(e.rating[0], Math.min(e.rating[1], +rating.value || e.rating[0]));
+      const row = e.byRating.find(x => x[0] === r) || e.byRating[0];
+      [, cost, av, legal] = row; ess = e.implant ? row[4] : null;
+    }
+    if (grade) { const g = CAT.store.grades[grade.value]; cost *= g.cost; av = Math.max(0, av + g.avail); if (ess != null) ess = Math.round(ess * g.essence * 100) / 100; }
+    cost = Math.ceil(cost * metaMult - 1e-9);
+    const n = qty ? Math.max(1, +qty.value || 1) : 1;
+    const total = cost * n;
+    const reach = availOk(av, legal, e.supply);
+    priceEl.textContent = money(total) + (n > 1 ? ` (${money(cost)} each)` : '');
+    priceEl.classList.toggle('short', total > ch.nuyen);
+    availEl.textContent = `Avail ${SR.availText(av, legal)}` + (ess != null ? ` · Essence ${ess}` : '');
+    btn.textContent = !reach[0] ? 'Unavailable' : total > ch.nuyen ? 'Not enough ¥' : 'Buy';
+    btn.disabled = !reach[0] || total > ch.nuyen;
+    btn.title = !reach[0] ? reach[1] : total > ch.nuyen ? `You need ${money(total - ch.nuyen)} more` : '';
+    whyEl.textContent = reach[0] ? '' : '🔒 ' + reach[1];
+    whyEl.hidden = reach[0];
+    return { r, n, total, cost };
+  }
+  for (const el of [rating, grade, qty]) if (el) el.oninput = el.onchange = calc;
+  btn.onclick = async () => {
+    const v = calc();
+    if (S.sheet.approved && !await UI.confirm(`Buy ${v.n > 1 ? v.n + ' × ' : ''}${e.name}${rating ? ' ' + v.r : ''}${grade && grade.value !== 'Standard' ? ' (' + grade.value + ')' : ''} for ${money(v.total)}? Purchases are final.${e.implant ? ' Surgery leaves you with some damage to heal.' : ''}`, { ok: 'Buy' })) return;
+    try {
+      const sh = await api('/api/me/sheet/action', 'POST', { action: 'buy', ref: e.id, rating: v.r, grade: grade ? grade.value : 'Standard', qty: v.n });
+      sheetUI.setSheet(sh); toast(sh.message);
+    } catch (err) { toast(err.message, 4500); }
+  };
+  const card = h('div.item-card' + (ok ? '' : '.locked'),
+    h('div.cat', e.sub + (owned ? '' : '')), h('h4', e.name, owned ? h('span.tag.approved', { style: { marginLeft: '.4rem' } }, `owned ×${owned}`) : null),
+    h('p.stats', SR.itemStats(e)), e.desc ? h('p.hint', e.desc) : null,
+    whyEl,
+    h('div.buy-opts', rating ? h('label', 'Rating', rating) : null, grade, qty ? h('label', e.sub === 'Ammunition' ? 'Boxes' : 'Qty', qty) : null),
+    h('div.buy', h('div.col', priceEl, availEl), btn));
+  calc();
+  return card;
+}
+/* same contact rule as the server: creation limit, always-available legal items, or a confirmed contact
+   who covers the goods and whose Connection is higher than the Availability */
+function availOk(av, legal, supply) {
+  const sh = S.sheet;
+  if (!sh.approved) return av <= CAT.store.creationMaxAvail ? [true, ''] : [false, `Availability ${av}: above the creation limit of ${CAT.store.creationMaxAvail}.`];
+  if (av <= CAT.store.alwaysAvail && legal !== 'I') return [true, ''];
+  for (const ct of sh.char.contacts) {
+    if (ct.verified === false) continue;
+    const sup = ct.supply || [];
+    if ((sup.includes(supply) || sup.includes('Fixer')) && ct.connection > av) return [true, ct.name];
+  }
+  return [false, `Needs a contact for ${supply} with Connection ${av + 1} or more.`];
 }
 $('store-search').oninput = () => renderStore();
+$('store-avail-only').onchange = () => renderStore();
 $('store-custom').onclick = async () => {
-  const cat = h('select', CAT.gearCategories.map(c => option(c, c, c === S.storeCat)));
-  const ok = await UI.modal('Custom item', h('div', h('label.stack', 'Category', cat), h('p.hint', 'For gear that is not in the list. You pay the price you enter; your GM sees custom items marked as “custom”.')), { ok: 'Next', narrow: true });
-  if (!ok) return;
-  const it = await SR.editItem(cat.value, {}, { title: `Custom ${cat.value}`, ok: 'Buy' });
-  if (it) buy(cat.value, { item: it }, it);
+  const it = await SR.editItem({}, { title: 'Custom item', ok: 'Buy', cat: S.storeCat !== 'All' ? S.storeCat : 'Survival' });
+  if (!it) return;
+  try { const sh = await api('/api/me/sheet/action', 'POST', { action: 'buy_custom', item: it }); sheetUI.setSheet(sh); toast(sh.message); } catch (e) { toast(e.message, 4000); }
 };
 
 // ================================================================ runs
@@ -400,7 +471,7 @@ async function boot() {
     CAT = await SR.catalog();
     await refresh(true);
     sheetUI = Sheet.mount($('sheet-root'), { gm: false, sheetUrl: '/api/me/sheet', actionUrl: '/api/me/sheet/action', post, onSheet,
-      openStore: () => setView('store'), log: () => (S.st ? S.st.rolls : []), onRolled });
+      openStore: cat => { if (cat) setStoreCat(cat); setView('store'); }, log: () => (S.st ? S.st.rolls : []), onRolled });
     await sheetUI.load();
     S.sheetRev = S.st.sheetRev;
     mapRoller = SR.roller({ compact: true, getSheet: () => S.sheet, post, onRolled });

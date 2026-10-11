@@ -40,6 +40,10 @@
         <p class="hint" id="p-help">Waiting for the game master to place you on a map.</p>
         <div id="p-actions" class="col"></div>
       </div>
+      <details class="tool-group" open id="tracker-panel" hidden>
+        <summary>Initiative <span class="hint" id="p-round"></span></summary>
+        <div id="p-tracker" class="tracker"></div>
+      </details>
       <details class="tool-group" open>
         <summary>Condition</summary>
         <div id="p-condition" class="col"></div>
@@ -76,6 +80,7 @@
   <div id="store-note"></div>
   <div class="store-head">
     <input type="search" id="store-search" placeholder="Search gear…" aria-label="Search the store">
+    <label class="check" title="Hide items none of your contacts can get"><input type="checkbox" id="store-avail-only" checked> Only what I can get</label>
     <button id="store-custom">Custom item…</button>
   </div>
   <div class="cat-chips" id="store-cats"></div>

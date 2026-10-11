@@ -163,14 +163,39 @@ function drawMarker(g, x, y, d, typeId, color, textColor, pixel) {
   }
 }
 
-/* Shadowrun condition monitor: {p, pm, s, sm, ov} -> status word */
+/* Shadowrun condition monitor: {p, pm, s, sm, ov, grunt?, last?} -> status word.
+   Grunts have one track; what hit them last decides between bleeding out and knocked out. */
 function cmStatus(cm) {
   if (!cm) return 'OK';
-  if (cm.pm && cm.p > cm.pm + (cm.ov || 0)) return 'Dead';
+  if (cm.status && !cm.grunt) return cm.status;
+  if (cm.grunt) {
+    if (cm.pm && cm.p >= cm.pm) return cm.last === 'S' ? 'Unconscious' : 'Dying';
+    return cm.p ? 'Wounded' : 'OK';
+  }
+  if (cm.pm && cm.ov && cm.p >= cm.pm + cm.ov) return 'Dead';
   if (cm.pm && cm.p >= cm.pm) return 'Dying';
   if (cm.sm && cm.s >= cm.sm) return 'Unconscious';
   if ((cm.p || 0) + (cm.s || 0) > 0) return 'Wounded';
   return 'OK';
+}
+/* status effects (Prone, Burning…) drawn as a row of small icons above a token or marker */
+const STATUS_ICONS = { Blinded: '👁', Burning: '🔥', Chilled: '❄', Confused: '❓', Corrosive: '🧪', Cover: '🛡', Dazed: '💫',
+  Deafened: '🔇', Fatigued: '😩', Frightened: '😱', Hazed: '🌫', Hobbled: '🦶', Immobilized: '⛓', Invisible: '👻',
+  Nauseated: '🤢', Panicked: '🏃', Petrified: '🗿', Poisoned: '☠', Prone: '⬇', Silent: '🤫', Stilled: '⏸', Wet: '💧', Zapped: '⚡' };
+function drawStatuses(g, x, y, size, statuses) {
+  const names = Object.keys(statuses || {});
+  if (!names.length) return;
+  const s = Math.max(9, size * 0.34), gap = s * 0.1, total = names.length * (s + gap) - gap;
+  let cx = x - total / 2 + s / 2;
+  g.font = `${Math.round(s * 0.78)}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (const n of names) {
+    g.fillStyle = 'rgba(5,10,12,.82)'; g.beginPath(); g.arc(cx, y, s / 2, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#ff2f7d'; g.lineWidth = 1; g.stroke();
+    g.fillStyle = '#fff'; g.fillText(STATUS_ICONS[n] || n.charAt(0), cx, y + s * 0.04);
+    const v = statuses[n];
+    if (v !== true && v > 1) { g.font = `bold ${Math.round(s * 0.42)}px ${FONT}`; g.fillStyle = '#ffd23f'; g.fillText(String(v), cx + s * 0.38, y + s * 0.34); g.font = `${Math.round(s * 0.78)}px ${FONT}`; }
+    cx += s + gap;
+  }
 }
 const STATUS_COLOR = { OK: '#6dff9c', Wounded: '#ffd23f', Unconscious: '#b98cff', Dying: '#ff4053', Dead: '#7f9b98' };
 function drawCM(g, x, y, size, cm, pixel) {
@@ -210,6 +235,7 @@ function drawToken(g, x, y, d, tok, col, pixel) {
   g.fillText((tok.name || '?').trim().charAt(0).toUpperCase(), R(x), R(y + d * 0.04));
   g.globalAlpha = 1;
   drawCM(g, x, y + d * 0.72, d, tok.cm, pixel);
+  if (tok.statuses) drawStatuses(g, x, y - d * 0.78, d, tok.statuses);
 }
 
 // ---------------------------------------------------------------- scene
@@ -318,6 +344,7 @@ function renderScene(g, map, view, opts) {
     if (m.hidden) g.globalAlpha = 0.45;
     drawMarker(g, x, y, size * 0.62, m.type, m.color || col.markerDefault, col.markerText, pixel);
     if (m.cm) drawCM(g, x, y + size * 0.45, size * 0.62, m.cm, pixel);
+    if (m.statuses) drawStatuses(g, x, y - size * 0.5, size * 0.62, m.statuses);
     if (m.hidden) {
       g.globalAlpha = 1; g.strokeStyle = col.highlight; g.lineWidth = Math.max(1, size / 20); g.setLineDash([3, 2]);
       g.beginPath(); g.arc(Math.round(x), Math.round(y), size * 0.4, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
@@ -366,6 +393,7 @@ function renderSprites(g, map, view, vp, opts = {}) {
       g.globalAlpha = 1;
       if (m.hidden) { g.strokeStyle = col.highlight; g.lineWidth = 1.5; g.setLineDash([3, 2]); g.beginPath(); g.arc(p.x, p.y - lift, d * 0.66, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); }
       if (m.cm) drawCM(g, p.x, p.y - lift - d * 0.85, d, m.cm, false);
+      if (m.statuses) drawStatuses(g, p.x, p.y - lift - d * (m.cm ? 1.25 : 0.95), d, m.statuses);
     } });
   }
   for (const t of (view.tokens || [])) {
@@ -393,8 +421,9 @@ function drawTokenSprite(g, x, y, d, tok, col) {
   // a small "stand" between the ground and the token, like a miniature
   g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = Math.max(1, d / 12);
   g.beginPath(); g.moveTo(x, y); g.lineTo(x, y - lift); g.stroke();
-  drawToken(g, x, y - lift, d, Object.assign({}, tok, { cm: null }), col, false);
+  drawToken(g, x, y - lift, d, Object.assign({}, tok, { cm: null, statuses: null }), col, false);
   if (tok.cm) drawCM(g, x, y - lift - d * 0.85, d, tok.cm, false);
+  if (tok.statuses) drawStatuses(g, x, y - lift - d * (tok.cm ? 1.25 : 0.95), d, tok.statuses);
 }
 /* screen-space label box (hover text) */
 function drawLabel(g, x, y, text, size) {
@@ -571,5 +600,5 @@ function drawIsoLayers(ctx, L, vp, dpr, cs) {
   ctx.setTransform(...M); ctx.drawImage(L.floor, 0, 0, wq, hq);
 }
 
-return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT };
+return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT };
 })();

@@ -1,5 +1,5 @@
 /* Shadowrun UI building blocks shared by the player app and the GM pages:
-   condition monitors, Edge pips, status tags, the dice roller, the table log and the item editor. */
+   condition monitors, Edge pips, status tags, the dice roller, the table log, store helpers and the item editor. */
 window.SR = (() => {
 'use strict';
 let CAT = null;
@@ -15,22 +15,34 @@ function pips(cur, max, cap = 7) {
   for (let i = 0; i < Math.min(cap, n); i++) el.append(h('span.pip' + (i < cur ? '.on' : '') + (i >= max ? '.over' : '')));
   return el;
 }
+/* status effects as small chips: {Prone: true, Burning: 3} */
+function statusChips(statuses, { onRemove } = {}) {
+  const names = Object.keys(statuses || {});
+  if (!names.length) return null;
+  return h('span.status-chips', names.map(n => {
+    const v = statuses[n], meta = (CAT && CAT.statuses[n]) || {};
+    return h('span.status-chip', { title: `${n}${v !== true ? ' ' + v : ''}: ${meta.desc || ''}` }, `${meta.icon || ''} ${n}${v !== true && v > 0 ? ' ' + v : ''}`,
+      onRemove ? h('button.x', { type: 'button', title: 'Remove', onclick: () => onRemove(n) }, '×') : null);
+  }));
+}
 
 // ---------------------------------------------------------------- condition monitor
-/* cm = {p, pm, s, sm, ov}; onSet(track, value) makes boxes clickable. */
-function monitor(track, cm, { onSet, compact = false, showTools = true } = {}) {
+/* cm = {p, pm, s, sm, ov, grunt?}; onSet(track, value) makes boxes clickable.
+   Physical shows its overflow boxes after the track; filling them all means death. */
+function monitor(track, cm, { onSet, compact = false, showTools = true, label } = {}) {
   const isP = track === 'physical';
   const dmg = isP ? cm.p : cm.s, max = isP ? cm.pm : cm.sm, ov = isP ? (cm.ov || 0) : 0;
+  const step = cm.grunt ? 2 : 3;
   const boxes = h('div.boxes' + (onSet ? '' : '.readonly') + (compact ? '.compact' : ''));
   const total = max + ov;
   for (let i = 0; i < total; i++) {
     const over = i >= max;
-    const b = h(onSet ? 'button.box' : 'span.box', { type: 'button', title: over ? `Overflow ${i - max + 1} / ${ov}` : `Box ${i + 1}`,
-      class: (isP ? 'p' : 's') + (i < dmg ? ' on' : '') + (over ? ' ov' : '') }, compact ? '' : (over ? '+' : (i + 1) % 3 === 0 ? `-${(i + 1) / 3}` : ''));
+    const b = h(onSet ? 'button.box' : 'span.box', { type: 'button', title: over ? `Overflow ${i - max + 1} / ${ov}${i === total - 1 ? ' (death)' : ''}` : `Box ${i + 1}`,
+      class: (isP ? 'p' : 's') + (i < dmg ? ' on' : '') + (over ? ' ov' : '') }, compact ? '' : (over ? '+' : (i + 1) % step === 0 ? `-${(i + 1) / step}` : ''));
     if (onSet) b.onclick = () => onSet(track, i < dmg ? i : i + 1);
     boxes.append(b);
   }
-  const head = h('div.head', h('span', isP ? 'Physical' : 'Stun'),
+  const head = h('div.head', h('span', label || (cm.grunt ? 'Condition' : isP ? 'Physical' : 'Stun')),
     h('b', `${Math.min(dmg, max)} / ${max}`, ov && dmg > max ? h('span.bad', ` +${dmg - max} overflow`) : ''));
   const el = h('div.monitor', head, boxes);
   if (onSet && showTools) {
@@ -74,22 +86,38 @@ function hitsLine(r) {
 function breakdown(parts) {
   return (parts || []).map(([k, v], i) => i === 0 ? `${k} ${v}` : `${v >= 0 ? '+' : '−'} ${k} ${Math.abs(v)}`).join('  ');
 }
+const sum = parts => Math.max(0, (parts || []).reduce((a, p) => a + p[1], 0));
 
 // ---------------------------------------------------------------- table log
-function logEntry(r, { mine } = {}) {
+function attackEntry(r, e, who) {
+  const d = r.data;
+  e.classList.add('attack');
+  e.append(h('div.line1', who, h('span.what', (r.hidden ? '🔒 ' : '') + `${d.attacker} → ${d.target}`),
+    h('span.verdict.' + (d.hit ? 'success' : 'failure'), d.hit ? (d.damage ? `${d.damage}${d.type === 'S' ? 'S' : 'P'}` : 'SOAKED') : 'MISS')));
+  const row = (label, part) => part ? h('div.atk-row', h('span.k', label), h('span.dice-row', (part.dice || []).map((x, i) => dieEl(x, i, { small: true }))),
+    h('b', { title: breakdown(part.parts) }, part.unopposed ? 'unopposed' : `${part.hits} hits`)) : null;
+  e.append(row(d.weapon + (d.mode ? ` (${d.mode})` : ''), d.attack), row('Defense', d.defense), d.soak ? row('Soak', d.soak) : null);
+  const meta = [d.range, d.ar != null ? `AR ${d.ar} vs DR ${d.dr}` : null, d.edge_hint ? `${d.edge_hint === 'attacker' ? 'attacker' : 'defender'} may gain 1 Edge` : null,
+    d.hit ? `DV ${d.dv}${d.type}` : null, ...(d.notes || []), (d.effects || []).length ? 'statuses: ' + d.effects.map(x => x[0]).join(', ') : null,
+    d.targetStatus && d.targetStatus !== 'OK' ? d.target + ': ' + d.targetStatus : null].filter(Boolean).join(' · ');
+  e.append(h('div.meta', meta, ' · ', timeAgo(r.at)));
+  return e;
+}
+function logEntry(r) {
   const d = r.data || {};
   const e = h('div.log-entry' + (r.kind === 'note' ? '.note' : '') + (r.hidden ? '.hidden' : ''), { style: { borderLeftColor: r.color } });
   const who = h('span.who', { style: { color: r.color } }, r.who);
-  if (r.kind === 'note') { e.append(h('div.line1', who, h('span.what', d.text))); return e; }
+  if (r.kind === 'note') { e.append(h('div.line1', who, h('span.what', (r.hidden ? '🔒 ' : '') + d.text))); return e; }
+  if (r.kind === 'attack') return attackEntry(r, e, who);
   if (r.kind === 'init') {
     e.append(h('div.line1', who, h('span.what', d.label || 'Initiative'), h('span.score', d.total)));
-    e.append(h('div.meta', `${d.score} + ${d.dice.join(' + ')}${d.bonus ? ' + ' + d.bonus : ''}`));
+    e.append(h('div.meta', `${d.score} + ${d.dice.join(' + ')}${d.bonus ? ' + ' + d.bonus : ''}` + (d.actions ? ` · 1 Major, ${d.actions.minor} Minor` : '')));
     return e;
   }
   e.append(h('div.line1', who, h('span.what', (r.hidden ? '🔒 ' : '') + (d.label || 'Roll')), h('span.score', { title: 'hits' }, d.hits), verdict(d)));
   const dice = h('div.dice-row'); (d.dice || []).forEach((x, i) => dice.append(dieEl(x, i, { small: true })));
   e.append(dice);
-  const meta = [`${d.pool} dice`, hitsLine(d), d.boost ? `Edge: ${d.boost.label} (${d.boost.cost})` : ''].filter(Boolean).join(' · ');
+  const meta = [`${d.pool} dice`, hitsLine(d), d.note || '', d.boost ? `Edge: ${d.boost.label} (${d.boost.cost})` : ''].filter(Boolean).join(' · ');
   e.append(h('div.meta', { title: breakdown(d.parts) }, meta, ' · ', timeAgo(r.at)));
   return e;
 }
@@ -101,18 +129,45 @@ function renderLog(el, rolls, opts = {}) {
   for (const r of rolls) el.append(logEntry(r, opts));
 }
 
+// ---------------------------------------------------------------- store helpers
+function availText(n, legal) { return n == null ? '—' : `${n}${legal ? `(${legal})` : ''}`; }
+const RANGES = ['Close', 'Near', 'Medium', 'Far', 'Extreme'];
+function arText(ar) { return (ar || []).map(a => a == null ? '—' : a).join('/'); }
+/* one-line summary of an item's game stats (catalog entry or inventory item) */
+function itemStats(it) {
+  const p = [];
+  if (it.dv) p.push(`DV ${it.dv}`);
+  if (it.ar) p.push(`AR ${Array.isArray(it.ar) ? arText(it.ar) : it.ar}`);
+  if (it.modes) p.push(it.modes);
+  if (it.ammo) p.push(`Ammo ${it.ammo}`);
+  if (it.dv_gz) p.push(`DV ${it.dv_gz}/${it.dv_close}/${it.dv_near}`, `Blast ${it.blast}`);
+  if (it.dr) p.push(`Defense +${it.dr}`);
+  if (it.essence != null && it.essence !== '' && (it.implant || it.essenceN != null)) p.push(`Essence ${it.essence}`);
+  if (it.device_rating) p.push(`DR ${it.device_rating}`);
+  if (it.attack != null && it.sleaze != null) p.push(`A/S ${it.attack}/${it.sleaze}`);
+  if (it.data_processing != null && it.firewall != null) p.push(`DP/FW ${it.data_processing}/${it.firewall}`);
+  if (it.program_slots) p.push(`${it.program_slots} slots`);
+  if (it.handling) p.push(`Hand ${it.handling}`, `Acc ${it.accel}`, `Spd ${it.speed_interval}/${it.top_speed}`, `Bod ${it.body}`, `Arm ${it.armor}`, `Pil ${it.pilot}`, `Sen ${it.sensor}`);
+  for (const a of ['Body', 'Agility', 'Reaction', 'Strength', 'Willpower', 'Logic', 'Intuition', 'Charisma']) if (it[a]) p.push(`+${it[a]} ${a.slice(0, 3).toUpperCase()}`);
+  if (it.init_dice) p.push(`+${it.init_dice}D6 Init`);
+  if (it.capacity) p.push(`Cap ${it.capacity}`);
+  if (it.capacity_cost) p.push(`[${it.capacity_cost}]`);
+  return p.join(' · ');
+}
+
 // ---------------------------------------------------------------- dice roller (player)
-/* opts: { getSheet: () => sheet, post: (path, body) => Promise, onRolled(res), compact, allies } */
+/* opts: { getSheet: () => sheet, post: (path, body) => Promise, onRolled(res), compact } */
 function roller(opts) {
-  const S = { key: null, mode: 'pool', wild: false, threshold: '', mod: 0, push: false, wound: true, free: 6, last: null, sel: new Set(), label: '' };
+  const S = { key: null, mode: 'pool', wild: false, threshold: '', mod: 0, push: false, wound: true, free: 6, last: null, sel: new Set(), label: '',
+    fire: {}, range: 'Near', drain: 0 };
   try { Object.assign(S, JSON.parse(localStorage.getItem('sg.roller') || '{}'), { last: null, sel: new Set() }); } catch { /* ignore */ }
   const root = h('div.roller' + (opts.compact ? '.compact' : ''));
-  const save = () => { try { localStorage.setItem('sg.roller', JSON.stringify({ key: S.key, mode: S.mode, wild: S.wild, threshold: S.threshold, wound: S.wound, free: S.free })); } catch { /* ignore */ } };
+  const save = () => { try { localStorage.setItem('sg.roller', JSON.stringify({ key: S.key, mode: S.mode, wild: S.wild, threshold: S.threshold, wound: S.wound, free: S.free, fire: S.fire, range: S.range })); } catch { /* ignore */ } };
   function render() {
     const sh = opts.getSheet(); if (!sh) return;
     root.innerHTML = '';
     const pools = sh.pools;
-    if (!pools.some(p => p.key === S.key)) S.key = (pools.find(p => p.key === 'skill:Firearms') || pools[0]).key;
+    if (!pools.some(p => p.key === S.key)) S.key = (pools.find(p => p.key.startsWith('weapon:') && p.key !== 'weapon:unarmed') || pools.find(p => p.key === 'skill:Firearms') || pools[0]).key;
     const sel = h('select', { 'aria-label': 'Dice pool', onchange: e => { S.key = e.target.value; save(); render(); } });
     const groups = {};
     for (const p of pools) (groups[p.group] = groups[p.group] || []).push(p);
@@ -133,15 +188,39 @@ function roller(opts) {
       const t = totalOf();
       totalEl.textContent = t;
       if (S.mode === 'pool') breakEl.textContent = breakdownText();
-      if (rollBtn) { rollBtn.textContent = `Roll ${t + (S.push ? sh.derived.edge_max : 0)} dice`; rollBtn.disabled = t <= 0 && !S.push; }
+      if (rollBtn) { rollBtn.textContent = rollLabel(t); rollBtn.disabled = t <= 0 && !S.push; }
     };
     const modeTabs = h('div.tabs-inline',
       h('button.small' + (S.mode === 'pool' ? '.active' : ''), { type: 'button', onclick: () => { S.mode = 'pool'; save(); render(); } }, 'From sheet'),
       h('button.small' + (S.mode === 'free' ? '.active' : ''), { type: 'button', onclick: () => { S.mode = 'free'; save(); render(); } }, 'Free roll'));
     root.append(modeTabs);
+    let weaponInfo = null;
     if (S.mode === 'pool') {
       root.append(h('div.pool-line', sel, totalEl));
       root.append(breakEl);
+      if (pool.weapon) {
+        const fm = (pool.modes || []);
+        let fmode = S.fire[S.key];
+        if (!fm.includes(fmode)) fmode = fm[0] || null;
+        const fmCat = CAT.store.firingModes;
+        const modeSel = fm.length ? h('select', { 'aria-label': 'Firing mode', onchange: e => { S.fire[S.key] = e.target.value; save(); render(); } },
+          fm.map(m => option(m, `${m} · ${fmCat[m].name} (${fmCat[m].rounds} rd)`, m === fmode))) : null;
+        const rangeSel = h('select', { 'aria-label': 'Range', onchange: e => { S.range = e.target.value; save(); render(); } },
+          RANGES.map((r, i) => option(r, `${r} (${CAT.store.rangeMeters[r]})${pool.ar && pool.ar[i] == null ? ' – out of range' : ''}`, r === S.range)));
+        const i = RANGES.indexOf(S.range), m = fmode ? fmCat[fmode] : null;
+        const arNow = pool.ar && pool.ar[i] != null ? Math.max(0, pool.ar[i] + (m ? m.ar : 0)) : null;
+        const dvm = /^(\d+)(.*)$/.exec(pool.dv || ''), dvNow = dvm ? `${+dvm[1] + (m ? m.dv : 0)}${dvm[2]}` : pool.dv;
+        const ammo = pool.clip ? `${pool.loaded}/${pool.clip} loaded` : pool.consumable ? `${pool.qty} left` : '';
+        const need = m && pool.clip ? m.rounds : 0;
+        weaponInfo = h('div.weapon-line', modeSel, rangeSel,
+          h('span.chip', h('span.k', 'AR'), h('b', arNow == null ? '—' : arNow)), h('span.chip', h('span.k', 'DV'), h('b', dvNow)),
+          ammo ? h('span.chip' + (pool.clip && pool.loaded < (need || 1) ? '.bad' : ''), ammo) : null);
+        root.append(weaponInfo);
+        S._fmode = fmode;
+      } else S._fmode = null;
+      if (pool.spell) root.append(h('div.weapon-line', h('span.hint', `Drain ${pool.drain}${+S.drain ? ' + ' + S.drain : ''} is rolled after casting.`),
+        h('label', 'Extra drain', h('input', { type: 'number', min: 0, max: 20, value: S.drain, title: 'Amp Up (+2 per extra DV) or Increase Area (+1 per +2 m)', oninput: e => { S.drain = e.target.value; } }))));
+      if (pool.form) root.append(h('p.hint', `Fading ${pool.fade} is rolled after threading.`));
     } else {
       root.append(h('div.free', h('label', 'Dice', h('input', { type: 'number', min: 1, max: 60, value: S.free, oninput: e => { S.free = e.target.value; save(); refreshTotals(); } })),
         h('input.grow', { placeholder: 'What is it for? (optional)', value: S.label, oninput: e => { S.label = e.target.value; } })));
@@ -157,9 +236,14 @@ function roller(opts) {
         h('input', { type: 'checkbox', checked: S.push, disabled: edge < pushCost, onchange: e => { S.push = e.target.checked; refreshTotals(); } }), `Push (+${sh.derived.edge_max}, ${pushCost} Edge)`));
     }
     root.append(optsRow);
-    rollBtn = h('button.primary', { type: 'button', onclick: roll, disabled: total <= 0 && !S.push }, `Roll ${total + (S.push ? sh.derived.edge_max : 0)} dice`);
+    function rollLabel(t) {
+      const verb = pool && S.mode === 'pool' ? (pool.weapon ? 'Attack' : pool.spell ? 'Cast' : pool.form ? 'Thread' : 'Roll') : 'Roll';
+      return `${verb}: ${t + (S.push ? sh.derived.edge_max : 0)} dice`;
+    }
+    rollBtn = h('button.primary', { type: 'button', onclick: roll, disabled: total <= 0 && !S.push }, rollLabel(total));
+    const dv = sh.derived;
     root.append(h('div.actions', rollBtn,
-      h('button', { type: 'button', onclick: initiative, title: `Initiative ${sh.derived.initiative_score} + ${sh.derived.initiative_dice}d6` }, 'Initiative')));
+      h('button', { type: 'button', onclick: initiative, title: `Initiative ${dv.initiative_score} + ${dv.initiative_dice}d6 · 1 Major, ${dv.minor_actions} Minor` }, 'Initiative')));
     if (S.last) root.append(resultCard(S.last, sh));
   }
   function resultCard(r, sh) {
@@ -170,7 +254,7 @@ function roller(opts) {
     const dice = h('div.dice-row');
     d.dice.forEach((x, i) => dice.append(dieEl(x, i, { selectable: canBoost, selected: S.sel.has(i), onClick: idx => { S.sel.has(idx) ? S.sel.delete(idx) : S.sel.add(idx); render(); } })));
     card.append(dice);
-    const info = [hitsLine(d), d.wildOne ? 'Wild Die rolled a 1: your 5s don’t count' : '', d.boost ? `Edge: ${d.boost.label}` : ''].filter(Boolean).join(' · ');
+    const info = [hitsLine(d), d.note || '', d.wildOne ? 'Wild Die rolled a 1: your 5s don’t count' : '', d.boost ? `Edge: ${d.boost.label}` : ''].filter(Boolean).join(' · ');
     if (info) card.append(h('p.hint.mb0', info));
     if (canBoost) {
       const edge = sh.char.current_edge, n = S.sel.size;
@@ -186,7 +270,7 @@ function roller(opts) {
   }
   async function roll() {
     const body = { wild: S.wild, threshold: +S.threshold || 0 };
-    if (S.mode === 'pool') Object.assign(body, { key: S.key, mod: +S.mod || 0, wound: S.wound, push: S.push });
+    if (S.mode === 'pool') Object.assign(body, { key: S.key, mod: +S.mod || 0, wound: S.wound, push: S.push, mode: S._fmode, range: S.range, drain: +S.drain || 0 });
     else Object.assign(body, { dice: +S.free || 0, label: S.label.trim() });
     try {
       const res = await opts.post('roll', body);
@@ -194,7 +278,7 @@ function roller(opts) {
       S.last = res.rolls.find(r => r.id === res.rollId) || null;
       opts.onRolled && opts.onRolled(res);
       render();
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(e.message, 4000); }
   }
   async function boost(key) {
     if (!S.last) return;
@@ -205,15 +289,17 @@ function roller(opts) {
     } catch (e) { toast(e.message); }
   }
   async function initiative() {
-    const sh = opts.getSheet();
-    let plus3 = false;
-    if (sh.char.current_edge >= 1) {
-      const cb = h('input', { type: 'checkbox' });
-      const ok = await UI.modal('Roll initiative', h('div', h('p', `${sh.derived.initiative_score} + ${sh.derived.initiative_dice}d6`),
-        h('label.check', cb, 'Spend 1 Edge for +3 Initiative')), { ok: 'Roll', narrow: true });
-      if (!ok) return; plus3 = cb.checked;
-    }
-    try { const res = await opts.post('initiative', { boost: plus3 }); opts.onRolled && opts.onRolled(res); toast(`Initiative ${res.rolls[0].data.total}`); }
+    const sh = opts.getSheet(), dv = sh.derived;
+    const kinds = [['physical', `Physical: ${dv.initiative_score} + ${dv.initiative_dice}d6`]];
+    if (dv.matrix && dv.matrix.device) kinds.push(['matrix', `Matrix (${dv.matrix.mode}): ${dv.matrix.init_score} + ${dv.matrix.init_dice}d6`]);
+    if (dv.astral_initiative) kinds.push(['astral', `Astral: ${dv.astral_initiative.score} + ${dv.astral_initiative.dice}d6`]);
+    const kindSel = h('select', kinds.map(([k, l]) => option(k, l)));
+    const cb = h('input', { type: 'checkbox', disabled: sh.char.current_edge < 1 });
+    const ok = await UI.modal('Roll initiative', h('div', kinds.length > 1 ? h('label.stack', 'Initiative', kindSel) : h('p', kinds[0][1]),
+      h('p.hint', `Each round: 1 Major and ${dv.minor_actions} Minor actions (1 + 1 per Initiative Die, max 5).`),
+      h('label.check', cb, 'Spend 1 Edge for +3 Initiative')), { ok: 'Roll', narrow: true });
+    if (!ok) return;
+    try { const res = await opts.post('initiative', { boost: cb.checked, kind: kindSel.value }); opts.onRolled && opts.onRolled(res); toast(`Initiative ${res.rolls[0].data.total}`); }
     catch (e) { toast(e.message); }
   }
   root.render = render;
@@ -239,50 +325,56 @@ async function edgeMenu(sh, post, onDone) {
   catch (e) { toast(e.message); }
 }
 
-// ---------------------------------------------------------------- item editor (gear / spell / power / focus)
-/* kind: gear category or 'Spell' | 'Power' | 'Focus'. Returns the item dict or null. */
-async function editItem(kind, item, { title, ok = 'Save', allowPrice = true, lockedFields = false } = {}) {
+// ---------------------------------------------------------------- custom item editor
+const CUSTOM_FIELDS = {
+  Melee: ['dv', 'ar', 'skill', 'spec'], Ranged: ['dv', 'ar', 'modes', 'ammo', 'ammo_class', 'skill', 'spec'],
+  'Ammo & Explosives': ['dv_gz', 'dv_close', 'dv_near', 'blast'], Armor: ['dr'],
+  Electronics: ['device_rating', 'data_processing', 'firewall', 'program_slots'],
+  'Cyberdecks & Software': ['device_rating', 'attack', 'sleaze', 'program_slots'],
+  Cyberware: ['essence', 'dr', 'Body', 'Agility', 'Reaction', 'Strength', 'init_dice'],
+  Bioware: ['essence', 'dr', 'Body', 'Agility', 'Reaction', 'Strength', 'Willpower', 'Logic', 'Intuition', 'Charisma'],
+  Magic: ['focus', 'force'], Vehicles: ['handling', 'accel', 'speed_interval', 'top_speed', 'body', 'armor', 'pilot', 'sensor', 'seats'],
+  Drones: ['handling', 'accel', 'speed_interval', 'top_speed', 'body', 'armor', 'pilot', 'sensor'],
+};
+const FIELD_LABEL = { dv: 'Damage (e.g. 3P)', ar: 'Attack Ratings (C/N/M/F/E)', skill: 'Skill', spec: 'Specialization', modes: 'Modes (SS/SA/BF/FA)',
+  ammo: 'Ammo (e.g. 15(c))', ammo_class: 'Ammo class', dv_gz: 'DV ground zero', dv_close: 'DV close', dv_near: 'DV near', blast: 'Blast',
+  dr: 'Defense Rating bonus', device_rating: 'Device Rating', data_processing: 'Data Processing', firewall: 'Firewall', program_slots: 'Program slots',
+  attack: 'Attack', sleaze: 'Sleaze', essence: 'Essence cost', init_dice: 'Initiative dice', focus: 'Focus type', force: 'Force',
+  handling: 'Handling', accel: 'Acceleration', speed_interval: 'Speed interval', top_speed: 'Top speed', body: 'Body', armor: 'Armor',
+  pilot: 'Pilot', sensor: 'Sensor', seats: 'Seats' };
+/* Custom item (GM gifts, draft homebrew). Returns the item dict or null. */
+async function editItem(item, { title, ok = 'Save', cat, statsLocked = false } = {}) {
   item = Object.assign({}, item || {});
-  const fields = (CAT.fields[kind] || []).filter(f => allowPrice || f !== 'Price');
-  const inputs = {};
-  const grid = h('div.form-grid');
+  const catSel = h('select', CAT.store.categories.map(c => option(c, c, c === (item.cat || cat || 'Survival'))));
+  catSel.disabled = statsLocked;
   const name = h('input', { value: item.name || '', required: true, maxlength: 80 });
-  grid.append(h('label', 'Name', name));
-  for (const f of fields) {
-    const opts = CAT.options[`${kind}.${f}`];
-    let inp;
-    if (opts) { inp = h('select', opts.map(o => option(o, o, String(item[f] ?? '') === o))); if (item[f] && !opts.includes(item[f])) inp.prepend(option(item[f], item[f], true)); }
-    else inp = h('input', { value: item[f] ?? '', type: f === 'Price' ? 'number' : 'text', min: f === 'Price' ? 0 : undefined });
-    inp.disabled = lockedFields;
-    inputs[f] = inp; grid.append(h('label', f === 'Price' ? 'Price (¥)' : f, inp));
+  const cost = h('input', { type: 'number', min: 0, value: item.cost ?? 0, disabled: statsLocked });
+  const qty = h('input', { type: 'number', min: 1, value: item.qty ?? 1, disabled: statsLocked });
+  const avail = h('input', { value: item.avail != null && item.avail !== '' ? availText(item.avail, item.legal) : '', placeholder: 'e.g. 4(L)', disabled: statsLocked });
+  const desc = h('textarea', { rows: 3, maxlength: 1000 }, item.desc || '');
+  const grid = h('div.form-grid');
+  const inputs = {};
+  function drawFields() {
+    grid.innerHTML = '';
+    for (const f of CUSTOM_FIELDS[catSel.value] || []) {
+      let inp;
+      if (f === 'skill') inp = h('select', option('', '—'), Object.keys(CAT.skills).map(s => option(s, s, item[f] === s)));
+      else if (f === 'focus') inp = h('select', option('', '—'), Object.keys(CAT.focusBond).map(s => option(s, s, item[f] === s)));
+      else inp = h('input', { value: item[f] ?? '' });
+      inp.disabled = statsLocked;
+      inputs[f] = inp; grid.append(h('label', FIELD_LABEL[f] || f, inp));
+    }
   }
-  const desc = h('textarea', { rows: 3, maxlength: 1000 }, item.description || '');
-  const known = new Set(['name', 'description', 'Equipped', 'Bonded', '_custom', ...fields]);
-  const extra = Object.entries(item).filter(([k]) => !known.has(k)).map(([k, v]) => `${k}: ${v}`).join('\n');
-  const custom = h('textarea', { rows: 3, placeholder: 'One per line, e.g.\nReaction: 1\nInitiative Dice: 1', disabled: lockedFields }, extra);
-  let equipped = null;
-  if (CAT.equippable.includes(kind)) equipped = h('input', { type: 'checkbox', checked: String(item.Equipped ?? 'Yes').toLowerCase() !== 'no' });
-  const body = h('div', grid, h('label.stack', 'Description', desc),
-    h('label.stack', 'Custom attributes', custom,
-      h('small.hint', 'An attribute name with a number (e.g. “Agility: 1”) is applied to your character for cyberware, bioware and adept powers. “Armor: 3” on a power adds to Armor.')),
-    equipped ? h('label.check', equipped, 'Equipped (counts toward Armor / Accuracy and the dice roller)') : null,
-    lockedFields ? h('p.hint', 'Your sheet is approved: only the name, description and equipped state can change.') : null);
-  const okd = await UI.modal(title || (item.name ? `Edit ${item.name}` : `New ${kind}`), body, { ok });
+  catSel.onchange = () => { for (const k of Object.keys(inputs)) delete inputs[k]; drawFields(); };
+  drawFields();
+  const body = h('div', h('div.form-grid', h('label', 'Name', name), h('label', 'Category', catSel), h('label', 'Price (¥ each)', cost), h('label', 'Quantity', qty),
+    h('label', 'Availability', avail)), grid, h('label.stack', 'Description', desc),
+    statsLocked ? h('p.hint', 'Only the name and description of this item can change.') : null);
+  const okd = await UI.modal(title || (item.name ? `Edit ${item.name}` : 'Custom item'), body, { ok });
   if (!okd) return null;
-  const out = { name: name.value.trim(), description: desc.value.trim() };
+  const out = { name: name.value.trim(), desc: desc.value.trim(), cat: catSel.value, cost: +cost.value || 0, qty: +qty.value || 1, avail: avail.value.trim() };
   for (const [f, inp] of Object.entries(inputs)) if (String(inp.value).trim() !== '') out[f] = inp.value.trim();
-  for (const line of custom.value.split('\n')) { const i = line.indexOf(':'); if (i > 0) { const k = line.slice(0, i).trim(), v = line.slice(i + 1).trim(); if (k) out[k] = v; } }
-  if (equipped) out.Equipped = equipped.checked ? 'Yes' : 'No';
   return out;
-}
-
-function itemDetails(item, skip = []) {
-  const dl = h('dl.kv');
-  for (const [k, v] of Object.entries(item)) {
-    if (['name', 'description', 'Price', '_custom', ...skip].includes(k) || v === '' || v === '-') continue;
-    dl.append(h('dt', k), h('dd', String(v)));
-  }
-  return dl;
 }
 
 // ---------------------------------------------------------------- GM: invite a player
@@ -298,5 +390,6 @@ async function invite(cid, gameName) {
   return res;
 }
 
-return { invite, catalog, get CAT() { return CAT; }, statusTag, healthTag, pips, monitor, dieEl, verdict, logEntry, renderLog, roller, edgeMenu, editItem, itemDetails, breakdown };
+return { invite, catalog, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
+  roller, edgeMenu, editItem, itemStats, availText, arText, breakdown, sum, RANGES };
 })();
