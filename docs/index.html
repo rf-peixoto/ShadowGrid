@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid user guide</title>
+<meta name="description" content="How to run and play a Shadowrun 6E game with ShadowGrid: character sheets, fog-of-war maps, dice and contracts.">
+<style>
+@font-face { font-family: "Rajdhani"; font-weight: 600; font-display: swap; src: url(fonts/rajdhani-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: "Rajdhani"; font-weight: 700; font-display: swap; src: url(fonts/rajdhani-latin-700-normal.woff2) format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 400; font-display: swap; src: url(fonts/barlow-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 600; font-display: swap; src: url(fonts/barlow-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: "Share Tech Mono"; font-weight: 400; font-display: swap; src: url(fonts/share-tech-mono-latin-400-normal.woff2) format("woff2"); }
+
+:root {
+  --bg: #0b1214; --panel: #111c1f; --panel-2: #172629; --line: #24393d;
+  --text: #d9e7e4; --muted: #8aa5a2; --accent: #ff2f7d; --ar: #2de2e6;
+  --good: #6dff9c; --warn: #ffd23f; --phys: #ff4053; --stun: #ffb02e;
+  --ui: "Rajdhani", "Barlow", "Segoe UI", sans-serif;
+  --body: "Barlow", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --num: "Share Tech Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 1rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 17px/1.6 var(--body); }
+a { color: var(--ar); }
+a:hover { color: #8ff4f6; }
+a:focus-visible { outline: 2px solid var(--ar); outline-offset: 2px; }
+h1, h2, h3, h4 { font-family: var(--ui); line-height: 1.15; margin: 0 0 .6rem; color: #f1fbf9; }
+h2 { font-size: 2.1rem; margin-top: 0; }
+h3 { font-size: 1.45rem; margin-top: 2.6rem; }
+h4 { font-size: 1.15rem; margin-top: 1.6rem; }
+p, ul, ol { margin: 0 0 1rem; max-width: 70ch; }
+li { margin: .25rem 0; }
+li::marker { color: var(--accent); }
+strong { color: #f1fbf9; font-weight: 600; }
+kbd { font-family: var(--num); font-size: .85em; background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: .05em .4em; color: #f1fbf9; }
+code { font-family: var(--num); font-size: .9em; background: var(--panel-2); padding: .05em .35em; border-radius: 2px; }
+.ui { font-family: var(--ui); font-weight: 700; color: #f1fbf9; white-space: nowrap; }
+
+/* ---------- hero ---------- */
+.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line);
+  background: radial-gradient(55rem 26rem at 90% -10%, rgba(255,47,125,.16), transparent 60%),
+              radial-gradient(45rem 26rem at -10% 120%, rgba(45,226,230,.10), transparent 60%), var(--bg); }
+.hero-inner { max-width: 1180px; margin: 0 auto; padding: 4.5rem 1.5rem 3rem; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 3rem; align-items: center; }
+.wordmark { font-family: var(--ui); font-weight: 700; font-size: clamp(3.2rem, 8vw, 5.8rem); line-height: .9; letter-spacing: .01em; margin: 0 0 1.2rem;
+  text-shadow: 2px 0 0 rgba(255,47,125,.55), -2px 0 0 rgba(45,226,230,.45); }
+.wordmark span { color: var(--accent); }
+.lede { font-size: 1.3rem; line-height: 1.5; color: #e9f4f2; max-width: 34ch; }
+.hero-links { display: flex; gap: .7rem; flex-wrap: wrap; margin-top: 1.6rem; }
+.btn { font-family: var(--ui); font-weight: 700; font-size: 1.05rem; text-decoration: none; padding: .55rem 1.1rem; border: 1px solid var(--line); background: var(--panel-2); color: #f1fbf9; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #19040c; clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%); }
+.btn:hover { border-color: var(--ar); color: #fff; }
+.btn.primary:hover { background: #ff5a98; color: #19040c; }
+.hero figure { margin: 0; }
+
+/* ---------- AR-window screenshots ---------- */
+figure { margin: 1.4rem 0 1.8rem; }
+.shot { display: block; position: relative; padding: 6px; background:
+    linear-gradient(var(--ar), var(--ar)) top left / 22px 2px no-repeat,
+    linear-gradient(var(--ar), var(--ar)) top left / 2px 22px no-repeat,
+    linear-gradient(var(--ar), var(--ar)) bottom right / 22px 2px no-repeat,
+    linear-gradient(var(--ar), var(--ar)) bottom right / 2px 22px no-repeat,
+    var(--panel); border: 1px solid var(--line); }
+.shot img { display: block; width: 100%; height: auto; }
+.shot.narrow { max-width: 460px; }
+figcaption { color: var(--muted); font-size: .92rem; margin-top: .55rem; max-width: 70ch; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.2rem; align-items: start; }
+.pair figure { margin: 1rem 0; }
+
+/* ---------- layout: sticky contents + text ---------- */
+.layout { max-width: 1180px; margin: 0 auto; padding: 0 1.5rem 5rem; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 3rem; }
+nav.toc { position: sticky; top: 0; align-self: start; padding-top: 3rem; max-height: 100vh; overflow-y: auto; }
+nav.toc p { font-family: var(--ui); font-weight: 700; color: var(--muted); margin: 0 0 .4rem; }
+nav.toc ol { list-style: none; padding: 0; margin: 0 0 1.2rem; }
+nav.toc li { margin: 0; }
+nav.toc a { display: block; padding: .28rem .7rem; color: var(--muted); text-decoration: none; font-family: var(--ui); font-weight: 600; font-size: 1.02rem; border-left: 2px solid var(--line); }
+nav.toc a:hover { color: #fff; border-left-color: var(--ar); }
+nav.toc .sub a { font-size: .95rem; padding-left: 1.4rem; }
+main section { padding-top: 3rem; }
+main > section + section { border-top: 1px solid var(--line); margin-top: 3rem; }
+.who { font-family: var(--ui); font-weight: 700; font-size: 1rem; display: inline-block; padding: .1rem .55rem; border: 1px solid currentColor; margin-bottom: .8rem; }
+.who.gm { color: var(--warn); }
+.who.player { color: var(--ar); }
+
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 2.6rem; margin: .9rem 0; }
+.steps > li::before { content: counter(s); position: absolute; left: 0; top: .05rem; width: 1.8rem; height: 1.8rem; display: grid; place-items: center;
+  font-family: var(--num); background: var(--accent); color: #19040c; clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%); }
+
+.note { border-left: 3px solid var(--ar); background: var(--panel); padding: .9rem 1.1rem; margin: 1.4rem 0; max-width: 72ch; }
+.note.warn { border-left-color: var(--warn); }
+.note p:last-child { margin-bottom: 0; }
+
+table { border-collapse: collapse; width: 100%; max-width: 760px; margin: 1rem 0 1.6rem; font-size: .98rem; }
+th { font-family: var(--ui); font-weight: 700; text-align: left; color: var(--muted); border-bottom: 1px solid var(--line); padding: .45rem .6rem; }
+td { border-bottom: 1px solid var(--line); padding: .5rem .6rem; vertical-align: top; }
+td.cost { font-family: var(--num); color: var(--accent); white-space: nowrap; }
+.die { display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; font-family: var(--num); background: #1a2b2f; border: 2px solid transparent; vertical-align: middle; margin: 0 .1rem; }
+.die.hit { color: var(--good); background: rgba(109,255,156,.14); border-color: rgba(109,255,156,.5); }
+.die.one { color: var(--phys); background: rgba(255,64,83,.14); border-color: rgba(255,64,83,.5); }
+.die.wild { box-shadow: 0 0 0 2px var(--accent); }
+
+footer { border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
+
+@media (max-width: 920px) {
+  .hero-inner { grid-template-columns: 1fr; padding-top: 3rem; gap: 2rem; }
+  .layout { grid-template-columns: 1fr; gap: 0; }
+  nav.toc { position: static; max-height: none; padding-top: 2rem; }
+  .pair { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div>
+      <h1 class="wordmark">Shadow<span>Grid</span></h1>
+      <p class="lede">Your Shadowrun Sixth World table in one browser tab: character sheets, fog-of-war maps, dice with Edge, and the contracts your runners take.</p>
+      <div class="hero-links">
+        <a class="btn primary" href="#players">I'm a player</a>
+        <a class="btn" href="#gm">I'm the game master</a>
+      </div>
+    </div>
+    <figure>
+      <a class="shot" href="img/gm-play-isometric.png"><img src="img/gm-play-isometric.png" width="1611" height="804" alt="An isometric map of a generated office complex with numbered rooms and a runner's token"></a>
+      <figcaption>A generated map in the isometric view, in the style of the SNES Shadowrun.</figcaption>
+    </figure>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <p>Contents</p>
+    <ol>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#players">For players</a></li>
+      <li class="sub"><a href="#join">Join a game</a></li>
+      <li class="sub"><a href="#build">Build your runner</a></li>
+      <li class="sub"><a href="#gear">Gear and the store</a></li>
+      <li class="sub"><a href="#map">On the map</a></li>
+      <li class="sub"><a href="#dice">Rolling dice</a></li>
+      <li class="sub"><a href="#runs">Runs</a></li>
+      <li><a href="#gm">For the game master</a></li>
+      <li class="sub"><a href="#start">Start a game</a></li>
+      <li class="sub"><a href="#maps">Build maps</a></li>
+      <li class="sub"><a href="#invite">Invite players</a></li>
+      <li class="sub"><a href="#review">Approve sheets</a></li>
+      <li class="sub"><a href="#play">Run the session</a></li>
+      <li class="sub"><a href="#contracts">Give out runs</a></li>
+      <li class="sub"><a href="#rewards">Dice, rewards, Edge</a></li>
+      <li><a href="#rules">Rules reference</a></li>
+      <li><a href="#keys">Keyboard shortcuts</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <!-- ================================================================ HOW -->
+    <section id="how">
+      <h2>How it works</h2>
+      <p>There are two kinds of accounts. The <strong>game master</strong> runs the server and signs in as <code>admin</code>. <strong>Players</strong> join through an invite link, and their account only opens the game they were invited to.</p>
+      <p>A game holds its maps, its runners and the runs (contracts) the GM hands out. Everything updates live: when the GM opens a door, reveals a room or pays out a run, players see it within a second or two without reloading.</p>
+      <p>The rules follow Shadowrun 6th edition: dice pools with hits and glitches, the Wild Die, Edge Boosts, Physical and Stun condition monitors, and Karma for advancement.</p>
+    </section>
+
+    <!-- ================================================================ PLAYERS -->
+    <section id="players">
+      <span class="who player">Players</span>
+      <h2>For players</h2>
+      <p>The top bar has everything you need during a session. Use the tabs to switch between <span class="ui">Map</span>, <span class="ui">Character</span>, <span class="ui">Store</span>, <span class="ui">Runs</span> and <span class="ui">Wiki</span>. On the right you can always see your health, Edge, Karma and nuyen.</p>
+
+      <h3 id="join">Join a game</h3>
+      <div class="pair">
+        <div>
+          <ol class="steps">
+            <li>Open the invite link your GM sent you. Each link works once and expires after a week.</li>
+            <li>Pick a username and a password of at least 8 characters, then click <span class="ui">Create account &amp; join</span>.</li>
+            <li>You land on your character sheet. Next time, sign in on the main page with the same username and password.</li>
+          </ol>
+          <p>You can change your password any time from the menu with your name in the top right corner.</p>
+        </div>
+        <figure>
+          <a class="shot narrow" href="img/player-invite.png"><img src="img/player-invite.png" width="492" height="598" alt="Invite page asking for a username and password to join the game Seattle 2081"></a>
+        </figure>
+      </div>
+
+      <h3 id="build">Build your runner</h3>
+      <p>A new character starts as a <strong>draft</strong>. While it's a draft you can change anything freely, and everything you buy is refunded in full if you remove it. When you're happy with it, click <span class="ui">Submit for approval</span>. Your GM reviews it and either approves it or sends it back with a note.</p>
+      <figure>
+        <a class="shot" href="img/player-overview.png"><img src="img/player-overview.png" width="1907" height="875" alt="Character overview with name, metatype, role, lifestyle, portrait and quick stats"></a>
+        <figcaption>The Overview: identity, portrait, quick stats, Karma and nuyen, and a history of every change.</figcaption>
+      </figure>
+      <p>The sheet is split into sections in the left column:</p>
+      <ul>
+        <li><strong>Overview</strong>: name, metatype, role, magic type, tradition, lifestyle and portrait. It also shows your quick stats and a history of every Karma and nuyen change.</li>
+        <li><strong>Attributes</strong>: set the base ratings. Metatype minimums, your role and your cyberware are applied automatically, and the Modifiers column shows where each bonus comes from. <span class="ui">Auto roll attributes</span> rolls a fresh set.</li>
+        <li><strong>Skills</strong>: rank and specialization for each skill. The pool on the right is what you'll roll: linked attribute + rank, +2 for a matching specialization.</li>
+        <li><strong>Qualities</strong>: positive qualities cost Karma and negative ones give Karma. Their effects (like +1 Body for Toughness) are applied for you.</li>
+        <li><strong>Magic &amp; Resonance</strong>: spells, adept powers (with a Power Point counter) and foci (bonding costs Karma).</li>
+        <li><strong>Gear</strong>, <strong>Combat</strong>, <strong>Contacts</strong> and <strong>Background &amp; notes</strong>.</li>
+      </ul>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/player-attributes.png"><img src="img/player-attributes.png" width="1451" height="811" alt="Attributes table with base values and role modifiers"></a>
+          <figcaption>Attributes. The Street Samurai role adds +1 Body and +1 Agility.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/player-skills.png"><img src="img/player-skills.png" width="1445" height="760" alt="Skills table with ranks, specialization dropdown and dice pools"></a>
+          <figcaption>Skills, with a specialization being chosen for Firearms.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/player-qualities.png"><img src="img/player-qualities.png" width="1452" height="802" alt="Qualities picker showing current qualities and positive qualities with Karma costs"></a>
+          <figcaption>Qualities show their effect and their Karma cost.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/player-contacts.png"><img src="img/player-contacts.png" width="1454" height="432" alt="Contacts table with one gang contact"></a>
+          <figcaption>Contacts: click a row to edit it.</figcaption>
+        </figure>
+      </div>
+      <div class="note warn">
+        <p><strong>After approval</strong>, your sheet is locked to normal play. Attributes and skills go up by spending Karma (new rating × 5), a specialization costs 5 Karma and a new spell 5 Karma. Purchases are final. Metatype, role, magic type and qualities can only be changed by the GM.</p>
+      </div>
+
+      <h3 id="gear">Gear and the store</h3>
+      <p>Everything from weapons to medkits is bought in the <span class="ui">Store</span> tab. Filter by category or search, and the price is taken from your nuyen. For something that isn't on the list, use <span class="ui">Custom item…</span>; custom items are marked so your GM can spot them.</p>
+      <figure>
+        <a class="shot" href="img/player-store.png"><img src="img/player-store.png" width="1887" height="792" alt="Store showing medkits with ratings, prices and Buy buttons"></a>
+        <figcaption>The store. Items you can't afford show "Not enough ¥".</figcaption>
+      </figure>
+      <p>Your items appear in the <strong>Gear</strong> section of your sheet. Weapons and armor can be <strong>equipped</strong> or stored. Only equipped armor counts toward your Armor rating, and only equipped weapons appear in the dice roller. Medkits have a <span class="ui">Use</span> button.</p>
+      <figure>
+        <a class="shot" href="img/player-gear.png"><img src="img/player-gear.png" width="1452" height="751" alt="Gear section with armor rating, essence, an equipped pistol and armor jacket"></a>
+        <figcaption>Gear. During character creation, <span class="ui">Return</span> refunds the full price.</figcaption>
+      </figure>
+
+      <h3 id="map">On the map</h3>
+      <p>Once the GM places your token, the <span class="ui">Map</span> tab shows only what your runner has seen. The fog lifts as you explore, and closed doors block your sight.</p>
+      <figure>
+        <a class="shot" href="img/player-map.png"><img src="img/player-map.png" width="1908" height="893" alt="Player map view in isometric mode with condition monitors and dice roller in the sidebar"></a>
+        <figcaption>A hex map in the isometric view. The sidebar has your condition, the dice roller and the table log.</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Move</strong>: drag your token, click any room you can reach (a dotted line shows the path), or use the arrow keys.</li>
+        <li><strong>Doors</strong>: the buttons in the sidebar open the doors next to you. You can also click a door on your own cell. Locked doors need the GM.</li>
+        <li><strong>Travel</strong>: standing on a stairway or portal shows a <span class="ui">Travel</span> button that takes you to the next map.</li>
+        <li><strong>Ping</strong>: double-click a cell to flash it for the whole table.</li>
+        <li><strong>View</strong>: <span class="ui">Isometric view</span> in the sidebar switches between the tilted view and a flat top-down one.</li>
+        <li><strong>Damage</strong>: click the boxes of your Physical and Stun monitors to mark damage you take.</li>
+      </ul>
+
+      <h3 id="dice">Rolling dice</h3>
+      <p>The roller is in the map sidebar and in the <strong>Combat</strong> section of your sheet. Pick a pool from your sheet: a skill, a weapon, a spell, Defense, Damage resistance and so on. The roller shows how many dice that is and why. Your wound modifier is applied automatically.</p>
+      <ul>
+        <li><strong>Wild Die</strong>: on a 5 or 6 it counts as 3 hits; on a 1 your 5s don't count.</li>
+        <li><strong>Threshold</strong>: the hits you need. The result says SUCCESS or FAILURE, and shows net hits.</li>
+        <li><strong>Push</strong>: spend 4 Edge before rolling to add your Edge rating to the pool, with 6s exploding.</li>
+        <li><strong>Free roll</strong>: any number of dice, for anything that isn't on your sheet.</li>
+      </ul>
+      <p>Hits are green and 1s are red: <span class="die hit">6</span><span class="die">3</span><span class="die hit">5</span><span class="die one">1</span><span class="die wild hit">5</span>. After rolling you can spend Edge on <strong>one</strong> boost for that roll. Click dice to select them, then choose the boost. Every roll appears in the table log for everyone.</p>
+
+      <h3 id="runs">Runs</h3>
+      <p>The <span class="ui">Runs</span> tab lists the contracts the GM gave you, with their tasks and progress. Tasks marked <span style="color:var(--accent)">*</span> are mandatory. The GM ticks tasks as they happen, and when the run is closed your reward is added to your nuyen automatically.</p>
+      <figure>
+        <a class="shot" href="img/player-runs.png"><img src="img/player-runs.png" width="1458" height="387" alt="An active run with a progress bar, three tasks and a reward"></a>
+      </figure>
+      <p>The <span class="ui">Wiki</span> tab has rules summaries and every item, spell, power and focus in the game, with a search box.</p>
+    </section>
+
+    <!-- ================================================================ GM -->
+    <section id="gm">
+      <span class="who gm">Game master</span>
+      <h2>For the game master</h2>
+
+      <h3 id="start">Start a game</h3>
+      <div class="pair">
+        <div>
+          <ol class="steps">
+            <li>Start the server with <code>python app.py</code>. The first start prints the GM password in the console. Change it later with <code>python app.py set-password</code>.</li>
+            <li>Sign in with the username <code>admin</code> and that password.</li>
+            <li>Click <span class="ui">New game</span> and give it a name. Each game has its own maps, runners and runs.</li>
+          </ol>
+        </div>
+        <figure>
+          <a class="shot narrow" href="img/gm-sign-in.png"><img src="img/gm-sign-in.png" width="445" height="432" alt="Sign-in form with username admin"></a>
+        </figure>
+      </div>
+      <figure>
+        <a class="shot" href="img/gm-home.png"><img src="img/gm-home.png" width="1258" height="382" alt="Empty home page inviting the GM to create the first game"></a>
+        <figcaption>The home page before the first game exists.</figcaption>
+      </figure>
+
+      <h3 id="maps">Build maps</h3>
+      <p>On a game, use <span class="ui">New map</span> to draw one from scratch or <span class="ui">Generate map</span> for a procedural one. The generator offers rooms and corridors, winding passages and caves, on square or hex grids, with a live preview. The same seed always produces the same map.</p>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/gm-generate-map.png"><img src="img/gm-generate-map.png" width="1142" height="785" alt="Map generator dialog with options and a preview"></a>
+          <figcaption>The generator.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/gm-map-editor.png"><img src="img/gm-map-editor.png" width="1912" height="902" alt="Map editor in Edit mode with paint tools and a generated map"></a>
+          <figcaption>The editor in Edit mode.</figcaption>
+        </figure>
+      </div>
+      <p>In <strong>Edit</strong> mode you have these tools:</p>
+      <ul>
+        <li><strong>Paint</strong>, <strong>Rectangle</strong> and <strong>Erase</strong> draw rooms.</li>
+        <li><strong>Secret</strong> hides cells from the map station; players only find them by walking in.</li>
+        <li><strong>Door</strong> adds doors on cell edges.</li>
+        <li><strong>Marker</strong> places enemies, loot, NPCs, objectives and portals to other maps. Give an enemy a <strong>Body</strong> and <strong>Willpower</strong> and it gets real Physical and Stun condition monitors.</li>
+        <li><strong>Room</strong> names a group of cells.</li>
+      </ul>
+      <p>Changes save automatically, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes them.</p>
+
+      <h3 id="invite">Invite players</h3>
+      <p><span class="ui">Invite player</span> creates a single-use link that is valid for 7 days. Send one link to each player. Unused links are listed on the game page under <strong>Invite links</strong>, where you can copy or revoke them.</p>
+
+      <h3 id="review">Approve character sheets</h3>
+      <p>A sheet a player submits shows a <span style="color:var(--warn)">Waiting for approval</span> tag on the home page, the game page and in the map editor. Open it with <span class="ui">Review sheet</span>.</p>
+      <figure>
+        <a class="shot" href="img/gm-runners.png"><img src="img/gm-runners.png" width="1318" height="408" alt="Runners table with one sheet waiting for approval, condition bars, Edge, Karma and nuyen"></a>
+        <figcaption>The Runners tab: status, condition, Edge, Karma, nuyen and location for each runner.</figcaption>
+      </figure>
+      <figure>
+        <a class="shot" href="img/gm-review-sheet.png"><img src="img/gm-review-sheet.png" width="1317" height="495" alt="GM view of a submitted sheet with Approve sheet, Send back and Set Karma buttons"></a>
+        <figcaption>The GM view of a sheet: approve it, send it back with a note, or set values directly.</figcaption>
+      </figure>
+      <ul>
+        <li><span class="ui">Approve sheet</span> locks the character into normal play and fills their Edge.</li>
+        <li><span class="ui">Send back…</span> returns it to draft with a note the player sees.</li>
+        <li>As GM you can change anything on any sheet for free, at any time. <span class="ui">Set Karma / Nuyen / Edge…</span> sets exact values. <span class="ui">Give an item…</span> (in Gear) adds a store preset or a custom item without charging the player.</li>
+      </ul>
+
+      <h3 id="play">Run the session</h3>
+      <p>Switch the map editor to <strong>Play</strong> mode during the game. It opens in the isometric view; toggle it with <kbd>I</kbd>.</p>
+      <ul>
+        <li><strong>Viewing as</strong>: <span class="ui">GM view</span> shows everything. Pick a runner to see exactly what they see.</li>
+        <li><strong>Reveal</strong> and <strong>Hide</strong>: paint a runner's fog with a brush, or reveal a whole room. The same buttons exist under <em>Everyone</em> for the whole party.</li>
+        <li><strong>Doors</strong>: click to open or close, and <kbd>Shift</kbd>+click to lock.</li>
+        <li><strong>Token</strong>: place or move the selected runner's token.</li>
+        <li><strong>Markers</strong>: drag enemies around, then click one to mark damage on its condition monitor. Health bars show above every token and enemy, with KO, DYING and DEAD labels.</li>
+        <li><strong>Snapshots</strong>: save and restore the whole game state (positions, exploration and doors).</li>
+      </ul>
+
+      <h3 id="contracts">Give out runs</h3>
+      <p>On the <span class="ui">Runs</span> tab, <span class="ui">New run</span> asks for a name, a reward per runner, a description the players see, the tasks and the runners who take the job.</p>
+      <figure>
+        <a class="shot" href="img/gm-new-run.png"><img src="img/gm-new-run.png" width="1141" height="692" alt="New run dialog with name, reward, description and three tasks"></a>
+      </figure>
+      <p>Tick tasks as they happen. The payout scales with the share of tasks done, and every mandatory task must be ticked before the run can be completed. <span class="ui">Complete &amp; pay…</span> suggests the payout (you can change it) and pays it to <strong>each</strong> assigned runner. You can also abandon, reopen or delete a run.</p>
+
+      <h3 id="rewards">Dice, rewards and Edge</h3>
+      <figure>
+        <a class="shot" href="img/gm-dice-log.png"><img src="img/gm-dice-log.png" width="1905" height="450" alt="GM roller with a label, threshold and hidden roll option, next to the table log"></a>
+        <figcaption>The GM roller. The roll marked with a lock is hidden from players.</figcaption>
+      </figure>
+      <ul>
+        <li><strong>Dice &amp; log</strong>: roll a pool or initiative for NPCs. Tick <em>Hidden roll</em> to keep the result to yourself.</li>
+        <li><strong>Award Karma / Nuyen</strong>: give to one runner, several or everyone at once. Negative amounts take it away. Each award has a reason that the runner sees in their history.</li>
+        <li><strong>Edge</strong>: only the GM refreshes Edge. Use <strong>−</strong>, <strong>+</strong> and <strong>↻</strong> next to each runner, or <span class="ui">Refresh everyone's Edge</span>.</li>
+        <li><strong>History</strong>: every Karma and nuyen change in the game, from purchases to run rewards.</li>
+      </ul>
+    </section>
+
+    <!-- ================================================================ RULES -->
+    <section id="rules">
+      <h2>Rules reference</h2>
+      <h4>Dice</h4>
+      <ul>
+        <li>A 5 or 6 is a hit.</li>
+        <li><strong>Glitch</strong>: more than half of the dice show 1. <strong>Critical glitch</strong>: a glitch with no hits.</li>
+        <li><strong>Wild Die</strong>: on a 5 or 6 it counts as 3 hits; on a 1, none of the 5s in the roll count.</li>
+        <li>A skill you don't have rolls the attribute −1. A wound modifier of −1 die applies for every 3 boxes filled on each monitor.</li>
+      </ul>
+      <h4>Edge Boosts (one per roll)</h4>
+      <table>
+        <thead><tr><th>Edge</th><th>Boost</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td class="cost">1 per die</td><td>Reroll the selected dice</td><td>After rolling</td></tr>
+          <tr><td class="cost">2</td><td>+1 to one die</td><td>After rolling</td></tr>
+          <tr><td class="cost">3</td><td>Buy one automatic hit</td><td>After rolling</td></tr>
+          <tr><td class="cost">4</td><td>Reroll every failed die</td><td>After rolling</td></tr>
+          <tr><td class="cost">4</td><td>Add your Edge rating to the pool, 6s explode</td><td>Before rolling (Push)</td></tr>
+          <tr><td class="cost">1</td><td>+3 Initiative</td><td>When rolling initiative</td></tr>
+          <tr><td class="cost">2</td><td>Give an ally 1 Edge · negate 1 Edge of an opponent</td><td>Spend Edge…</td></tr>
+          <tr><td class="cost">3 / 4</td><td>Heal 1 box of Stun / of Physical</td><td>Spend Edge…</td></tr>
+          <tr><td class="cost">5</td><td>2s count as glitches on a target's test · special effect</td><td>Spend Edge…</td></tr>
+        </tbody>
+      </table>
+      <p>You can hold at most 7 Edge. The GM refreshes it, usually at the start of a session.</p>
+      <h4>Condition monitors</h4>
+      <ul>
+        <li><span style="color:var(--phys)">Physical</span>: 8 + Body ÷ 2. <span style="color:var(--stun)">Stun</span>: 8 + Willpower ÷ 2, rounded up.</li>
+        <li>A full Stun track knocks you unconscious, and further Stun overflows into Physical.</li>
+        <li>A full Physical track means dying. You then have overflow boxes equal to your Body; past those the character is dead.</li>
+      </ul>
+      <h4>Advancement after approval</h4>
+      <table>
+        <thead><tr><th>Karma</th><th>For</th></tr></thead>
+        <tbody>
+          <tr><td class="cost">new × 5</td><td>Raise an attribute or a skill by one</td></tr>
+          <tr><td class="cost">5</td><td>A specialization</td></tr>
+          <tr><td class="cost">5</td><td>A new spell</td></tr>
+          <tr><td class="cost">Force × type</td><td>Bond a focus</td></tr>
+          <tr><td class="cost">1 → 2,000¥</td><td>Trade Karma for nuyen</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ================================================================ KEYS -->
+    <section id="keys">
+      <h2>Keyboard shortcuts</h2>
+      <h4>Everyone on a map</h4>
+      <table>
+        <tbody>
+          <tr><td>Scroll</td><td>Zoom</td></tr>
+          <tr><td>Right-drag, or <kbd>Space</kbd> + drag</td><td>Pan</td></tr>
+          <tr><td><kbd>F</kbd></td><td>Fit the whole map</td></tr>
+          <tr><td><kbd>I</kbd></td><td>Toggle the isometric view</td></tr>
+        </tbody>
+      </table>
+      <h4>Players</h4>
+      <table>
+        <tbody>
+          <tr><td>Arrow keys</td><td>Step one cell</td></tr>
+          <tr><td><kbd>C</kbd></td><td>Centre on your token</td></tr>
+          <tr><td>Double-click</td><td>Ping a cell for the table</td></tr>
+        </tbody>
+      </table>
+      <h4>GM map editor</h4>
+      <table>
+        <tbody>
+          <tr><td>Edit mode</td><td><kbd>P</kbd> paint · <kbd>R</kbd> rectangle · <kbd>E</kbd> erase · <kbd>S</kbd> secret · <kbd>D</kbd> door · <kbd>M</kbd> marker · <kbd>G</kbd> room · <kbd>V</kbd> select</td></tr>
+          <tr><td>Play mode</td><td><kbd>P</kbd> reveal · <kbd>E</kbd> hide · <kbd>D</kbd> doors · <kbd>T</kbd> token · <kbd>M</kbd> markers · <kbd>V</kbd> select</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>Cycle "viewing as" through the runners (Play mode)</td></tr>
+          <tr><td><kbd>Shift</kbd> + click a door</td><td>Lock or unlock it</td></tr>
+          <tr><td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td><td>Undo (Edit mode)</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close the inspector</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="inner">
+    <p>ShadowGrid combines the Shadowrun Manager character sheet and the GridMap fog-of-war maps. Setup and deployment notes are in the repository's README.</p>
+    <p>Shadowrun is a trademark of Catalyst Game Labs and The Topps Company. This project is not affiliated with them. Fonts: Rajdhani, Barlow and Share Tech Mono, under the SIL Open Font License (see <code>fonts/</code>).</p>
+  </div>
+</footer>
+</body>
+</html>
