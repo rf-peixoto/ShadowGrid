@@ -5,7 +5,7 @@ master builds fog-of-war maps and hands out contracts. Players manage their
 character sheets, explore the map, and roll dice with Edge. Everything stays in
 sync live in the browser.
 
-![A generated map in the isometric view](docs/img/gm-play-isometric.png)
+![Play mode in the isometric view, with the initiative strip above the map](docs/img/gm-play-isometric.png)
 
 **[Read the user guide →](docs/index.html)** for a walkthrough for players and
 game masters, with screenshots.
@@ -15,6 +15,11 @@ game masters, with screenshots.
 - **Core-book data.** Every weapon, armor, implant, vehicle, drone, piece of
   gear, spell, ritual, adept power, quality, spirit, complex form and NPC from
   the Sixth World core rulebook, with its Availability and price.
+- **Sixth World Companion content** that works with the core rules: 20
+  metavariants and 5 metasapients, the 18 Infected (HMHVV) expressions with
+  their powers and weaknesses, metagenic (changeling) and other new qualities
+  with their effects calculated on the sheet, contact archetypes, and 177 gear
+  PACKs in the store and the wiki. The Companion's optional rules are not used.
 - **Character sheets** with metatype maximums and abilities, derived attributes,
   skills with specializations and expertise, knowledge skills and languages,
   qualities, magic (spells, powers, foci, spirits, initiation), resonance
@@ -26,9 +31,15 @@ game masters, with screenshots.
   contact's type (fixer, arms dealer, street doc…) covers some kinds of goods,
   and they find items with an Availability below their Connection. Implants
   come in grades, ammo is sold by the box, and gear can be sold back at a
-  percentage the GM sets.
+  percentage the GM sets. PACKs are bought in one go, item by item checked
+  against the player's contacts.
 - **Automatic ammo**: attacks spend rounds by firing mode, and grenades are used
   up when thrown. Guns reload from matching ammo on the sheet or in the roller.
+- **A map-first play screen** for players and the GM: the map fills the
+  screen, the initiative order runs in a strip above it, the dice roller and
+  table log sit in a collapsible panel below, and everything else is in a
+  tabbed side panel. <kbd>[</kbd> and <kbd>]</kbd> hide the side panel and the
+  dice.
 - **Fog-of-war maps** on square or hex grids, drawn by hand or generated. Each
   player sees only what their runner has explored, and doors block movement and
   sight.
@@ -42,8 +53,9 @@ game masters, with screenshots.
   stay hidden until revealed), actions per round, and attacks resolved by the
   server: attack, defense, damage, soak, overflow, knockdown and elemental
   effects.
-- **NPCs** from the core-book templates by Professional Rating, critters and
-  spirits of any Force, with grunt condition monitors.
+- **NPCs** from the core-book templates by Professional Rating, critters,
+  spirits of any Force, the Companion's contact archetypes and the Infected,
+  with grunt condition monitors.
 - **Statuses** such as Prone, Burning or Zapped, set by the GM and shown as icons
   on the map.
 - **Healing** with first aid, medkits, magic and natural recovery, per the book,
@@ -58,8 +70,8 @@ game masters, with screenshots.
 |---|---|
 | ![Player map view](docs/img/player-map.png) | ![Character overview](docs/img/player-overview.png) |
 | Players see only what their runner has explored. | The character sheet. |
-| ![Store](docs/img/player-store.png) | ![Combat tracker](docs/img/gm-combat.png) |
-| The store, filtered by the player's contacts. | The GM's initiative tracker. |
+| ![Store PACKs](docs/img/player-store-packs.png) | ![GM play screen](docs/img/gm-combat.png) |
+| Gear PACKs in the store. | The GM's play screen during combat. |
 | ![Attack dialog](docs/img/gm-attack.png) | ![GM runners table](docs/img/gm-runners.png) |
 | Resolving an attack. | The GM's runners table, with a sheet waiting for approval. |
 
@@ -173,6 +185,11 @@ Security measures:
   injuries (−2 and no Edge without a medkit; a medkit adds +1 and uses a set of
   supplies); natural recovery rolls Body + Willpower per hour (Stun) or
   Body + Body per day (Physical). Drain can't be healed by first aid or magic.
+- **Metavariants, metasapients and Infected:** they cost Karma at creation
+  and bring their own attribute maximums, racial qualities, natural weapons and
+  movement. Infected are Awakened and dual-natured; Strains II and III set
+  Essence 5 and Magic maximum 5 + initiate grade; Infected lifestyles cost
+  ×1.3; technomancers can't be Infected.
 - **Availability:** up to 6 during creation. After approval, legal items up to
   2 are always available; everything else needs a confirmed contact who covers
   that kind of goods with a higher Connection.
@@ -195,6 +212,9 @@ Security measures:
 - `fight.py`: initiative tracker, attacks, statuses and NPC templates
 - `sr/core6e.py`, `sr/gear6e.py`, `sr/magic6e.py`, `sr/npc6e.py`: core-book
   data (metatypes, skills, qualities, gear, magic, resonance, NPCs)
+- `sr/companion6e.py`: Sixth World Companion data (metavariants,
+  metasapients, Infected, qualities, contact archetypes, PACKs)
+- `sr/packs.py`: turns PACK contents into store items and checks access
 - `sr/catalog.py`: store catalog, ratings and grades, Availability and contact
   access
 - `sr/rules.py`: character model, derived stats, sheet actions, pools and the
@@ -211,6 +231,7 @@ Security measures:
   - `gamepage.js`: the GM game dashboard
   - `gridcore.js`: the map renderer
   - `srui.js`: the dice and condition widgets
+  - `layout.js`: the map screen layout (side panel tabs, dice panel)
   - `fonts/`: self-hosted OFL fonts with their licenses
 - `templates/`: HTML pages
 - `docs/`: user guide and screenshots

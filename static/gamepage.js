@@ -53,11 +53,14 @@ function renderPlayers() {
   const root = $('players-root'); root.innerHTML = '';
   const ps = [...players()].sort((a, b) => (a.status === 'waiting' ? 0 : 1) - (b.status === 'waiting' ? 0 : 1));
   root.append(h('div.section-head', h('h2', 'Runners'), h('div.row.tight',
-    h('button.primary', { type: 'button', onclick: async () => { await SR.invite(CID, S.data.game.name); reload(); } }, 'Invite player'),
-    h('button', { type: 'button', disabled: !ps.length, onclick: () => award(null) }, 'Award Karma / Nuyen…'),
-    h('button', { type: 'button', disabled: !ps.length, onclick: () => edge('all', 'refresh') }, 'Refresh everyone’s Edge'),
-    h('button', { type: 'button', disabled: !ps.length, onclick: chargeLifestyle, title: 'Start of a new month: every runner pays their lifestyle' }, 'Charge monthly lifestyle'),
-    h('button', { type: 'button', onclick: storeSettings, title: 'How much the store pays for gear players sell' }, `Store buys at ${(S.data.game.settings || {}).sellPct ?? 50}%`))));
+    h('button.primary', { type: 'button', onclick: async () => { await SR.invite(CID, S.data.game.name); reload(); } }, 'Invite player'))));
+  if (ps.length) root.append(h('div.gm-toolbar',
+    h('span.tb-label', 'Between runs'),
+    h('button', { type: 'button', onclick: () => award(null) }, 'Award Karma / Nuyen…'),
+    h('button', { type: 'button', onclick: () => edge('all', 'refresh'), title: 'Every runner back to their Edge rating' }, 'Refresh everyone’s Edge'),
+    h('button', { type: 'button', onclick: chargeLifestyle, title: 'Start of a new month: every runner pays their lifestyle' }, 'Charge monthly lifestyle'),
+    h('span.grow'),
+    h('button.ghost', { type: 'button', onclick: storeSettings, title: 'How much the store pays for gear players sell' }, `Store buys gear at ${(S.data.game.settings || {}).sellPct ?? 50}%`)));
   const waiting = ps.filter(p => p.status === 'waiting');
   if (waiting.length) root.append(h('div.banner.warn', h('p', h('b', `${waiting.length} sheet${waiting.length > 1 ? 's' : ''} waiting for your approval: `), waiting.map(p => p.name).join(', ')),
     h('a.btn.primary', { href: `/game/${CID}/sheet/${waiting[0].id}` }, 'Review')));
@@ -75,11 +78,11 @@ function renderPlayers() {
         h('td', SR.statusTag(p.status), p.pendingContacts ? h('div', h('a.tag.waiting', { href: `/game/${CID}/sheet/${p.id}`, title: 'New or changed contacts to confirm' }, `${p.pendingContacts} contact${p.pendingContacts > 1 ? 's' : ''} to confirm`)) : null),
         h('td', h('div.row.tight', miniCM(p.cm), SR.healthTag(p.cm.status))),
         h('td.nowrap', h('div.row.tight', SR.pips(p.edge.cur, p.edge.max),
-          h('button.small', { type: 'button', title: 'Take 1 Edge', disabled: !p.edge.cur, onclick: () => edge([p.id], 'lose') }, '−'),
-          h('button.small', { type: 'button', title: 'Award 1 Edge (max 7)', disabled: p.edge.cur >= 7, onclick: () => edge([p.id], 'gain') }, '+'),
+          h('button.small.ghost', { type: 'button', title: 'Take 1 Edge', disabled: !p.edge.cur, onclick: () => edge([p.id], 'lose') }, '−'),
+          h('button.small.ghost', { type: 'button', title: 'Award 1 Edge (max 7)', disabled: p.edge.cur >= 7, onclick: () => edge([p.id], 'gain') }, '+'),
           h('button.small.ghost', { type: 'button', title: 'Refresh to Edge rating', onclick: () => edge([p.id], 'refresh') }, '↻'))),
         h('td.right.num', p.karma), h('td.right.num.nowrap', { class: p.nuyen < 0 ? 'bad' : '' }, money(p.nuyen)),
-        h('td.hint', p.currentMapId ? h('a', { href: `/map/${p.currentMapId}?view=${p.id}` }, mapName(p.currentMapId) || 'map') : 'not placed'),
+        h('td.hint.where', p.currentMapId ? h('a', { href: `/map/${p.currentMapId}?view=${p.id}` }, mapName(p.currentMapId) || 'map') : 'not placed'),
         h('td.right.nowrap',
           h('a.btn.small' + (p.status === 'waiting' ? '.primary' : ''), { href: `/game/${CID}/sheet/${p.id}` }, p.status === 'waiting' ? 'Review sheet' : 'Sheet'), ' ',
           h('button.small', { type: 'button', onclick: () => award([p.id]) }, 'Award'), ' ',

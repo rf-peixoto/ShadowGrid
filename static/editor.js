@@ -448,10 +448,13 @@ function setMode(m) {
   flushFog();
   S.mode = m;
   $('mode-edit').classList.toggle('active', m === 'edit'); $('mode-play').classList.toggle('active', m === 'play');
-  document.querySelectorAll('.tool-group[data-mode]').forEach(g => g.hidden = g.dataset.mode !== m);
+  document.querySelectorAll('[data-mode]').forEach(g => { if (!g.classList.contains('dock')) g.hidden = g.dataset.mode !== m; });
+  document.body.dataset.uiMode = m;
   setTool(m === 'edit' ? 'paint' : 'reveal');
   if (isoPref(m) !== vp.iso) setIso(isoPref(m), false);
-  { const g = document.querySelector(`.tool-group[data-mode="${m}"]`), before = g.querySelector('.fog-actions'); before ? g.insertBefore($('inspector'), before) : g.appendChild($('inspector')); }
+  if (m === 'play') $('pane-selected').appendChild($('inspector'));
+  else document.querySelector('.tool-group[data-mode="edit"]').appendChild($('inspector'));
+  Layout.refresh(); Layout.relayout();
   S.selected = null;
   renderInspector(); renderPlayers(); renderLegend(); renderCombat(); invalidate();
   schedulePoll(m === 'play' ? 1500 : 6000);
@@ -565,7 +568,10 @@ function renderRoomSelects() {
 // ------------------------------------------------------------ players UI (only rebuilt when something changed)
 function renderPlayers() {
   const hasCampaign = !!S.ctx.campaign;
-  $('no-campaign').hidden = hasCampaign; $('players-panel').hidden = !hasCampaign; $('snapshots-panel').hidden = !hasCampaign; $('dice-panel').hidden = !hasCampaign;
+  $('no-campaign').hidden = hasCampaign; $('players-panel').hidden = !hasCampaign; $('snapshots-panel').hidden = !hasCampaign;
+  $('dice-panel').hidden = !hasCampaign || S.mode !== 'play';
+  $('tab-runners').hidden = !hasCampaign;
+  Layout.refresh();
   if (S.viewAs && !S.ctx.players.some(p => p.id === S.viewAs)) S.viewAs = '';
   renderViewAs(); refreshFogPanel();
   const sig = JSON.stringify(S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses]));
@@ -622,11 +628,15 @@ $('btn-snapshot').onclick = async () => {
 // ------------------------------------------------------------ inspector
 function renderInspector() {
   const box = $('inspector');
-  if (!S.selected) { box.hidden = true; return; }
+  const emptyMsg = $('selected-empty');
+  if (!S.selected) { box.hidden = true; if (emptyMsg) emptyMsg.hidden = false; $('tab-selected').classList.remove('has'); return; }
   const { c, r } = S.selected, cell = getCell(c, r), p = player();
   const wasHidden = box.hidden;
   box.hidden = false;
-  if (wasHidden) requestAnimationFrame(() => box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  if (emptyMsg) emptyMsg.hidden = true;
+  $('tab-selected').classList.add('has');
+  if (wasHidden && S.mode === 'play') Layout.show('selected');
+  else if (wasHidden) requestAnimationFrame(() => box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
   $('insp-title').textContent = `Cell ${c}, ${r}`;
   const close = document.createElement('button'); close.textContent = 'Close'; close.onclick = () => { S.selected = null; renderInspector(); requestDraw(); };
   $('insp-title').appendChild(close);
@@ -779,35 +789,64 @@ function combatants() {
 function renderCombat() {
   const root = $('combat-root'); if (!root) return;
   root.innerHTML = '';
-  $('combat-panel').hidden = !S.ctx.campaign || S.mode !== 'play';
+  const strip = $('combat-panel');
+  strip.hidden = !S.ctx.campaign || S.mode !== 'play';
   const t = S.tracker;
+  strip.classList.toggle('active', !!(t && t.active));
   if (!t || !t.active) {
-    root.append(h('p.hint', 'Track initiative and resolve attacks. You roll everything; damage lands on the monitors.'),
-      h('div.row.tight', h('button.small.primary', { type: 'button', onclick: startCombat }, 'Start combat…'), h('button.small', { type: 'button', onclick: () => attackDialog() }, '⚔ Attack…')));
+    root.append(h('span.strip-idle', 'No combat running.'),
+      h('button.small.primary', { type: 'button', onclick: startCombat }, 'Start combat…'),
+      h('button.small', { type: 'button', onclick: () => attackDialog() }, '⚔ Attack…'));
+    Layout.relayout();
     return;
   }
-  root.append(h('div.row.between', h('b', `Round ${t.round}`),
-    h('label.check', { title: 'Players see the order (hidden entries stay hidden)' }, h('input', { type: 'checkbox', checked: t.visible, onchange: e => trackerOp(e.target.checked ? 'show' : 'hide') }), 'Show to players')));
-  const list = h('div.tracker');
+  const order = h('div.strip-order', { role: 'list' });
   for (const e of t.entries) {
-    const total = h('input.tr-total', { type: 'number', value: e.total ?? '', placeholder: '—', title: 'Initiative score', onchange: ev => trackerOp('set', { id: e.id, total: ev.target.value }) });
-    list.append(h('div.tr-row.gm' + (e.current ? '.current' : '') + (e.hidden ? '.dim' : ''),
-      h('div.tr-line', h('span.dot', { style: { background: e.color } }),
-        h('a.grow', { href: '#', title: 'Make it their turn and show them on the map', onclick: ev => { ev.preventDefault(); trackerOp('turn', { id: e.id }); focusCombatant(e); } }, e.name, e.hidden ? ' 🔒' : ''),
-        total),
-      h('div.tr-line.tr-actions', e.minor ? h('span.hint', { title: '1 Major + Minor actions each round' }, `1+${e.minor} actions`) : h('span'),
-        h('span.row.tight',
-          h('button.small.ghost', { type: 'button', title: 'Roll initiative', onclick: () => trackerOp('roll', { id: e.id }) }, '🎲'),
-          e.kind !== 'player' ? h('button.small.ghost', { type: 'button', title: e.hidden ? 'Hidden from players: click to reveal' : 'Visible to players: click to hide', onclick: () => trackerOp('set', { id: e.id, hidden: !e.hidden }) }, e.hidden ? 'Reveal' : 'Hide') : null,
-          e.kind !== 'custom' ? h('button.small.ghost', { type: 'button', title: 'Attack with this combatant', onclick: () => attackDialog({ kind: e.kind, id: e.ref }) }, '⚔') : null,
-          h('button.small.ghost', { type: 'button', title: 'Remove from combat', onclick: () => trackerOp('remove', { id: e.id }) }, '✕')))));
+    const chip = h('button.strip-chip' + (e.current ? '.current' : '') + (e.hidden ? '.hidden-npc' : '') + (e.total == null ? '.unrolled' : ''),
+      { type: 'button', role: 'listitem', title: `${e.name}: ${e.total == null ? 'no initiative yet' : 'initiative ' + e.total}${e.minor ? ` · 1 Major + ${e.minor} Minor` : ''}${e.hidden ? ' · hidden from players' : ''}. Click for options.`,
+        onclick: ev => chipMenu(e, ev.currentTarget) },
+      h('span.dot', { style: { background: e.color } }), h('span.nm', e.name),
+      h('b.sc', e.total == null ? '–' : e.total), e.hidden ? h('span.eye', { title: 'Hidden from players' }, '◌') : null);
+    order.append(chip);
   }
-  if (!t.entries.length) list.append(h('p.hint', 'Nobody in the order yet.'));
-  root.append(list,
-    h('div.row.tight.mt', h('button.small.primary', { type: 'button', onclick: () => trackerOp('next') }, 'Next turn ›'), h('button.small', { type: 'button', onclick: () => trackerOp('roll') }, 'Roll NPCs'),
-      h('button.small', { type: 'button', onclick: () => trackerOp('round') }, 'New round'), h('button.small', { type: 'button', onclick: addToCombat }, '+ Add'),
-      h('button.small', { type: 'button', title: 'Attack with whoever’s turn it is', onclick: () => { const cur = t.entries.find(x => x.current && x.kind !== 'custom'); attackDialog(cur ? { kind: cur.kind, id: cur.ref } : undefined); } }, '⚔ Attack…'), h('button.small.danger', { type: 'button', onclick: () => trackerOp('end') }, 'End')),
-    h('p.hint', 'Initiative isn’t rerolled each round in SR6: “New round” goes back to the top. Players’ own initiative rolls fill in their score.'));
+  if (!t.entries.length) order.append(h('span.strip-idle', 'Nobody in the order yet. Use + Add.'));
+  const cur = t.entries.find(x => x.current);
+  const controls = h('div.strip-controls',
+    h('label.check', { title: 'Players see the order (hidden enemies stay hidden)' }, h('input', { type: 'checkbox', checked: t.visible, onchange: e => trackerOp(e.target.checked ? 'show' : 'hide') }), 'Players see it'),
+    h('button.small', { type: 'button', title: 'Roll initiative for every NPC', onclick: () => trackerOp('roll') }, 'Roll NPCs'),
+    h('button.small', { type: 'button', onclick: addToCombat }, '+ Add'),
+    h('button.small', { type: 'button', title: 'Initiative isn’t rerolled in SR6: back to the top of the order', onclick: () => trackerOp('round') }, 'New round'),
+    h('button.small', { type: 'button', title: 'Attack with whoever’s turn it is', onclick: () => attackDialog(cur && cur.kind !== 'custom' ? { kind: cur.kind, id: cur.ref } : undefined) }, '⚔ Attack…'),
+    h('button.small.primary', { type: 'button', onclick: () => trackerOp('next') }, 'Next turn ›'),
+    h('button.small.ghost.danger', { type: 'button', title: 'End combat', onclick: async () => { if (await UI.confirm('End combat? The initiative order is cleared.', { ok: 'End combat', danger: true })) trackerOp('end'); } }, 'End'));
+  root.append(h('span.strip-round', `Round ${t.round}`), order, controls);
+  const curEl = order.querySelector('.current');
+  if (curEl) curEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  Layout.relayout();
+}
+/* options for one combatant, opened from its chip in the strip */
+function chipMenu(e, anchor) {
+  document.querySelectorAll('.chip-menu').forEach(x => x.remove());
+  const score = h('input', { type: 'number', value: e.total ?? '', placeholder: '–', style: { width: '4.5rem' }, onchange: ev => trackerOp('set', { id: e.id, total: ev.target.value }) });
+  const close = () => { menu.remove(); document.removeEventListener('pointerdown', outside, true); };
+  const act = fn => () => { close(); fn(); };
+  const menu = h('div.chip-menu', { role: 'menu' },
+    h('div.cm-head', h('span.dot', { style: { background: e.color } }), h('b', e.name), e.minor ? h('span.hint', `1 Major + ${e.minor} Minor`) : null),
+    h('label', 'Initiative', score),
+    h('button', { type: 'button', onclick: act(() => { trackerOp('turn', { id: e.id }); focusCombatant(e); }) }, 'Make it their turn'),
+    h('button', { type: 'button', onclick: act(() => focusCombatant(e)) }, 'Show on the map'),
+    h('button', { type: 'button', onclick: act(() => trackerOp('roll', { id: e.id })) }, 'Roll initiative'),
+    e.kind !== 'custom' ? h('button', { type: 'button', onclick: act(() => attackDialog({ kind: e.kind, id: e.ref })) }, '⚔ Attack with them…') : null,
+    e.kind !== 'custom' ? h('button', { type: 'button', onclick: act(() => attackDialog(null, { kind: e.kind, id: e.ref })) }, 'Attack them…') : null,
+    e.kind !== 'player' ? h('button', { type: 'button', onclick: act(() => trackerOp('set', { id: e.id, hidden: !e.hidden })) }, e.hidden ? 'Reveal to players' : 'Hide from players') : null,
+    h('button.danger', { type: 'button', onclick: act(() => trackerOp('remove', { id: e.id })) }, 'Remove from combat'));
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.min(window.innerWidth - menu.offsetWidth - 8, Math.max(8, r.left)) + 'px';
+  menu.style.top = (r.bottom + 6) + 'px';
+  const outside = ev => { if (!menu.contains(ev.target)) close(); };
+  setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
+  score.focus();
 }
 function focusCombatant(e) {
   const c = combatants().find(x => x.kind === e.kind && x.id === e.ref);
@@ -1028,7 +1067,11 @@ function exportPng() {
 }
 
 // ------------------------------------------------------------ dice (Shadowrun pools, shared table log)
-function renderRolls(rolls) { SR.renderLog($('roll-log'), rolls); }
+function renderRolls(rolls) {
+  SR.renderLog($('roll-log'), rolls);
+  const r = (rolls || [])[0];
+  $('dock-last').textContent = r ? 'Last: ' + SR.rollSummary(r) : '';
+}
 async function rollDice(n) {
   if (!S.ctx.campaign) { toast('Dice need a game (so players can see the rolls).'); return; }
   const body = { dice: n || +$('dice-n').value, label: $('dice-label').value.trim(), wild: $('dice-wild').checked, threshold: +$('dice-thr').value || 0, hidden: $('dice-hidden').checked };
@@ -1077,6 +1120,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) poll
 
 // ------------------------------------------------------------ boot
 async function boot() {
+  Layout.init($('layout'), 'gm');
   const [c, ov] = await Promise.all([api(`/api/maps/${MAP_ID}/context`), api('/api/overview'), SR.catalog()]);
   S.map = c.map;
   S.ctx = { players: c.players, campaigns: ov.campaigns, campaignMaps: c.campaignMaps, snapshots: c.snapshots, campaign: c.campaign, allMaps: c.allMaps };

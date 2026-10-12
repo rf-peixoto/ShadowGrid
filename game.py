@@ -18,6 +18,8 @@ from sr import core6e as K
 from sr import dice as DICE
 from sr import gear6e as G
 from sr import magic6e as M
+from sr import packs as PK
+from sr import companion6e as SWC
 from sr import rules as R
 from sr import wiki as WIKI
 
@@ -36,7 +38,7 @@ def catalog():
         CATALOG = {
             "attributes": R.ATTRS, "physical": K.PHYSICAL, "mental": K.MENTAL,
             "skills": K.SKILLS, "skillMax": K.SKILL_MAX, "skillMaxCreation": K.SKILL_MAX_CREATION,
-            "metatypes": K.METATYPES, "defaultMax": K.DEFAULT_MAX, "roles": R.ROLES,
+            "metatypes": K.METATYPES, "baseMetatypes": K.BASE_METATYPES, "defaultMax": K.DEFAULT_MAX, "roles": R.ROLES,
             "magicTypes": R.MAGIC_TYPES, "aspects": R.ASPECTS, "traditions": M.TRADITIONS,
             "mentorSpirits": M.MENTOR_SPIRITS, "lifestyles": K.LIFESTYLES,
             "qualities": K.QUALITIES, "statuses": K.STATUSES,
@@ -46,7 +48,13 @@ def catalog():
                       "items": CAT.ITEMS, "grades": G.IMPLANT_GRADES, "firingModes": G.FIRING_MODES,
                       "ammoTypes": G.AMMO_TYPES, "ranges": G.RANGES, "rangeMeters": G.RANGE_METERS,
                       "creationMaxAvail": CAT.CREATION_MAX_AVAIL, "alwaysAvail": CAT.ALWAYS_AVAIL},
-            "contactTypes": R.CONTACT_TYPES, "contactTypeSupply": G.CONTACT_TYPE_SUPPLY,
+            "contactTypes": R.CONTACT_TYPES,
+            "packs": PK.PACK_ENTRIES, "packGroups": SWC.PACK_GROUPS,
+            "infected": {k: {"karma": v["karma"], "strain": v["strain"], "bases": list(v["bases"]), "any": bool(v.get("any_base_mods")),
+                             "optional": v.get("optional", []), "free_optional": v.get("free_optional", ""),
+                             "awakened_discount": v.get("awakened_discount", 0), "non_human_extra": v.get("non_human_extra", 0)}
+                         for k, v in SWC.INFECTED.items()},
+            "infectedPowerCost": SWC.INFECTED_OPTIONAL_POWERS, "contactTypeSupply": G.CONTACT_TYPE_SUPPLY,
             "spells": M.SPELLS, "rituals": M.RITUALS, "powers": M.ADEPT_POWERS, "metamagics": M.METAMAGICS,
             "spirits": list(M.SPIRITS), "complexForms": M.COMPLEX_FORMS, "sprites": M.SPRITES, "echoes": M.ECHOES,
             "programs": M.PROGRAMS, "matrixModes": list(M.MATRIX_INIT), "focusBond": G.FOCUS_BOND_KARMA,
@@ -80,12 +88,16 @@ def run_to_dict(row):
 
 
 def store_access(c, approved):
-    """{item id: [ok, reason]} for the store tab (only the entries that differ from 'ok')."""
+    """{item id: [ok, reason, price]} for the store tab."""
     out = {}
+    mk = R.price_markup(c)
     for e in CAT.ITEMS:
-        o = CAT.offer(e, None, "Standard", c.get("metatype", ""))
+        o = CAT.offer(e, None, "Standard", mk)
         ok, why = CAT.access(c, o["avail"], o["legal"], e["supply"], approved)
         out[e["id"]] = [ok, why, o["cost"]]
+    for e in PK.PACK_ENTRIES:
+        ok, why = PK.access(c, e, approved)
+        out[e["id"]] = [ok, why, int(round(e["cost"] * (1 + mk[0])))]
     return out
 
 
@@ -865,6 +877,12 @@ def me_roll(me):
                     extra.append(f"blast {prof.get('blast')}: {' / '.join(prof['grenade'])}")
                 if note:
                     extra.append(note)
+            elif key.startswith("natural:"):
+                extra.append(f"DV {pool.get('dv')}")
+                if b.get("range") in G.RANGES:
+                    i = G.RANGES.index(b["range"])
+                    ar = (pool.get("ar") or [None] * 5)[i]
+                    extra.append(f"AR {ar} at {b['range']}" if ar is not None else f"can't reach {b['range']}")
             elif key.startswith("spell:"):
                 sp = c["spells"][R._list_index(c["spells"], key[6:])]
                 follow = ("spell", sp)

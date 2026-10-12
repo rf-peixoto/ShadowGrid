@@ -979,3 +979,42 @@ NPC_TEMPLATES = [{'name': 'Humanis Goon',
            'receive a –4 dice pool modifier to all swimming-related tests. Damage taken due to their Allergy '
            'to sunlight cannot be healed with Regeneration, even after they are no longer being exposed.',
   'weapons': ['Bite: DV 3P, Attack Ratings 7/—/—/—/—']}]
+
+
+
+# --------------------------------------------------------------------------- Sixth World Companion
+def _companion_templates():
+    from . import companion6e as C
+    out = []
+    keys = ["Body", "Agility", "Reaction", "Strength", "Willpower", "Logic", "Intuition", "Charisma"]
+    for ct in C.CONTACTS:
+        attrs = {k: str(v) for k, v in zip(keys, ct["attrs"])}
+        if ct.get("magic"):
+            attrs["Magic"] = str(ct["magic"])
+        attrs["Essence"] = "6"
+        out.append({"name": ct["name"], "kind": "Contact", "attrs": attrs, "skills": ct["skills"],
+                    "knowledge_skills": ct["knowledge"], "notes": f"Typical Connection {ct['conn']}. {ct['types']}. {ct['desc']}",
+                    "source": C.SOURCE})
+    for name, inf in C.INFECTED.items():
+        base, mx = next(iter(inf["bases"].items()))
+        attrs = {k: str(mx[k]) for k in keys}
+        for a, n in (inf.get("minus") or {}).items():
+            attrs[a] = str(max(1, int(attrs[a]) - n))
+        attrs["Magic"] = "5" if inf["strain"] in ("II", "III") else "6"
+        attrs["Essence"] = "5" if inf["strain"] in ("II", "III") else "6"
+        body = int(attrs["Body"])
+        dr = body + int(inf.get("dr", 0)) + (4 if base == "Naga" else 0)
+        rea, intu = int(attrs["Reaction"]), int(attrs["Intuition"])
+        out.append({"name": f"{name} ({base}, Infected)", "kind": "Infected", "attrs": attrs,
+                    "init": f"{rea + intu}/{1 + int(inf.get('init_dice', 0))}", "dr": str(dr),
+                    "cm": f"{8 + (body + 1) // 2 + int(inf.get('phys_boxes', 0))}/{8 + (int(attrs['Willpower']) + 1) // 2}",
+                    "move": "12/17/+1" if inf.get("move") else "10/15/+1",
+                    "skills": "Athletics 4, Close Combat 5, Perception 4, Stealth 3",
+                    "powers": ", ".join(inf["powers"]), "weaknesses": ", ".join(inf["weaknesses"]),
+                    "weapons": [f"{w} [Natural, DV {dv}, Attack Ratings {ar}/—/—/—/—]" for w, dv, ar in inf.get("weapons") or []],
+                    "notes": f"Strain {inf['strain']}. Attributes at the Infected maximums for a {base}: a strong specimen. " + inf.get("notes", ""),
+                    "source": C.SOURCE})
+    return out
+
+
+NPC_TEMPLATES += _companion_templates()

@@ -352,6 +352,10 @@ def gm_attack_options(map_id):
                 out.append({"key": f"weapon:{it['uid']}", "name": it["name"], "pool": sum(x[1] for x in p["parts"]),
                             "dv": f"{p['dv']}{p['type']}", "ar": p["ar"], "modes": p["modes"], "loaded": p["loaded"], "clip": p["clip"],
                             "qty": R._int(it.get("qty"), 1) if p["consumable"] else None})
+        for i, w in enumerate(d.get("natural_weapons") or []):
+            p = X.char_weapon_profile(f, f"natural:{i}", None, None)
+            out.append({"key": f"natural:{i}", "name": f"{w['name']} ({w['source']})", "pool": sum(x[1] for x in p["parts"]),
+                        "dv": f"{p['dv']}{p['type']}", "ar": p["ar"], "modes": []})
         u = R.unarmed_profile(c, d)
         out.append({"key": "weapon:unarmed", "name": "Unarmed", "pool": sum(x[1] for x in u["parts"]), "dv": f"{u['dv']}{u['type']}",
                     "ar": u["ar"], "modes": []})

@@ -188,28 +188,82 @@ def build():
     tree.append({"title": "Actions", "children": act})
     # characters
     mt = []
+    groups_mt = {}
     for name, m in K.METATYPES.items():
-        lines = [f"**{name}**", m["desc"], "Attribute maximums (others 6):"]
+        lines = [f"**{name}**", m["desc"]]
+        if m.get("base") not in (None, name):
+            lines.append(f"{'Metasapient' if m['base'] == 'Metasapient' else m['base'] + ' variant'} ({m.get('source', 'core')}). "
+                         f"Costs {m.get('karma', 0)} Karma at character creation.")
+        lines.append("Attribute maximums (others 6):")
         lines += [f"- {k}: {v}" for k, v in m["max"].items()]
         if m.get("qualities"):
-            lines.append("Racial qualities: " + ", ".join(m["qualities"]))
+            racial = [q + (f" {m['quality_levels'][q]}" if m.get("quality_levels", {}).get(q) else "") +
+                      (f" ({m['quality_choices'][q]})" if m.get("quality_choices", {}).get(q) else "") for q in m["qualities"]]
+            lines.append("Racial qualities: " + ", ".join(racial))
+        if m.get("weapons"):
+            lines.append("Natural weapons: " + ", ".join(f"{w['name']} DV {w['dv']}, AR {w['ar']}" for w in m["weapons"]))
+        if m.get("dr"):
+            lines.append(f"Natural armor: +{m['dr']} Defense Rating.")
+        if m.get("move"):
+            lines.append(f"Movement: {m['move'][0]}/{m['move'][1]}/+{m['move'][2]}" + (f"; {m['move_note']}" if m.get("move_note") else ""))
         topics[name] = "\n".join(lines)
-        mt.append({"title": name, "children": []})
-    quals = {"Positive": [], "Negative": []}
+        groups_mt.setdefault(m.get("base") if m.get("base") not in (None, name) else name, []).append(name)
+    for base in ("Human", "Elf", "Dwarf", "Ork", "Troll"):
+        kids = [{"title": n, "children": []} for n in groups_mt.get(base, []) if n != base]
+        mt.append({"title": base, "children": kids})
+    mt.append({"title": "Metasapients", "children": [{"title": n, "children": []} for n in groups_mt.get("Metasapient", [])]})
+    # Infected (HMHVV)
+    infk = []
+    from . import companion6e as C
+    for name, inf in C.INFECTED.items():
+        t = f"{name} (Infected)"
+        bases = "; ".join(f"{b}: " + ", ".join(f"{k[:3].upper()} {v}" for k, v in mx.items()) for b, mx in inf["bases"].items())
+        cost = f"{inf['karma']} Karma" + (f" (+{inf['non_human_extra']} for non-humans)" if inf.get("non_human_extra") else "") + \
+            (f" (−{inf['awakened_discount']} if already Awakened)" if inf.get("awakened_discount") else "")
+        lines = [f"**{name}**", f"Infected quality, {cost}. {C.STRAINS[inf['strain']]}",
+                 f"Base metatype and new maximums: {bases}" + (" (other metatypes: base +1 BOD, STR, WIL, +2 REA, CHA)" if inf.get("any_base_mods") else ""),
+                 "Powers: " + ", ".join(inf["powers"]) + (" (+1 Initiative Die)" if inf.get("init_dice") else "") + (" (+2 movement)" if inf.get("move") else "")]
+        if inf.get("free_optional"):
+            lines.append(f"Free optional power: {inf['free_optional']}.")
+        if inf.get("optional"):
+            lines.append("Optional powers: " + ", ".join(f"{o} ({C.INFECTED_OPTIONAL_POWERS.get(o, 8)} K)" for o in inf["optional"]))
+        lines.append("Weaknesses: " + ", ".join(inf["weaknesses"]) + ("; " + ", ".join(f"−{n} {a}" for a, n in inf["minus"].items()) if inf.get("minus") else ""))
+        lines.append("Attacks: " + ", ".join(f"{w} DV {dv}, AR {ar}" for w, dv, ar in inf.get("weapons") or []))
+        if inf.get("notes"):
+            lines.append(inf["notes"])
+        lines.append("All Infected are dual-natured and Awakened (Magic 1 or more), can't be technomancers or take Magic Resistance, "
+                     "and pay 30% more for their lifestyle.")
+        topics[t] = "\n".join(lines)
+        infk.append({"title": t, "children": []})
+    for name, txt in C.CRITTER_POWERS.items():
+        t = f"{name} (critter power)"
+        topics[t] = f"**{name}**\n{txt}"
+        infk.append({"title": t, "children": []})
+    quals = {"Positive": [], "Negative": [], "Metagenic (positive)": [], "Metagenic (negative)": [], "Quality paths": [], "Racial traits": []}
     for name, q in K.QUALITIES.items():
         side = "Positive" if q["karma"] > 0 else "Negative"
+        group = q.get("group", "")
+        bucket = ("Racial traits" if q.get("racial_only") else "Quality paths" if group == "Quality path"
+                  else f"Metagenic ({side.lower()})" if group not in ("", "Positive", "Negative") else side)
         t = f"{name} (quality)"
-        topics[t] = f"**{name}**\n{side} quality, {abs(q['karma'])} Karma" + (f" per level (max {q['levels']})" if q.get("levels") else "") + f".\n{q['desc']}"
-        quals[side].append({"title": t, "children": []})
+        kind = "Racial trait (comes with a metatype)" if q.get("racial_only") else f"{side} quality, {abs(q['karma'])} Karma" + \
+            (f" per level (max {q['levels']})" if q.get("levels") else "")
+        src = f" {q['source']}{', ' + group if group and group not in ('Positive', 'Negative') else ''}." if q.get("source") else ""
+        topics[t] = f"**{name}**\n{kind}.{src}\n{q['desc']}"
+        quals[bucket].append({"title": t, "children": []})
     skills = []
     for name, s in K.SKILLS.items():
         t = f"{name} (skill)"
         topics[t] = (f"**{name}**\nLinked attribute: {s['attr']}. " + ("Can be used untrained." if s["untrained"] else "Can't be used untrained.")
                      + "\nSpecializations: " + ", ".join(s["specs"]))
         skills.append({"title": t, "children": []})
-    tree.append({"title": "Characters", "children": [{"title": "Metatypes", "children": mt}, {"title": "Skills", "children": skills},
+    tree.append({"title": "Characters", "children": [{"title": "Metatypes", "children": mt}, {"title": "Infected (HMHVV)", "children": infk},
+                                                     {"title": "Skills", "children": skills},
                                                      {"title": "Positive qualities", "children": quals["Positive"]},
-                                                     {"title": "Negative qualities", "children": quals["Negative"]}]})
+                                                     {"title": "Negative qualities", "children": quals["Negative"]},
+                                                     {"title": "Metagenic qualities (SURGE)", "children": quals["Metagenic (positive)"] + quals["Metagenic (negative)"]},
+                                                     {"title": "Quality paths", "children": quals["Quality paths"]},
+                                                     {"title": "Racial traits", "children": quals["Racial traits"]}]})
     # gear
     gear = []
     for cat in G.STORE_CATEGORIES:
@@ -220,6 +274,22 @@ def build():
                 topics[t] = _item_text(e)
                 kids.append({"title": t, "children": []})
         gear.append({"title": cat, "children": kids})
+    from . import packs as PK
+    pk = {}
+    for e in PK.PACK_ENTRIES:
+        t = e["name"] if e["name"] not in topics else f"{e['name']} (PACK)"
+        lines = [f"**{e['name']}**", f"{e['sub']}, {e['cost']:,}¥ · Availability {e['avail']}" +
+                 (f" · Essence {e['essenceN']}" if e.get("essenceN") else "") + f". {e['desc']}"]
+        if e.get("packGrades"):
+            lines.append("Other grades: " + ", ".join(f"{g} {v['cost']:,}¥ / {v['essence']} Essence" for g, v in e["packGrades"].items()))
+        for k, lab in (("includes", "Includes"), ("skills", "Recommended skills"), ("licenses", "Fake licenses for")):
+            if e.get(k):
+                lines.append(f"{lab}: {e[k]}")
+        lines.append("Contents:")
+        lines += [f"- {x}" for x in e["contents"]]
+        topics[t] = "\n".join(lines)
+        pk.setdefault(e["sub"], []).append({"title": t, "children": []})
+    gear.append({"title": "PACKs", "children": [{"title": g, "children": v} for g, v in pk.items()]})
     tree.append({"title": "Gear", "children": gear})
     # magic
     spells = {}
@@ -297,6 +367,6 @@ def build():
     for t in N.NPC_TEMPLATES:
         title = f"{t['name']} (NPC)"
         topics[title] = _npc_text(t)
-        groups.setdefault({"Grunt": "Grunts", "Contact": "Sample contacts", "Critter": "Critters"}.get(t.get("kind"), "Other"), []).append({"title": title, "children": []})
+        groups.setdefault({"Grunt": "Grunts", "Contact": "Contacts", "Critter": "Critters", "Infected": "Infected"}.get(t.get("kind"), "Other"), []).append({"title": title, "children": []})
     tree.append({"title": "NPCs", "children": [{"title": k, "children": v} for k, v in groups.items()]})
     return {"tree": tree, "topics": topics}

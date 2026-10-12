@@ -743,3 +743,148 @@ p.why { color: var(--warn); }
 .tr-row .tr-line.tr-actions button.small { font-size: .72rem; }
 dialog label.check { flex-direction: row; align-items: center; }
 .tr-row .tr-line.tr-actions .row { flex-wrap: nowrap; }
+
+/* PACKs and Companion tags */
+.item-card.pack details summary { cursor: pointer; color: var(--accent); font-size: .85rem; margin: .3rem 0; }
+.pack-list { margin: .25rem 0 .5rem 1rem; padding: 0; font-size: .82rem; color: var(--muted); max-height: 220px; overflow-y: auto; }
+.pack-list li { margin: .1rem 0; }
+.tag.src { margin-left: .4rem; font-size: .68rem; opacity: .8; }
+.kv-list > div { margin: .2rem 0; font-size: .9rem; }
+
+/* ======================================================================
+   Map screen layout (player and GM): drawer · combat strip · map · dice dock
+   ====================================================================== */
+.map-layout { display: flex; flex: 1; min-height: 0; }
+.drawer {
+  width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; min-height: 0;
+  background: #0e171a; border-right: 1px solid var(--line);
+}
+.drawer-head { display: flex; align-items: center; gap: .4rem; padding: .35rem .45rem .35rem .7rem; border-bottom: 1px solid var(--line); min-height: 2.6rem; }
+.drawer-title { font-family: "Rajdhani", sans-serif; font-weight: 700; font-size: 1.05rem; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drawer-tabs { display: flex; gap: .15rem; flex: 1; }
+.drawer-tabs button {
+  background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted);
+  padding: .4rem .55rem; font-family: "Rajdhani", sans-serif; font-weight: 600; font-size: .98rem; position: relative;
+}
+.drawer-tabs button:hover { color: var(--text); }
+.drawer-tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.drawer-tabs button.has::after { content: ""; position: absolute; top: .45rem; right: .15rem; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.drawer-toggle { margin-left: auto; font-size: 1.1rem; padding: .15rem .55rem; }
+.drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: .8rem; display: flex; flex-direction: column; gap: .7rem; }
+.pane { display: none; flex-direction: column; gap: .55rem; }
+.pane.shown { display: flex; }
+.pane-h { margin: .5rem 0 0; font-size: .8rem; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.pane-h:first-child { margin-top: 0; }
+.pane-block { display: flex; flex-direction: column; gap: .5rem; }
+.pane-block + .pane-block { border-top: 1px solid var(--line); padding-top: .7rem; }
+.pane-sub summary { cursor: pointer; color: var(--muted); font-weight: 600; font-size: .9rem; padding: .3rem 0; }
+.drawer .inspector { background: transparent; padding: 0; }
+.drawer .player-row { padding: .55rem 0; border-bottom: 1px solid var(--line); }
+.drawer .player-row:last-child { border-bottom: 0; }
+
+.map-layout.drawer-collapsed .drawer { width: 2.6rem; flex-basis: 2.6rem; }
+.map-layout.drawer-collapsed .drawer-body,
+.map-layout.drawer-collapsed .drawer-tabs,
+.map-layout.drawer-collapsed .drawer-title { display: none; }
+.map-layout.drawer-collapsed .drawer-head { padding: .35rem 0; justify-content: center; border-bottom: 0; }
+.map-layout.drawer-collapsed .drawer-toggle { margin: 0; }
+
+.stage { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.stage .canvas-wrap { flex: 1; min-height: 0; }
+
+/* combat strip: the one loud thing on screen is whose turn it is */
+.combat-strip { flex: 0 0 auto; background: #0b1416; border-bottom: 1px solid var(--line); padding: .4rem .6rem; }
+.strip-inner, #combat-root { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.strip-round { font-family: "Rajdhani", sans-serif; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.strip-idle { color: var(--muted); font-size: .9rem; margin-right: .3rem; }
+.strip-order { display: flex; align-items: center; gap: .35rem; overflow-x: auto; flex: 1; min-width: 0; padding: 3px; scrollbar-width: thin; }
+.strip-chip {
+  display: inline-flex; align-items: center; gap: .4rem; padding: .28rem .6rem; white-space: nowrap; flex: 0 0 auto;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); font-size: .88rem; font-weight: 500;
+}
+button.strip-chip:hover { border-color: var(--muted); }
+.strip-chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+.strip-chip .sc { font-family: "Share Tech Mono", monospace; color: var(--muted); font-weight: 400; }
+.strip-chip .eye { color: var(--muted); }
+.strip-chip.unrolled { opacity: .7; }
+.strip-chip.hidden-npc { border-style: dashed; opacity: .6; }
+.strip-chip.mine { border-color: var(--text); }
+.strip-chip.current {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; font-size: 1rem; padding: .38rem .8rem;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.strip-chip.current .sc { color: var(--accent-ink); }
+.strip-chip.current .dot { box-shadow: 0 0 0 2px var(--accent-ink); }
+.strip-controls { display: flex; align-items: center; gap: .3rem; flex: 0 0 auto; }
+.strip-controls label.check { font-size: .85rem; color: var(--muted); margin-right: .2rem; white-space: nowrap; }
+.strip-note { font-size: .9rem; color: var(--muted); white-space: nowrap; }
+.strip-note.your-turn { color: var(--accent); font-weight: 700; font-family: "Rajdhani", sans-serif; font-size: 1.1rem; }
+.chip-menu {
+  position: fixed; z-index: 60; min-width: 220px; display: flex; flex-direction: column; gap: .25rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .55rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .55);
+}
+.chip-menu .cm-head { display: flex; align-items: center; gap: .45rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; }
+.chip-menu .cm-head .dot { width: 10px; height: 10px; border-radius: 50%; }
+.chip-menu .cm-head .hint { margin-left: auto; }
+.chip-menu label { display: flex; align-items: center; justify-content: space-between; gap: .5rem; font-size: .9rem; }
+.chip-menu button { text-align: left; background: transparent; border-color: transparent; padding: .35rem .5rem; }
+.chip-menu button:hover { background: var(--panel-2); border-color: var(--line); }
+.chip-menu button.danger { color: var(--danger, #ff4053); }
+
+/* dice dock */
+.dock { flex: 0 0 auto; background: #0e171a; border-top: 1px solid var(--line); display: flex; flex-direction: column; }
+.dock[hidden] { display: none; }
+.dock-head { display: flex; align-items: center; gap: .7rem; padding: .3rem .5rem .3rem .8rem; min-height: 2.2rem; user-select: none; }
+.dock-title { font-family: "Rajdhani", sans-serif; font-weight: 700; white-space: nowrap; }
+.dock-last { flex: 1; min-width: 0; color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dock-toggle { padding: .1rem .55rem; }
+.dock-body { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; gap: 1rem; padding: 0 .8rem .7rem; height: 260px; min-height: 0; }
+.dock-roller { overflow-y: auto; min-height: 0; padding-right: .3rem; }
+.dock-log { overflow-y: auto; min-height: 0; max-height: none !important; border-left: 1px solid var(--line); padding-left: .8rem; }
+.map-layout.dock-collapsed .dock-body { display: none; }
+
+/* view options menu on the map */
+.view-menu { position: absolute; top: .6rem; right: .6rem; z-index: 6; }
+.view-menu > summary {
+  list-style: none; cursor: pointer; padding: .3rem .7rem; font-size: .88rem; color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.view-menu > summary::-webkit-details-marker { display: none; }
+.view-menu[open] > summary, .view-menu > summary:hover { color: var(--text); }
+.view-menu-pop { position: absolute; right: 0; top: 2.3rem; width: 270px; display: flex; flex-direction: column; gap: .4rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: .7rem; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); }
+
+@media (max-width: 900px) {
+  .map-layout { flex-direction: column; }
+  .drawer { width: auto; flex: 0 0 auto; max-height: 36vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .map-layout.drawer-collapsed .drawer { width: auto; flex-basis: auto; max-height: 2.8rem; }
+  .map-layout.drawer-collapsed .drawer-head { justify-content: flex-end; padding: .3rem .5rem; }
+  .map-layout.drawer-collapsed .drawer-tabs, .map-layout.drawer-collapsed .drawer-title { display: flex; }
+  .stage { min-height: 60vh; }
+  .dock-body { grid-template-columns: 1fr; height: 42vh; }
+  .dock-log { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: .5rem; }
+  .strip-controls { flex-wrap: wrap; }
+  #combat-root { flex-wrap: wrap; }
+}
+
+/* game page toolbar, store density */
+.gm-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: -.2rem 0 .9rem; padding: .5rem .7rem;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.gm-toolbar .tb-label { color: var(--muted); font-size: .85rem; margin-right: .3rem; }
+.gm-toolbar .grow { flex: 1; }
+.players-table td.where { white-space: nowrap; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; }
+#view-store .store-head { position: sticky; top: 0; z-index: 4; background: var(--bg); padding: .5rem 0 .4rem; }
+#view-store #store-cats { position: sticky; top: 3.1rem; z-index: 4; background: var(--bg); padding-bottom: .5rem; }
+.item-card { gap: .35rem; }
+.item-card > p.hint { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin: 0; }
+.item-card .buy { flex-wrap: wrap; }
+.item-card .buy .buy-opts { margin-left: auto; }
+.item-card .buy .buy-opts input { width: 3.4rem; }
+
+/* Dock: taller on tall screens, and the Roll button never scrolls out of sight */
+.dock-body { height: clamp(240px, 34vh, 360px); }
+.dock-roller .actions { position: sticky; bottom: 0; z-index: 2; background: #0e171a; padding: .45rem 0 .2rem; margin-bottom: 0; box-shadow: 0 -8px 10px -6px #0e171a; }
+@media (max-width: 900px) { .dock-body { height: 42vh; } }
+.wiki-tree details details { padding-left: .7rem; border-left: 1px solid var(--line); margin-left: .25rem; }
+.wiki-tree details details summary { font-weight: 500; }

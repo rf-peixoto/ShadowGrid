@@ -273,6 +273,61 @@ check(osh["store"][ref("Erika MCD-6")][0], "old Fixer contact unlocks the store"
 r = _.post("/api/me/sheet/action", json={"action": "reload", "uid": item(osh, "Ares Predator VI")["uid"]}, headers=H)
 check(r.status_code == 400 and "no ammunition" in j(r)["error"], "old pistol takes Heavy ammo")
 
+print("Sixth World Companion")
+import security  # noqa: E402
+security._buckets.clear()
+sw, r = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "swc")
+swid = j(sw.get("/api/me/state"))["me"]["id"]
+sact = lambda **kw: sw.post("/api/me/sheet/action", json=kw, headers=H)  # noqa: E731
+k0 = j(sw.get("/api/me/sheet"))["char"]["karma"]
+r = sact(action="set_info", metatype="Minotaur")
+d = j(r)["derived"]
+check(j(r)["char"]["karma"] == k0 - 5 and d["max"]["Body"] == 10 and d["max"]["Strength"] == 9, "metavariant: Minotaur costs 5 Karma, new maximums")
+check(any(w["name"] == "Horns" for w in d["natural_weapons"]) and any(p["key"].startswith("natural:") for p in j(r)["pools"]), "natural weapon from a racial quality")
+check(d["physical_boxes"] == 8 + 1 + 2, "Built Tough 2 from the variant")
+r = sact(action="set_info", metatype="Human")
+check(j(r)["char"]["karma"] == k0, "changing back refunds the variant Karma")
+r = sact(action="set_info", metatype="Naga")
+check(j(r)["derived"]["defense_rating"] >= 5 and j(r)["derived"]["movement"]["walk"] == 5, "metasapient: Naga armor and movement")
+sact(action="set_info", metatype="Human")
+r = sact(action="set_infected", infected="Banshee")
+check(r.status_code == 400 and "Elf" in j(r)["error"], "Infected need the right base metatype")
+r = sact(action="set_infected", infected="Ghoul")
+d = j(r)["derived"]
+check(r.status_code == 200 and d["essence"] == 5 and d["attributes"]["Magic"] >= 1 and d["max"]["Body"] == 10, "Ghoul: Essence 5, Magic 1, new maximums")
+check(d["infected"]["name"] == "Ghoul" and d["lifestyle_mult"] >= 1.3 and any(w["name"] == "Claws" for w in d["natural_weapons"]), "Ghoul powers, weapons and lifestyle")
+r = sact(action="set_info", magic_type="Technomancer")
+check(r.status_code == 400, "Infected can't be technomancers")
+r = sact(action="set_infected", infected="")
+check(j(r)["derived"]["infected"] is None and j(r)["derived"]["essence"] == 6, "infection removed")
+r = sact(action="add_quality", quality="Shiva Arms", level=2)
+d = j(r)["derived"]
+check(d["max"]["Body"] == 8 and d["max"]["Strength"] == 8, "Shiva Arms raises Body and Strength maximums")
+r = sact(action="add_quality", quality="Bark")
+check(j(r)["derived"]["price_markup"][1] > 0.2, "Bark and Shiva Arms raise fitted gear prices")
+r = sact(action="add_quality", quality="Gender Transmorphism")
+check(r.status_code == 400 or "racial" in str(j(r)), "racial-only traits can't be bought")
+gm.post(f"/api/games/{cid}/grant", json={"players": [swid], "nuyen": 400000, "reason": "PACKs"}, headers=H)
+store = j(sw.get("/api/me/sheet"))["store"]
+check(store["pack-street-samurai-pack"][0], "a creation-legal PACK is on sale")
+n0 = j(sw.get("/api/me/sheet"))["char"]["nuyen"]
+r = sact(action="buy_pack", ref="pack-ares-predator-vi-quiet-pack")
+sh = j(r)
+gun = item(sh, "Ares Predator VI")
+gel = next((i for i in sh["char"]["inventory"] if i["name"].startswith("Gel rounds (Heavy")), None)
+check(r.status_code == 200 and gun and gel and gel["qty"] == 100, "weapon PACK: pistol, accessories and 100 gel rounds")
+check(sh["char"]["nuyen"] < n0 and abs((n0 - sh["char"]["nuyen"]) - 1750 * (1 + sh["derived"]["price_markup"][0])) < 2, "PACK charges the PACK price")
+r = sact(action="buy_pack", ref="pack-cybereyes-pack-c", grade="Alphaware")
+eyes = item(j(r), "Cybereyes 3")
+check(r.status_code == 200 and eyes and eyes["grade"] == "Alphaware", "augmentation PACK in Alpha grade")
+r = sact(action="save_contact", contact={"name": "Ivy", "type": "Deckmeister", "connection": 6, "loyalty": 2})
+check(any(ct["name"] == "Ivy" for ct in j(r)["char"]["contacts"]), "new contact archetypes are contact types")
+tpl = j(gm.get(f"/api/maps/{mid}/context"))
+names = [t["name"] for t in j(gm.get("/api/catalog"))["npcTemplates"]]
+check("Artificer" in names and "Ghoul (Human, Infected)" in names, "Companion contacts and Infected are NPC templates")
+wiki = j(gm.get("/api/catalog"))["wiki"]["topics"]
+check("Minotaur" in wiki and "Ghoul (Infected)" in wiki and "Street Samurai PACK" in wiki and "Glamour (quality)" in wiki, "wiki covers the Companion")
+
 print("Magic")
 _, r = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "mage")
 mg = _

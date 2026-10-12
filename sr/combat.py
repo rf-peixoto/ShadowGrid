@@ -173,7 +173,7 @@ def spirit_npc(kind, force):
 def templates():
     """Template list for the GM's picker."""
     out = [{"key": f"t:{i}", "name": t["name"], "kind": t.get("kind"), "pr": t.get("pr")}
-           for i, t in enumerate(N.NPC_TEMPLATES) if t.get("cm")]
+           for i, t in enumerate(N.NPC_TEMPLATES)]
     out += [{"key": f"s:{k}", "name": f"{k} spirit", "kind": "Spirit", "pr": None, "force": True} for k in M.SPIRITS]
     return out
 
@@ -448,6 +448,18 @@ def char_weapon_profile(f, key, mode, rng, amp=0):
             raise R.RuleError(f"{f.name} can't use the {it['name']} (untrained exotic weapon).")
         return {"name": it["name"], "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
                 "element": p["element"], "mode": p["mode"], "uid": it["uid"]}
+    if key.startswith("natural:"):
+        nws = d.get("natural_weapons") or []
+        i = _int(key[8:], -1)
+        if not 0 <= i < len(nws):
+            raise R.RuleError("Pick a weapon.")
+        w = nws[i]
+        p = R.weapon_profile(c, d, {"name": w["name"], "skill": w["skill"], "spec": "Unarmed Combat" if w["skill"] == "Close Combat" else None,
+                                    "dv": w["dv"], "ar": w["ar"], "cat": "Melee"}, None, rng)
+        if not p:
+            raise R.RuleError(f"{f.name} can't use that natural weapon.")
+        return {"name": w["name"], "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
+                "element": "", "mode": None, "uid": "unarmed"}
     if key.startswith("spell:"):
         sp = (c.get("spells") or [])[_int(key[6:], -1)] if 0 <= _int(key[6:], -1) < len(c.get("spells") or []) else None
         if not sp or sp.get("category") != "Combat":

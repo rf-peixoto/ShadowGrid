@@ -98,12 +98,21 @@ function attackEntry(r, e, who) {
     h('span.verdict.' + (d.hit ? 'success' : 'failure'), d.hit ? (d.damage ? `${d.damage}${d.type === 'S' ? 'S' : 'P'}` : 'SOAKED') : 'MISS')));
   const row = (label, part) => part ? h('div.atk-row', h('span.k', label), h('span.dice-row', (part.dice || []).map((x, i) => dieEl(x, i, { small: true }))),
     h('b', { title: breakdown(part.parts) }, part.unopposed ? 'unopposed' : `${part.hits} hits`)) : null;
-  e.append(row(d.weapon + (d.mode ? ` (${d.mode})` : ''), d.attack), row('Defense', d.defense), d.soak ? row('Soak', d.soak) : null);
+  e.append(...[row(d.weapon + (d.mode ? ` (${d.mode})` : ''), d.attack), row('Defense', d.defense), d.soak ? row('Soak', d.soak) : null].filter(Boolean));
   const meta = [d.range, d.ar != null ? `AR ${d.ar} vs DR ${d.dr}` : null, d.edge_hint ? `${d.edge_hint === 'attacker' ? 'attacker' : 'defender'} may gain 1 Edge` : null,
     d.hit ? `DV ${d.dv}${d.type}` : null, ...(d.notes || []), (d.effects || []).length ? 'statuses: ' + d.effects.map(x => x[0]).join(', ') : null,
     d.targetStatus && d.targetStatus !== 'OK' ? d.target + ': ' + d.targetStatus : null].filter(Boolean).join(' · ');
   e.append(h('div.meta', meta, ' · ', timeAgo(r.at)));
   return e;
+}
+/* one line for the dice dock header: who rolled what, and the outcome */
+function rollSummary(r) {
+  if (!r) return '';
+  const d = r.data || {};
+  if (r.kind === 'attack') return `${d.attacker} → ${d.target}: ${d.hit ? (d.damage ? `${d.damage}${d.type === 'S' ? 'S' : 'P'} damage` : 'soaked') : 'miss'}`;
+  if (r.kind === 'init') return `${r.who}: initiative ${d.total}`;
+  if (r.kind === 'note') return `${r.who}: ${d.text}`;
+  return `${r.who}: ${d.label || 'Roll'}, ${d.hits} hit${d.hits === 1 ? '' : 's'}${d.threshold ? (d.success ? ' (success)' : ' (failure)') : ''}`;
 }
 function logEntry(r) {
   const d = r.data || {};
@@ -428,6 +437,6 @@ async function invite(cid, gameName) {
   return res;
 }
 
-return { invite, catalog, contactSupply, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
+return { invite, catalog, contactSupply, rollSummary, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
   roller, edgeMenu, editItem, itemStats, availText, arText, breakdown, sum, RANGES };
 })();

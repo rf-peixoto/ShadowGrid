@@ -376,6 +376,19 @@ CYBERDECKS = [
     ]
 ]
 
+# Rigger command consoles (p. 197): Device Rating, Data Processing, Firewall.
+RCCS = [
+    {"name": n, "cat": "Cyberdecks & Software", "sub": "RCCs", "device_rating": dr, "data_processing": dp, "firewall": fw,
+     "avail": a, "cost": c, "desc": "Rigger command console: slave drones and run their autosofts from here."}
+    for n, dr, dp, fw, a, c in [
+        ("Scratch-built junk RCC", 1, 3, 2, "1(L)", 1400), ("Allegiance Control Center", 2, 3, 3, "3(L)", 8000),
+        ("Essy Motors Drone Master", 3, 4, 4, "3(L)", 16000), ("Horizon Overseer", 4, 5, 4, "4(L)", 32000),
+        ("Maersk Spider", 4, 4, 5, "5(L)", 34000), ("Vulcan Liegelord", 5, 6, 5, "5(L)", 66000),
+        ("Proteus Poseidon", 5, 5, 6, "6(L)", 68000), ("Transys Eidolon", 6, 6, 5, "7(L)", 75000),
+        ("Ares Red Dog Series", 6, 7, 6, "8(L)", 95000), ("Aztechnology Tlaloc", 6, 8, 7, "9(L)", 140000),
+    ]
+]
+
 
 def _g(name, cat, sub, avail, cost, desc="", **kw):
     d = {"name": name, "cat": cat, "sub": sub, "avail": avail, "cost": cost}
@@ -793,5 +806,17 @@ VEHICLE_MODS = [
     _g("Manual Operation (mount)", "Vehicles", "Modifications", "+1", 500, mod=True, desc="Vehicles only; adds 1 to the mount's Availability."),
 ]
 
-GEAR_CATALOG = (WEAPONS + AMMO + EXPLOSIVES + WEAPON_ACCESSORIES + ARMOR + COMMLINKS + CYBERDECKS
+GEAR_CATALOG = (WEAPONS + AMMO + EXPLOSIVES + WEAPON_ACCESSORIES + ARMOR + COMMLINKS + CYBERDECKS + RCCS
                 + ELECTRONICS + CYBERWARE + BIOWARE + MAGIC_GEAR + VEHICLES + VEHICLE_MODS)
+
+
+
+def _companion_contacts():
+    from . import companion6e as C
+    for ct in C.CONTACTS:
+        CONTACT_TYPE_SUPPLY.setdefault(ct["name"], list(ct["supply"]))
+    for t, sup in {"Beat Cop": ["Security"], "Mafia Consigliere": ["Weapons", "Identity", "General"], "Mr. Johnson": []}.items():
+        CONTACT_TYPE_SUPPLY.setdefault(t, sup)
+
+
+_companion_contacts()

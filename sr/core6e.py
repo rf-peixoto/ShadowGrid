@@ -194,3 +194,33 @@ STATUSES = {
     "Wet": {"icon": "💧", "desc": "-6 to resist cold and electricity."},
     "Zapped": {"icon": "⚡", "desc": "-2 Initiative, no Sprint, -1 to all actions."},
 }
+
+
+# --------------------------------------------------------------------------- Sixth World Companion
+# Metavariants, metasapients and the new qualities join the core tables. Base metatypes
+# carry "base" = their own name so variants can be grouped and inherit size pricing.
+def _merge_companion():
+    from . import companion6e as C
+    for name, m in METATYPES.items():
+        m.setdefault("base", name)
+        m.setdefault("karma", 0)
+    for name, v in list(C.METAVARIANTS.items()) + list(C.METASAPIENTS.items()):
+        METATYPES[name] = {
+            "base": v["base"], "karma": v["karma"], "max": dict(v["max"]), "qualities": list(v["qualities"]),
+            "quality_levels": dict(v.get("levels", {})), "quality_choices": dict(v.get("choices", {})),
+            "weapons": v.get("weapons", []), "move": v.get("move"), "move_note": v.get("move_note", ""),
+            "dr": v.get("dr", 0), "size": v.get("size"), "desc": v["desc"], "source": C.SOURCE,
+            "metasapient": v["base"] == "Metasapient",
+        }
+    for table in (C.QUALITIES, C.METAGENIC_POSITIVE, C.METAGENIC_NEGATIVE):
+        for name, q in table.items():
+            QUALITIES.setdefault(name, q)
+    for name, desc in C.RACIAL_ONLY.items():
+        QUALITIES.setdefault(name, {"karma": 0, "desc": desc, "racial_only": True, "source": C.SOURCE})
+    for alias, real in C.QUALITY_ALIASES.items():
+        if alias not in QUALITIES and real in QUALITIES:
+            QUALITIES[alias] = dict(QUALITIES[real], alias_of=real, racial_only=True)
+
+
+_merge_companion()
+BASE_METATYPES = ["Human", "Elf", "Dwarf", "Ork", "Troll"]

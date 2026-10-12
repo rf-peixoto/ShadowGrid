@@ -102,8 +102,8 @@ function mount(root, cfg) {
     const top = h('div.section-head',
       h('h2', ch.name || h('span.muted', 'Unnamed runner'), ' ', h('span.hint', sub)),
       h('div.row.tight', SR.healthTag(d().status), SR.statusChips(d().statuses),
-        h('span.chip', h('span.k', 'Karma'), h('b', ch.karma)), h('span.chip', h('span.k', 'Nuyen'), h('b', { class: ch.nuyen < 0 ? 'bad' : '' }, money(ch.nuyen))),
-        h('span.chip', h('span.k', 'Edge'), SR.pips(ch.current_edge, d().edge_max), h('b', `${ch.current_edge}/${d().edge_max}`))));
+        cfg.gm ? [h('span.chip', h('span.k', 'Karma'), h('b', ch.karma)), h('span.chip', h('span.k', 'Nuyen'), h('b', { class: ch.nuyen < 0 ? 'bad' : '' }, money(ch.nuyen))),
+          h('span.chip', h('span.k', 'Edge'), SR.pips(ch.current_edge, d().edge_max), h('b', `${ch.current_edge}/${d().edge_max}`))] : null));
     wrap.append(top);
     return wrap;
   }
@@ -163,7 +163,7 @@ function mount(root, cfg) {
     const form = h('div.form-grid',
       field('Name', infoInput('name')),
       field('Role', infoSelect('role', ['', ...CAT.roles]), 'A label only; no bonuses in SR6.'),
-      field('Metatype', infoSelect('metatype', Object.keys(CAT.metatypes), { lockedField: true }), meta ? meta.desc : ''),
+      field('Metatype', metatypeSelect(), meta ? meta.desc + (meta.karma ? ` (${meta.karma} Karma at creation)` : '') : ''),
       field('Magic / Resonance', infoSelect('magic_type', CAT.magicTypes, { lockedField: true })),
       CASTERS.includes(ch.magic_type) ? field('Tradition', infoSelect('tradition', ['', ...Object.keys(CAT.traditions)], { lockedField: true, labels: v => v ? `${v} (drain: Willpower + ${CAT.traditions[v]})` : 'None' })) : null,
       ch.magic_type === 'Aspected Magician' ? field('Aspect', infoSelect('aspect', ['', ...CAT.aspects], { lockedField: true })) : null,
@@ -175,6 +175,8 @@ function mount(root, cfg) {
       field('Heat', infoInput('heat', { type: 'number', max: 99 })));
     out.append(h('div.card', h('div.overview-top', pcol, h('div', form,
       locked() ? h('p.hint', '🔒 Approved: metatype, magic type, tradition and aspect are set by the GM.') : null))));
+    const inf = infectedCard();
+    if (inf) out.append(inf);
 
     const racial = dv.qualities.filter(q => q.racial).map(q => q.name + (q.level > 1 ? ` ${q.level}` : ''));
     const extraVision = dv.vision.filter(v => !racial.some(r => r.toLowerCase().startsWith(v.toLowerCase())));
@@ -186,7 +188,7 @@ function mount(root, cfg) {
       stat('Major + Minor', `1 + ${dv.minor_actions}`, '', 'Actions each round: 1 Major plus Minor actions (1 + 1 per Initiative Die, max 5)'),
       stat('Defense Rating', dv.defense_rating),
       stat('Essence', dv.essence),
-      AWAKENED.includes(ch.magic_type) ? stat('Magic', dv.attributes.Magic) : null,
+      dv.awakened ? stat('Magic', dv.attributes.Magic) : null,
       ch.magic_type === 'Technomancer' ? stat('Resonance', dv.attributes.Resonance) : null),
       racial.length || extraVision.length ? h('p.hint.mt', `${ch.metatype} abilities: ${racial.join(', ') || 'none'}.` + (extraVision.length ? ` Implants add ${extraVision.join(' and ')} vision.` : '')) : null));
 
@@ -203,6 +205,69 @@ function mount(root, cfg) {
     out.append(econ);
     out.append(history());
     return out;
+  }
+  /* Metatype picker: the five metatypes with their Sixth World Companion variants, then the metasapients. */
+  function metatypeSelect() {
+    const ch = c();
+    const sel = h('select', { 'data-k': 'info.metatype', disabled: locked(), onchange: async e => {
+      const m = CAT.metatypes[e.target.value];
+      if (!cfg.gm && m.karma && !await UI.confirm(`${e.target.value}: ${m.desc} Costs ${m.karma} Karma during creation.`, { ok: 'Choose' })) { render(); return; }
+      act('set_info', { metatype: e.target.value });
+    } });
+    const label = n => { const m = CAT.metatypes[n]; return n + (m.karma ? ` · ${m.karma} K` : ''); };
+    for (const base of CAT.baseMetatypes) {
+      const og = h('optgroup', { label: base === 'Human' ? 'Human and variants' : `${base} and variants` }, option(base, base, ch.metatype === base));
+      Object.keys(CAT.metatypes).filter(n => CAT.metatypes[n].base === base && n !== base).forEach(n => og.append(option(n, label(n), ch.metatype === n)));
+      sel.append(og);
+    }
+    const ms = Object.keys(CAT.metatypes).filter(n => CAT.metatypes[n].base === 'Metasapient');
+    if (ms.length) sel.append(h('optgroup', { label: 'Metasapients' }, ms.map(n => option(n, label(n), ch.metatype === n))));
+    return sel;
+  }
+  /* HMHVV: choose an Infected expression (creation or GM), its free and bought optional powers, and Strain I Essence. */
+  function infectedCard() {
+    const ch = c(), dv = d(), info = dv.infected;
+    if (!info && locked() && !cfg.gm) return null;
+    const meta = CAT.metatypes[ch.metatype] || {};
+    const base = meta.base === 'Metasapient' ? ch.metatype : (meta.base || ch.metatype);
+    const card = h('div.card', h('h3', 'HMHVV (Infected)', info ? h('span.tag.status-Wounded', `${info.name} · Strain ${info.strain}`) : h('span.hint', 'optional')));
+    if (!locked() || cfg.gm) {
+      const sel = h('select', { onchange: async e => {
+        const v = e.target.value;
+        if (v && !cfg.gm) {
+          const t = CAT.infected[v];
+          let k = t.karma + (t.non_human_extra && base !== 'Human' ? t.non_human_extra : 0) - (t.awakened_discount && AWAKENED.includes(ch.magic_type) ? t.awakened_discount : 0);
+          if (!await UI.confirm(`Become a ${v}? Costs ${k} Karma. Attribute maximums change, and base attributes above the new maximums are lowered.`, { ok: 'Infect' })) { render(); return; }
+        }
+        act('set_infected', { infected: v });
+      } }, option('', 'Not infected', !ch.infected));
+      for (const [k, t] of Object.entries(CAT.infected)) {
+        const okBase = t.any || t.bases.includes(base);
+        sel.append(h('option', { value: k, selected: ch.infected === k, disabled: !okBase }, `${k} · ${t.karma} K · ${t.any ? 'any metatype' : t.bases.join('/')}`));
+      }
+      card.append(h('label.stack', 'Infected expression', sel));
+    }
+    if (!info) { card.append(h('p.hint', 'Infected (ghouls, vampires, banshees…) are dual-natured and Awakened, with new attribute maximums, powers and weaknesses. Not allowed for technomancers.')); return card; }
+    if (!info.base_ok) card.append(h('p.bad', `A ${ch.metatype} can't be a ${info.name}.`));
+    card.append(h('p.hint', info.strain_text),
+      h('div.kv-list', h('div', h('b', 'Powers: '), info.powers.join(', ')), h('div', h('b', 'Weaknesses: '), info.weaknesses.join(', ')),
+        info.notes ? h('div', info.notes) : null));
+    const chosen = info.chosen || [];
+    card.append(h('h4.mt', 'Optional powers'), chosen.length ? h('div.chips-list', chosen.map((x, i) => h('span.chip', x,
+      !locked() || cfg.gm ? h('button.x', { type: 'button', title: 'Remove', onclick: () => act('infected_power', { remove: true, index: i }) }, '×') : null))) : h('p.hint', 'None yet.'));
+    if (info.optional.length) {
+      const pick = h('select', info.optional.map(o => option(o, `${o} (${CAT.infectedPowerCost[o] || 8} K)`)));
+      const hasFree = chosen.some(x => x.endsWith('(free)'));
+      card.append(h('div.row.tight.mt', pick,
+        h('button.small', { type: 'button', onclick: async () => { const k = CAT.infectedPowerCost[pick.value] || 8; if (cfg.gm || await UI.confirm(`Buy ${pick.value} for ${k} Karma?`, { ok: 'Buy' })) act('infected_power', { power: pick.value }); } }, 'Buy'),
+        info.free_optional && !hasFree && !locked() ? h('button.small.primary', { type: 'button', title: `Free: ${info.free_optional}`, onclick: () => act('infected_power', { power: pick.value, free: true }) }, 'Take as free power') : null),
+        h('p.hint', info.free_optional ? `Free at creation: ${info.free_optional}. After creation, one optional power every two months of game time.` : 'After creation, one optional power every two months of game time.'));
+    }
+    if (info.strain === 'I' || info.strain === 'Ia') {
+      card.append(h('div.row.tight.mt', h('span', `Essence (before implants): ${info.essence_base}`),
+        cfg.gm ? h('button.small', { type: 'button', onclick: async () => { const v = await UI.prompt('Infected Essence', 'Essence before implants (rises with Essence Drain, falls with Essence Loss)', { type: 'number', value: info.essence_base, min: 0 }); if (v !== null) act('set_infected_essence', { essence: +v }); } }, 'Set…') : h('span.hint', 'Your GM tracks Essence Drain and Essence Loss.')));
+    }
+    return card;
   }
   async function tradeKarma() {
     const v = await UI.prompt('Trade Karma for Nuyen', `How much Karma? (you have ${c().karma})`, { type: 'number', value: 1, min: 1, ok: 'Trade' });
@@ -263,7 +328,7 @@ function mount(root, cfg) {
     const der = h('div.card', h('h3', 'Derived attributes'), h('div.stats',
       stat('Composure', dv.composure, '', 'Willpower + Charisma'), stat('Judge Intentions', dv.judge_intentions, '', 'Willpower + Intuition'),
       stat('Memory', dv.memory, '', 'Logic + Intuition'), stat('Lift / Carry', dv.lift_carry, '', 'Body + Willpower'),
-      stat('Lift', `${dv.lift_kg} kg`, ` (${dv.overhead_kg} overhead)`), stat('Movement', `${dv.movement.walk} m`, ` / sprint ${dv.movement.sprint}+`),
+      stat('Lift', `${dv.lift_kg} kg`, ` (${dv.overhead_kg} overhead)`), stat('Movement', `${dv.movement.walk}/${dv.movement.sprint}/+${dv.movement.per_hit}`, '', dv.movement.note || 'Walk / sprint / extra meters per hit'),
       stat('Initiative', `${dv.initiative_score} + ${dv.initiative_dice}D6`),
       dv.astral_initiative ? stat('Astral init.', `${dv.astral_initiative.score} + ${dv.astral_initiative.dice}D6`) : null,
       dv.matrix.device ? stat('Matrix init.', `${dv.matrix.init_score} + ${dv.matrix.init_dice}D6`) : null));
@@ -369,11 +434,12 @@ function mount(root, cfg) {
     out.append(cur);
     for (const side of ['Positive', 'Negative']) {
       if (locked() && side === 'Negative') continue;
-      const items = Object.entries(CAT.qualities).filter(([, q]) => side === 'Positive' ? q.karma > 0 : q.karma <= 0).map(([name, q]) => ({ name, ...q }));
+      const items = Object.entries(CAT.qualities).filter(([, q]) => !q.racial_only && (side === 'Positive' ? q.karma > 0 : q.karma <= 0)).map(([name, q]) => ({ name, ...q }));
       const card = h('div.card', h('h3', `${side} qualities`, h('span.hint', side === 'Positive' ? (locked() ? `cost ${CAT.karma.quality_mult}× Karma` : 'cost Karma') : 'give Karma')));
       card.append(pickList(items, { height: '40vh', render: q => {
         const k = Math.abs(q.karma) * (locked() ? CAT.karma.quality_mult : 1);
-        return h('div.pick', h('div', h('div', q.name + (q.levels ? ` (1-${q.levels})` : '')), h('div.meta', `${q.desc} · ${k} Karma${q.levels ? ' per level' : ''}${q.choice ? ` · choose ${q.choice}` : ''}`)),
+        return h('div.pick', h('div', h('div', q.name + (q.levels ? ` (1-${q.levels})` : ''), q.source ? h('span.tag.src', q.group && !['Positive', 'Negative'].includes(q.group) ? q.group : 'Companion') : null),
+          h('div.meta', `${q.desc} · ${k} Karma${q.levels ? ' per level' : ''}${q.choice ? ` · choose ${q.choice}` : ''}`)),
           h('button.small', { type: 'button', disabled: side === 'Positive' && !cfg.gm && ch.karma < k, onclick: () => addQuality(q) }, 'Add'));
       } }));
       out.append(card);
@@ -688,7 +754,8 @@ function mount(root, cfg) {
       if (v) qtyCell = h('div', SR.monitor('physical', { p: v.damage, pm: v.boxes, s: 0, sm: 0, ov: 0 }, { compact: true, showTools: false, label: 'Damage',
         onSet: (_t, val) => act('set_vehicle_damage', { uid: it.uid, value: val }, { quiet: true }) }));
     }
-    const sub = [it.sub, it.grade && it.grade !== 'Standard' ? it.grade : '', it.implant ? `Essence ${it.essence}` : '', it.avail != null && it.ref ? `Avail ${SR.availText(it.avail, it.legal)}` : ''].filter(Boolean).join(' · ');
+    const sub = [it.sub, it.grade && it.grade !== 'Standard' ? it.grade : '', it.implant ? `Essence ${it.essence}` : '', it.avail != null && it.ref ? `Avail ${SR.availText(it.avail, it.legal)}` : '',
+      it.notes || '', it.pack ? `from ${it.pack}` : ''].filter(Boolean).join(' · ');
     return h('tr' + (equippable && !on ? '.dim' : ''),
       h('td', h('a', { href: '#', onclick: e => { e.preventDefault(); showItem(it); } }, it.name), it._custom ? h('span.tag.custom', ' custom') : '', sub ? h('div.hint', sub) : null),
       h('td.hint', SR.itemStats(it)), h('td.nowrap', qtyCell), h('td.right.nowrap', btns));
@@ -734,21 +801,26 @@ function mount(root, cfg) {
     const opts = h('div.row.tight');
     function draw() {
       cats.innerHTML = '';
-      for (const k of CAT.store.categories) cats.append(h('button.small' + (k === cat ? '.active' : ''), { type: 'button', onclick: () => { cat = k; chosen = null; draw(); } }, k));
+      for (const k of [...CAT.store.categories, 'PACKs']) cats.append(h('button.small' + (k === cat ? '.active' : ''), { type: 'button', onclick: () => { cat = k; chosen = null; draw(); } }, k));
       list.innerHTML = '';
       list.append(h('label.pick', h('div', h('div', h('b', 'Custom item…')), h('div.meta', 'Fill in every field yourself')),
         h('input', { type: 'radio', name: 'give', checked: chosen === 'custom', onchange: () => { chosen = 'custom'; drawOpts(); } })));
       const q = search.value.trim().toLowerCase();
-      for (const e of CAT.store.items) {
-        if (q ? !JSON.stringify(e).toLowerCase().includes(q) : e.cat !== cat) continue;
-        list.append(h('label.pick', h('div', h('div', e.name), h('div.meta', `${e.sub} · ${typeof e.cost === 'number' ? money(e.cost) : e.cost + '¥'} · Avail ${e.avail} · ${SR.itemStats(e)}`)),
+      for (const e of [...CAT.store.items, ...CAT.packs]) {
+        if (q ? !(e.name + ' ' + e.sub).toLowerCase().includes(q) : e.cat !== cat) continue;
+        list.append(h('label.pick', h('div', h('div', e.name), h('div.meta', e.pack ? `${e.sub} · ${money(e.cost)} · ${e.contents.length} entries` : `${e.sub} · ${typeof e.cost === 'number' ? money(e.cost) : e.cost + '¥'} · Avail ${e.avail} · ${SR.itemStats(e)}`)),
           h('input', { type: 'radio', name: 'give', checked: chosen === e, onchange: () => { chosen = e; drawOpts(); } })));
       }
     }
-    const rating = h('input', { type: 'number', min: 1, value: 1 }), grade = h('select', Object.keys(CAT.store.grades).map(g => option(g))), qty = h('input', { type: 'number', min: 1, max: 100, value: 1 });
+    const rating = h('input', { type: 'number', min: 1, value: 1 }), grade = h('select', Object.keys(CAT.store.grades).map(g => option(g))), qty = h('input', { type: 'number', min: 1, max: 100, value: 1 }), packGrade = h('select');
     function drawOpts() {
       opts.innerHTML = '';
       if (!chosen || chosen === 'custom') return;
+      if (chosen.pack) {
+        packGrade.innerHTML = ''; packGrade.append(option('Standard', 'Standard grade'), ...Object.keys(chosen.packGrades || {}).map(g => option(g)));
+        if (chosen.packGrades) opts.append(h('label', 'Grade', packGrade));
+        return;
+      }
       if (chosen.rating) { rating.min = chosen.rating[0]; rating.max = chosen.rating[1]; rating.value = chosen.rating[0]; opts.append(h('label', `Rating (${chosen.rating[0]}-${chosen.rating[1]})`, rating)); }
       if (chosen.implant) opts.append(h('label', 'Grade', grade));
       if (!chosen.implant) opts.append(h('label', chosen.sub === 'Ammunition' ? 'Boxes of 10' : 'Quantity', qty));
@@ -761,7 +833,8 @@ function mount(root, cfg) {
     if (chosen === 'custom') {
       const it = await SR.editItem({}, { title: 'Custom item', ok: 'Give', cat });
       if (it) act('give', { item: it });
-    } else act('give', { ref: chosen.id, rating: +rating.value, grade: grade.value, qty: +qty.value });
+    } else if (chosen.pack) act('buy_pack', { ref: chosen.id, grade: packGrade.value || 'Standard', free: true });
+    else act('give', { ref: chosen.id, rating: +rating.value, grade: grade.value, qty: +qty.value });
   }
 
   // ------------------------------------------------------------ combat

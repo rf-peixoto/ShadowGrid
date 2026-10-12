@@ -23,6 +23,7 @@ import re
 import secrets
 
 from . import catalog as CAT
+from . import companion6e as SWC
 from . import core6e as K
 from . import dice as DICE
 from . import gear6e as G
@@ -39,8 +40,9 @@ AWAKENED = ("Magician", "Aspected Magician", "Adept", "Mystic Adept")
 CASTERS = ("Magician", "Aspected Magician", "Mystic Adept")
 ASPECTS = ["Sorcery", "Conjuring", "Enchanting"]
 LIFESTYLES = K.LIFESTYLES
-CONTACT_TYPES = ["Fixer", "Fence", "Arms Dealer", "Street Doc", "Talismonger", "Decker", "Mechanic", "Smuggler",
-                 "Mr. Johnson", "Corporate", "Police", "Gang", "Media", "Bartender", "Other"]
+CONTACT_TYPES = sorted({"Fixer", "Fence", "Arms Dealer", "Street Doc", "Talismonger", "Decker", "Mechanic", "Smuggler",
+                        "Mr. Johnson", "Corporate", "Police", "Gang", "Media", "Bartender", "Beat Cop", "Mafia Consigliere"}
+                       | {ct["name"] for ct in SWC.CONTACTS}) + ["Other"]
 SUPPLY = G.CONTACT_SUPPLY + ["Fixer"]
 LOCKED_INFO = ("metatype", "magic_type", "tradition", "aspect")
 ROLES = ["Adept", "Combat Mage", "Covert Ops Specialist", "Decker", "Face", "Rigger", "Street Samurai",
@@ -108,6 +110,7 @@ def new_character():
         "matrix": {"mode": "AR", "device": ""},
         "physical_damage": 0, "stun_damage": 0, "drain_stun": 0, "drain_phys": 0, "heal_used": {},
         "current_edge": 1, "statuses": {}, "uid_seq": 0,
+        "infected": "", "infected_powers": [], "infected_essence": None,
     }
 
 
@@ -224,7 +227,7 @@ def _relink(c):
         lo_hi = CAT.rating_range(e)
         if lo_hi:
             rating = max(lo_hi[0], min(lo_hi[1], rating or lo_hi[0]))
-        new = CAT.make_item(e, rating=rating, metatype=c.get("metatype", ""), uid=it.get("uid") or _uid(c))
+        new = CAT.make_item(e, rating=rating, metatype=price_markup(c), uid=it.get("uid") or _uid(c))
         new["qty"] = max(1, _int(it.get("qty"), 1)) * CAT.box_size(e)
         for k in ("equipped", "notes", "bonded"):
             if k in it:
@@ -246,12 +249,53 @@ def _spell_entry(s):
                               "element", "area", "desc") if k in s}
 
 
+def meta_of(c):
+    return K.METATYPES.get(c.get("metatype")) or K.METATYPES["Human"]
+
+
+def base_metatype(c):
+    """Human/Elf/Dwarf/Ork/Troll for metavariants; the metasapient's own name otherwise."""
+    m = meta_of(c)
+    return c.get("metatype") if m.get("base") in (None, "Metasapient") else m["base"]
+
+
+def infected_info(c):
+    """The character's HMHVV expression with the attribute maximums for their base metatype, or None."""
+    name = c.get("infected") or ""
+    inf = SWC.INFECTED.get(name)
+    if not inf:
+        return None
+    base = base_metatype(c)
+    if base in inf["bases"]:
+        mx = dict(inf["bases"][base])
+    elif inf.get("any_base_mods"):
+        meta = meta_of(c)
+        mx = {a: meta["max"].get(a, K.DEFAULT_MAX) + inf["any_base_mods"].get(a, 0) for a in K.BASE_ATTRS}
+    else:
+        mx = None
+    return dict(inf, name=name, max=mx, base_ok=mx is not None)
+
+
+def infected_karma(c, name=None):
+    name = name if name is not None else c.get("infected")
+    inf = SWC.INFECTED.get(name or "")
+    if not inf:
+        return 0
+    k = inf["karma"]
+    if inf.get("non_human_extra") and base_metatype(c) != "Human":
+        k += inf["non_human_extra"]
+    if inf.get("awakened_discount") and c.get("magic_type") in AWAKENED:
+        k -= inf["awakened_discount"]
+    return k
+
+
 def qualities_of(c):
     """Chosen qualities plus the metatype's racial ones (free, can't be removed)."""
-    meta = K.METATYPES.get(c.get("metatype")) or K.METATYPES["Human"]
+    meta = meta_of(c)
     out = [dict(q) for q in c.get("qualities") or [] if q.get("name") in K.QUALITIES]
     for q in meta.get("qualities", []):
-        out.append({"name": q, "level": meta.get("quality_levels", {}).get(q, 1), "choice": "", "racial": True})
+        out.append({"name": q, "level": meta.get("quality_levels", {}).get(q, 1),
+                    "choice": meta.get("quality_choices", {}).get(q, ""), "racial": True})
     return out
 
 
@@ -278,16 +322,64 @@ def _has_q(qs, name):
     return any(q["name"] == name for q in qs)
 
 
-def natural_max(c, attr, qs=None):
+def _qlevel(qs, key):
+    """Total levels of qualities carrying an effect key (for per-level effects like essence_hole)."""
+    return sum(max(1, _int(q.get("level"), 1)) for q in qs if (K.QUALITIES[q["name"]].get("effects") or {}).get(key))
+
+
+def _qfixed(qs, attr):
+    """attr_max_fixed effects ({"Body": "L"} for Shiva Arms, -1 for Neoteny)."""
+    total = 0
+    for q in qs:
+        eff = (K.QUALITIES[q["name"]].get("effects") or {}).get("attr_max_fixed") or {}
+        v = eff.get(attr)
+        if v is None:
+            continue
+        lvl = max(1, _int(q.get("level"), 1))
+        total += lvl if v == "L" else -lvl if v == "-L" else _int(v)
+    return total
+
+
+def price_markup(c, qs=None):
+    """(all gear %, fitted gear %) for size: troll-sized metatypes, dwarfs, and qualities like Bark or Shiva Arms."""
     qs = qs if qs is not None else qualities_of(c)
-    meta = K.METATYPES.get(c.get("metatype")) or K.METATYPES["Human"]
+    meta = meta_of(c)
+    size = meta.get("size") or CAT.G_SIZE.get(meta.get("base") or c.get("metatype"))
+    all_pct = size[1] if size and size[0] == "all" else 0.0
+    fitted = size[1] if size and size[0] == "fitted" else 0.0
+    for q in qs:
+        f = (K.QUALITIES[q["name"]].get("effects") or {}).get("fitted_markup")
+        if f:
+            fitted += f * max(1, _int(q.get("level"), 1))
+    return (round(all_pct, 3), round(fitted, 3))
+
+
+def infected_essence_base(c, inf=None):
+    inf = inf if inf is not None else infected_info(c)
+    if not inf:
+        return 6.0
+    if inf["strain"] in ("II", "III"):
+        return 5.0
+    v = c.get("infected_essence")
+    return float(_num(v, 6.0)) if v is not None else 6.0
+
+
+def natural_max(c, attr, qs=None, inf=None):
+    qs = qs if qs is not None else qualities_of(c)
+    inf = inf if inf is not None else infected_info(c)
+    meta = meta_of(c)
     if attr == "Magic":
+        if inf:
+            base = 5 if inf["strain"] in ("II", "III") else max(1, int(math.floor(infected_essence_base(c, inf) + 1e-9)))
+            return base + _int(c.get("initiation_grade"))
         return 6 + _int(c.get("initiation_grade"))
     if attr == "Resonance":
         return 6 + _int(c.get("submersion_grade"))
     mx = meta["max"].get(attr, K.DEFAULT_MAX)
-    mx += _qeffect(qs, "attr_max", attr)
-    return max(1, min(10, mx))
+    if inf and inf.get("max") and attr in inf["max"]:
+        mx = inf["max"][attr]
+    mx += _qeffect(qs, "attr_max", attr) + _qfixed(qs, attr)
+    return max(1, min(13, mx))
 
 
 def implants(c):
@@ -318,17 +410,22 @@ def skill_attr(skill):
 def derive(c):
     """Every derived value of a character."""
     qs = qualities_of(c)
+    inf = infected_info(c)
+    meta = meta_of(c)
     base = c["attributes"]
     mtype = c.get("magic_type")
+    awakened = mtype in AWAKENED or bool(inf)
     A, bonuses, maxes = {}, {}, {}
     for a in ATTRS:
-        mx = natural_max(c, a, qs)
+        mx = natural_max(c, a, qs, inf)
         lo = 0 if a in ("Magic", "Resonance") else 1
         maxes[a] = mx
         A[a] = max(lo, min(mx, _int(base.get(a), lo)))
-    if mtype not in AWAKENED:
+    if not awakened:
         A["Magic"] = 0
-    if mtype != "Technomancer":
+    elif inf and A["Magic"] < 1:
+        A["Magic"] = 1
+    if mtype != "Technomancer" or inf:
         A["Resonance"] = 0
 
     def bump(attr, amount, source):
@@ -337,12 +434,17 @@ def derive(c):
 
     # Essence and its loss
     mult = 2 if _has_q(qs, "Sensitive System") else 1
-    essence = 6.0 - sum(_num(it.get("essence")) * mult for it in implants(c))
-    essence = round(max(0.0, essence), 2)
-    loss = 0 if essence >= 6 else 6 - math.floor(essence + 1e-9)
+    hole = round(0.1 * _qlevel(qs, "essence_hole"), 2)               # Augmentation Acclimation / Cyborg
+    implant_ess = sum(_num(it.get("essence")) * mult for it in implants(c))
+    essence_base = infected_essence_base(c, inf)
+    essence = round(max(0.0, essence_base - max(0.0, implant_ess - hole)), 2)
+    loss = 0 if essence >= 6 or inf else 6 - math.floor(essence + 1e-9)
     for a in ("Magic", "Resonance"):
         if A[a] and loss:
             bump(a, -min(loss, A[a]), "Essence loss")
+    if inf:
+        for a, n in (inf.get("minus") or {}).items():
+            bump(a, -n, c["infected"])
 
     # augmentations
     init_dice = 1
@@ -365,6 +467,8 @@ def derive(c):
         if a in CORE_ATTRS:
             total = min(total, K.AUGMENTED_BONUS_MAX)
         aug[a] = max(0, A[a] + total)
+    if inf:
+        init_dice += _int(inf.get("init_dice"))
     init_dice = max(1, min(MAX_INIT_DICE, init_dice))
 
     # armor and Defense Rating: best body armor + helmets/shields + implants + qualities + powers
@@ -374,13 +478,16 @@ def derive(c):
     impl_dr = sum(_int(it.get("dr")) for it in implants(c) if not it.get("limb_mod"))
     q_dr = _qeffect(qs, "dr")
     p_dr = power_level(c, "Mystic Armor") if mtype in ("Adept", "Mystic Adept") else 0
-    armor = body_armor + extra + impl_dr + q_dr + p_dr
+    n_dr = _int(meta.get("dr")) + (_int(inf.get("dr")) + sum(1 for x in c.get("infected_powers") or [] if x.startswith("Armor"))
+                                   if inf else 0)
+    armor = body_armor + extra + impl_dr + q_dr + p_dr + n_dr
     armor_parts = [p for p in (["Body armor", body_armor], ["Helmet/shield", extra], ["Implants", impl_dr],
-                               ["Qualities", q_dr], ["Mystic Armor", p_dr]) if p[1]]
+                               ["Qualities", q_dr], ["Mystic Armor", p_dr], ["Natural armor", n_dr]) if p[1]]
 
     # condition monitors
     limbs = sum(_int(it.get("phys_boxes")) for it in implants(c))
-    p_boxes = 8 + _half_up(aug["Body"]) + _qeffect(qs, "phys_boxes") + limbs
+    base_boxes = 6 + aug["Body"] // 2 if _qeffect(qs, "neoteny") else 8 + _half_up(aug["Body"])
+    p_boxes = base_boxes + _qeffect(qs, "phys_boxes") + limbs + (_int(inf.get("phys_boxes")) if inf else 0)
     s_boxes = max(2, 8 + _half_up(aug["Willpower"]) + _qeffect(qs, "stun_boxes"))
     overflow = 2 * aug["Body"] + _qeffect(qs, "overflow")
     pd = max(0, _int(c.get("physical_damage")))
@@ -439,7 +546,7 @@ def derive(c):
     unarmed_dv += _qeffect(qs, "unarmed_dv_bonus") + (power_level(c, "Critical Strike") if mtype in ("Adept", "Mystic Adept") else 0)
     unarmed_ar = aug["Reaction"] + aug["Strength"] + max([_int(it.get("unarmed_ar")) for it in implants(c)] or [0])
 
-    lifestyle_mult = 1.0
+    lifestyle_mult = SWC.INFECTED_LIFESTYLE_MULT if inf else 1.0
     for q in qs:
         lifestyle_mult *= (K.QUALITIES[q["name"]].get("effects") or {}).get("lifestyle_mult", 1)
     for it in implants(c):
@@ -447,23 +554,43 @@ def derive(c):
             lifestyle_mult *= _num(it["lifestyle_mult"], 1)
 
     knowledge_free = aug["Logic"]
+    # movement: metatype base, Celerity/Satyr Legs, +2 for most Infected
+    move = list(meta.get("move") or [10, 15, 1])
+    for q in qs:
+        mv = (K.QUALITIES[q["name"]].get("effects") or {}).get("move")
+        if mv:
+            move = [move[i] + mv[i] for i in range(3)]
+    if inf and inf.get("move"):
+        move = [move[0] + inf["move"], move[1] + inf["move"], move[2]]
+    minor = min(MAX_MINOR + _qeffect(qs, "minor_actions"), 1 + init_dice + _qeffect(qs, "minor_actions"))
+    if _qeffect(qs, "cyber_psychosis") and _int(c.get("current_edge")) <= 0:
+        minor = max(1, minor - _qeffect(qs, "cyber_psychosis"))
+    visions = {(K.QUALITIES[q["name"]].get("effects") or {}).get("vision") for q in qs
+               if (K.QUALITIES[q["name"]].get("effects") or {}).get("vision")} | {it["vision"] for it in implants(c) if it.get("vision")}
+    if inf:
+        visions |= {v for v in (inf.get("vision"), inf.get("vision2")) if v}
+    composure = aug["Willpower"] + aug["Charisma"] - (init_dice if _qeffect(qs, "twitchy") else 0)
     return {
         "attributes": aug, "base": A, "max": maxes, "bonuses": bonuses, "essence": essence,
-        "qualities": qs, "vision": sorted({(K.QUALITIES[q["name"]].get("effects") or {}).get("vision") for q in qs
-                                            if (K.QUALITIES[q["name"]].get("effects") or {}).get("vision")} |
-                                           {it["vision"] for it in implants(c) if it.get("vision")}),
+        "qualities": qs, "vision": sorted(visions),
         "physical_boxes": p_boxes, "stun_boxes": s_boxes, "overflow_boxes": overflow,
         "physical_damage": pd, "stun_damage": sd, "wound_modifier": wound, "status": status,
         "initiative_score": aug["Reaction"] + aug["Intuition"], "initiative_dice": init_dice,
-        "major_actions": 1, "minor_actions": min(MAX_MINOR, 1 + init_dice),
-        "astral_initiative": {"score": aug["Logic"] + aug["Intuition"], "dice": 2} if mtype in AWAKENED else None,
+        "major_actions": 1, "minor_actions": minor,
+        "astral_initiative": {"score": aug["Logic"] + aug["Intuition"], "dice": 2} if awakened else None,
         "matrix": mx,
         "armor": armor, "armor_parts": armor_parts, "defense_rating": aug["Body"] + armor,
         "unarmed": {"dv": unarmed_dv, "type": "P" if phys_unarmed else "S", "ar": unarmed_ar},
-        "composure": aug["Willpower"] + aug["Charisma"], "judge_intentions": aug["Willpower"] + aug["Intuition"],
+        "composure": composure, "judge_intentions": aug["Willpower"] + aug["Intuition"],
         "memory": aug["Logic"] + aug["Intuition"], "lift_carry": aug["Body"] + aug["Willpower"],
         "lift_kg": aug["Strength"] ** 2 * 10, "overhead_kg": aug["Strength"] ** 2 * 5,
-        "movement": {"walk": 10, "sprint": 15, "per_hit": 1},
+        "movement": {"walk": move[0], "sprint": move[1], "per_hit": move[2], "note": meta.get("move_note", "")},
+        "natural_weapons": natural_weapons(c, qs, inf, aug), "price_markup": price_markup(c, qs),
+        "infected": {"name": inf["name"], "strain": inf["strain"], "base_ok": inf["base_ok"], "powers": inf["powers"],
+                     "weaknesses": inf["weaknesses"], "optional": inf.get("optional", []), "chosen": c.get("infected_powers") or [],
+                     "free_optional": inf.get("free_optional", ""), "notes": inf.get("notes", ""),
+                     "strain_text": SWC.STRAINS[inf["strain"]], "essence_base": essence_base} if inf else None,
+        "essence_hole": hole, "awakened": awakened,
         "edge_max": min(EDGE_CAP, aug["Edge"]), "current_edge": _int(c.get("current_edge")),
         "tradition_attr": trad_attr, "spell_ar": aug["Magic"] + aug.get(trad_attr, 0),
         "drain_pool": aug["Willpower"] + (aug.get(trad_attr, 0) if mtype in CASTERS else aug["Body"]),
@@ -480,6 +607,33 @@ def derive(c):
                      for it in items(c, "Vehicles", "Drones") if not it.get("mod")],
         "statuses": c.get("statuses") or {},
     }
+
+
+def natural_weapons(c, qs, inf, aug):
+    """Claws, fangs, horns and kicks from the metatype, metagenic qualities and HMHVV."""
+    out = []
+    for w in meta_of(c).get("weapons") or []:
+        out.append(dict(w, source=c.get("metatype")))
+    for q in qs:
+        nw = (K.QUALITIES[q["name"]].get("effects") or {}).get("natural_weapon")
+        if nw:
+            w = dict(nw, source=q["name"])
+            if q["name"] == "Corrosive Spit":
+                w["dv"] = f"{2 * min(4, max(1, _int(q.get('level'), 1)))}P"
+            out.append(w)
+    if inf:
+        sharp = "Sharpened Natural Weapon" in (c.get("infected_powers") or [])
+        for name, dv, ar in inf.get("weapons") or []:
+            m = re.match(r"(\d+)(\w)", dv)
+            dvn, t = int(m.group(1)), m.group(2)
+            if sharp and name == (inf.get("weapons") or [[""]])[0][0]:
+                dvn, ar = dvn + 1, ar + 2
+            out.append({"name": name, "skill": "Close Combat", "dv": f"{dvn}{t}", "ar": f"{ar}/—/—/—/—", "source": c["infected"]})
+    for w in out:
+        if w["name"] == "Horns" and aug.get("Strength", 0) >= 6:
+            a = CAT.parse_ar(w["ar"])
+            w["ar"] = "/".join("—" if x is None else str(x + 2) for x in a)
+    return out
 
 
 def lifestyle_cost(c, mult=1.0):
@@ -508,10 +662,16 @@ def matrix_stats(c, aug):
         jack = max(jacks, key=lambda it: _int(it.get("data_processing")), default=None)
         link_best = max(links, key=lambda it: _int(it.get("data_processing")), default=None)
         dp_src = jack or link_best
+        dp, fw = _int((dp_src or dev).get("data_processing")), _int((dp_src or dev).get("firewall"))
+        if jack and dp_src is jack and _has_q(qualities_of(c), "Cyberjack Maximization"):
+            if dp <= fw:
+                dp += 1
+            else:
+                fw += 1
         out.update({"device": dev["uid"], "name": dev["name"],
                     "attack": _int(dev.get("attack")), "sleaze": _int(dev.get("sleaze")),
-                    "data_processing": _int((dp_src or dev).get("data_processing")),
-                    "firewall": _int((dp_src or dev).get("firewall")),
+                    "data_processing": dp,
+                    "firewall": fw,
                     "device_rating": _int(dev.get("device_rating")),
                     "slots": _int(dev.get("program_slots")), "damage": _int(dev.get("matrix_damage"))})
     else:
@@ -619,6 +779,11 @@ def weapon_profile(c, d, it, mode=None, rng=None, ammo_type=None):
     if power_level(c, "Enhanced Accuracy") and c.get("magic_type") in ("Adept", "Mystic Adept"):
         ar_mod += 2
         notes.append("Enhanced Accuracy +2 AR")
+    fav = next((q for q in c.get("qualities") or [] if q.get("name") == "Favored Weapon: An Extension of Yourself"), None)
+    if fav and fav.get("choice") and fav["choice"].lower() in (it.get("name") or "").lower():
+        ar_mod += 2
+        parts = parts + [["Favored weapon", 1]]
+        notes.append("Favored weapon +1 die, +2 AR")
     if it.get("cat") == "Melee" or (it.get("implant") and it.get("weapon")):
         crit = power_level(c, "Critical Strike") if c.get("magic_type") in ("Adept", "Mystic Adept") else 0
         if crit:
@@ -681,6 +846,12 @@ def pools(c, d=None):
             out.append(_pool(f"weapon:{it['uid']}", "Weapons", it["name"], prof["parts"], weapon=True, modes=prof["modes"],
                              ar=prof["ar"], dv=f"{prof['dv']}{prof['type']}", loaded=prof["loaded"], clip=prof["clip"],
                              consumable=prof["consumable"], qty=_int(it.get("qty"), 1), element=prof["element"]))
+    for i, w in enumerate(d.get("natural_weapons") or []):
+        prof = weapon_profile(c, d, {"name": w["name"], "skill": w["skill"], "spec": "Unarmed Combat" if w["skill"] == "Close Combat" else None,
+                                     "dv": w["dv"], "ar": w["ar"], "cat": "Melee"}, "")
+        if prof:
+            out.append(_pool(f"natural:{i}", "Weapons", f"{w['name']} ({w['source']})", prof["parts"], weapon=True, modes=[],
+                             ar=prof["ar"], dv=f"{prof['dv']}{prof['type']}", natural=True))
     up = unarmed_profile(c, d)
     out.append(_pool("weapon:unarmed", "Weapons", "Unarmed strike", up["parts"], weapon=True, modes=[], ar=up["ar"],
                      dv=f"{up['dv']}{up['type']}"))
@@ -698,7 +869,7 @@ def pools(c, d=None):
         parts = _skill_parts(c, d, "Conjuring", attr="Magic", focus="Banishing")
         if parts:
             out.append(_pool("banish", "Magic", "Banish spirit", parts))
-    if c.get("magic_type") in AWAKENED:
+    if c.get("magic_type") in AWAKENED or c.get("infected"):
         out.append(_pool("astral_defense", "Magic", "Astral defense", [["Intuition", A["Intuition"]], ["Logic", A["Logic"]]]))
     if c.get("magic_type") == "Technomancer":
         for i, f in enumerate(c.get("complex_forms") or []):
@@ -860,6 +1031,17 @@ def clamp_state(c, ctx=None, edge_before=None):
 
 # ---- info
 def a_set_info(c, p, ctx):
+    if "metatype" in p and p["metatype"] in K.METATYPES and p["metatype"] != c.get("metatype"):
+        if ctx.locked:
+            raise RuleError("Your sheet is approved; ask the GM to change metatype.")
+        if not ctx.admin:
+            old_k, new_k = _int(meta_of(c).get("karma")), _int(K.METATYPES[p["metatype"]].get("karma"))
+            if new_k > old_k:
+                spend(c, ctx, "karma", new_k - old_k, f"Metatype: {p['metatype']}")
+            elif old_k > new_k:
+                gain(c, ctx, "karma", old_k - new_k, f"Metatype: {p['metatype']}")
+    if p.get("magic_type") == "Technomancer" and c.get("infected"):
+        raise RuleError("HMHVV is incompatible with Resonance: Infected can't be technomancers.")
     for k in FREE_INFO + LOCKED_INFO:
         if k not in p:
             continue
@@ -887,7 +1069,7 @@ def a_set_info(c, p, ctx):
         else:
             v = _clip(v, 80)
         c[k] = v
-    if c["magic_type"] not in AWAKENED:
+    if c["magic_type"] not in AWAKENED and not c.get("infected"):
         c["attributes"]["Magic"] = 0
     elif c["attributes"]["Magic"] < 1:
         c["attributes"]["Magic"] = 1
@@ -895,7 +1077,99 @@ def a_set_info(c, p, ctx):
         c["attributes"]["Resonance"] = 0
     elif c["attributes"]["Resonance"] < 1:
         c["attributes"]["Resonance"] = 1
+    if c.get("infected") and not infected_info(c)["base_ok"]:
+        raise RuleError(f"A {c['metatype']} can't be a {c['infected']}; remove the infection first.")
     return "Saved."
+
+
+# ---- HMHVV Infected (Sixth World Companion)
+def a_set_infected(c, p, ctx):
+    """Become (or stop being) Infected. Costs the quality's Karma at creation; after approval only the GM can do it."""
+    name = p.get("infected") or ""
+    if name and name not in SWC.INFECTED:
+        raise RuleError("Unknown Infected type.")
+    if ctx.locked:
+        raise RuleError("Only the GM can infect an approved character.")
+    if name == c.get("infected"):
+        return "No change."
+    if name:
+        if c.get("magic_type") == "Technomancer":
+            raise RuleError("HMHVV is incompatible with Resonance: technomancers can't be Infected.")
+        if any(q["name"] == "Magic Resistance" for q in qualities_of(c)):
+            raise RuleError("Infected can't have Magic Resistance. Remove that quality first.")
+        test = dict(c, infected=name)
+        if not infected_info(test)["base_ok"]:
+            bases = ", ".join(SWC.INFECTED[name]["bases"])
+            raise RuleError(f"A {name} must be a {bases} (your metatype is {c['metatype']}).")
+    if not ctx.admin:
+        old = infected_karma(c) + sum(SWC.INFECTED_OPTIONAL_POWERS.get(x, 0) for x in c.get("infected_powers") or [] if not x.endswith("(free)"))
+        new = infected_karma(c, name)
+        if old:
+            gain(c, ctx, "karma", old, f"Removed: {c['infected']}")
+        if new:
+            spend(c, ctx, "karma", new, f"Infected: {name}")
+    c["infected"] = name
+    c["infected_powers"] = []
+    c["infected_essence"] = 6 if name and SWC.INFECTED[name]["strain"] in ("I", "Ia") else None
+    if name:
+        awaken = SWC.INFECTED[name].get("awaken")
+        if awaken == "Adept" and c["magic_type"] == "Mundane":
+            c["magic_type"] = "Adept"
+        elif awaken == "Adept" and c["magic_type"] == "Magician":
+            c["magic_type"] = "Mystic Adept"
+        elif awaken == "Magician" and c["magic_type"] == "Mundane":
+            c["magic_type"] = "Magician"
+        elif awaken == "Magician" and c["magic_type"] == "Adept":
+            c["magic_type"] = "Mystic Adept"
+        if c["attributes"].get("Magic", 0) < 1:
+            c["attributes"]["Magic"] = 1
+        d = derive(c)
+        for a in K.BASE_ATTRS:                       # new, lower maximums cut base attributes (no refund)
+            c["attributes"][a] = min(_int(c["attributes"].get(a), 1), d["max"][a])
+        return f"You are now a {name}. Assign 2 free points to physical and 2 to mental attributes (your GM can set them)."
+    if c["magic_type"] == "Mundane":
+        c["attributes"]["Magic"] = 0
+    return "Infection removed."
+
+
+def a_infected_power(c, p, ctx):
+    """Add or remove an Infected optional power (one may be free at creation, per the quality)."""
+    inf = infected_info(c)
+    if not inf:
+        raise RuleError("Only Infected characters have Infected powers.")
+    name = p.get("power") or ""
+    lst = c.setdefault("infected_powers", [])
+    if p.get("remove"):
+        i = _list_index(lst, p.get("index"))
+        if ctx.locked:
+            raise RuleError("Ask the GM to remove an Infected power.")
+        old = lst.pop(i)
+        if not old.endswith("(free)") and not ctx.admin:
+            gain(c, ctx, "karma", SWC.INFECTED_OPTIONAL_POWERS.get(old, 0), f"Removed: {old}")
+        return f"{old} removed."
+    if name not in (inf.get("optional") or []):
+        raise RuleError(f"A {inf['name']} can't take {name or 'that power'}.")
+    if name in lst and not name.startswith("Armor"):
+        raise RuleError("You already have that power.")
+    free = bool(p.get("free")) and inf.get("free_optional") and not any(x.endswith("(free)") for x in lst) and not ctx.locked
+    if free:
+        lst.append(f"{name} (free)")
+        return f"{name} taken as your free optional power."
+    spend(c, ctx, "karma", SWC.INFECTED_OPTIONAL_POWERS.get(name, 8), f"Infected power: {name}")
+    lst.append(name)
+    return f"{name} added." + (" Optional powers can be bought one every two months of game time." if ctx.locked else "")
+
+
+def a_set_infected_essence(c, p, ctx):
+    """Strain I/Ia Essence goes up with Essence Drain and down with Essence Loss (the GM tracks it)."""
+    inf = infected_info(c)
+    if not inf or inf["strain"] not in ("I", "Ia"):
+        raise RuleError("Only Strain I Infected track their Essence this way.")
+    if not ctx.admin:
+        raise RuleError("Your GM tracks Essence Drain and Essence Loss.")
+    cap = 18 if inf["strain"] == "Ia" else 12
+    c["infected_essence"] = max(0.0, min(cap, round(_num(p.get("essence"), 6), 2)))
+    return f"Essence base set to {c['infected_essence']}."
 
 
 def a_set_portrait(c, p, ctx):
@@ -928,7 +1202,7 @@ def a_trade_karma(c, p, ctx):
 def _attr_ok(c, attr):
     if attr not in ATTRS:
         raise RuleError("Unknown attribute.")
-    if attr == "Magic" and c.get("magic_type") not in AWAKENED:
+    if attr == "Magic" and c.get("magic_type") not in AWAKENED and not c.get("infected"):
         raise RuleError("Only Awakened characters have Magic.")
     if attr == "Resonance" and c.get("magic_type") != "Technomancer":
         raise RuleError("Only technomancers have Resonance.")
@@ -1094,12 +1368,14 @@ def a_set_language(c, p, ctx):
             if cur["level"] == "Native":
                 raise RuleError("It's already your native language.")
             steps = order.index(level) - order.index(cur["level"])
-            spend(c, ctx, "karma", steps * K.KARMA["language_level"], f"{name} → {level}")
+            per = 1 if _qeffect(qualities_of(c), "polyglot") else K.KARMA["language_level"]
+            spend(c, ctx, "karma", steps * per, f"{name} → {level}")
         cur["level"] = level
         return f"{name}: {level}."
     if len(c["languages"]) >= 30:
         raise RuleError("Too many languages.")
-    cost = K.KARMA["knowledge"] + (order.index(level) * K.KARMA["language_level"] if level != "Native" else 0)
+    poly = _qeffect(qualities_of(c), "polyglot")
+    cost = (2 if poly else K.KARMA["knowledge"]) + (order.index(level) * (1 if poly else K.KARMA["language_level"]) if level != "Native" else 0)
     spend(c, ctx, "karma", karma_cost(ctx, cost), f"Language: {name} ({level})")
     c["languages"].append({"name": name, "level": level})
     return f"Learned {name} ({level})."
@@ -1122,6 +1398,8 @@ def a_add_quality(c, p, ctx):
     if name not in K.QUALITIES:
         raise RuleError("Unknown quality.")
     q = K.QUALITIES[name]
+    if q.get("racial_only"):
+        raise RuleError(f"{name} only comes with a metatype; it can't be taken as a quality.")
     level = max(1, min(q.get("levels", 1), _int(p.get("level"), 1)))
     choice = _clip(p.get("choice"), 60).strip()
     if q.get("choice") and not choice:
@@ -1211,7 +1489,7 @@ def a_buy(c, p, ctx):
     grade = p.get("grade") if p.get("grade") in G.IMPLANT_GRADES else "Standard"
     if grade == "Used" and not CAT.is_implant(e):
         grade = "Standard"
-    it = CAT.make_item(e, p.get("rating"), grade, c.get("metatype", ""), uid=_uid(c))
+    it = CAT.make_item(e, p.get("rating"), grade, price_markup(c), uid=_uid(c))
     if not ctx.admin:
         ok, why = _store_access(c, ctx, it)
         if not ok:
@@ -1248,6 +1526,71 @@ def a_buy(c, p, ctx):
     if free:
         return f"{it['name']} added to the inventory."
     return f"Bought {it['name']} for {fmt_money(price)}."
+
+
+def a_buy_pack(c, p, ctx):
+    """Buy a Sixth World Companion PACK: every item at once, for the PACK's price (grade price for augmentation PACKs)."""
+    from . import packs as PK
+    hit = PK.PACK_BY_ID.get(p.get("ref") or "")
+    if not hit:
+        raise RuleError("Unknown PACK.")
+    entry, pack = hit
+    grade = p.get("grade") if p.get("grade") in G.IMPLANT_GRADES else "Standard"
+    price = pack["cost"]
+    if grade != "Standard":
+        if not pack.get("grades") or grade not in pack["grades"]:
+            raise RuleError(f"{pack['name']} doesn't come in {grade} grade.")
+        price = pack["grades"][grade][0]
+    markup = price_markup(c)
+    res = PK.resolve_pack(pack)
+    made = []
+    for x in res["items"]:
+        if x.get("ref"):
+            e = CAT.BY_ID[x["ref"]]
+            g = x.get("grade") or (grade if CAT.is_implant(e) else "Standard")
+            it = CAT.make_item(e, x.get("rating"), g, markup, uid="")
+            if not ctx.admin:
+                ok, why = _store_access(c, ctx, it)
+                if not ok:
+                    raise RuleError(f"{it['name']}: {why}")
+            if x.get("rounds") and it.get("unit"):
+                it["qty"] = max(1, _int(x.get("qty"), 1))
+            else:
+                it["qty"] = max(1, _int(x.get("qty"), 1))
+        else:
+            it = {"name": x["name"], "cat": "Survival", "sub": "From a PACK", "cost": 0, "qty": max(1, _int(x.get("qty"), 1)),
+                  "desc": "", "_custom": True, "_linkchk": 1}
+        if x.get("note"):
+            it["notes"] = x["note"]
+        it["pack"] = pack["name"]
+        made.append(it)
+    # spread the PACK price over its items so selling them back is fair
+    def value(it):
+        return _int(it.get("cost")) * (_int(it.get("qty"), 1) / 10.0 if it.get("unit") == "rounds" else _int(it.get("qty"), 1))
+    total = sum(value(it) for it in made) or 1
+    factor = price * (1 + markup[0]) / total
+    for it in made:
+        it["cost"] = int(round(_int(it.get("cost")) * factor))
+    price = int(round(price * (1 + markup[0])))
+    if len(c["inventory"]) + len(made) > MAX_LIST:
+        raise RuleError("Inventory is full.")
+    ess = round(sum(_num(it.get("essence")) for it in made if it.get("implant")), 2)
+    if ess and derive(c)["essence"] - ess < 0 and not ctx.admin:
+        raise RuleError(f"Not enough Essence: this PACK costs {ess} Essence.")
+    free = ctx.admin and p.get("free", True)
+    if not free:
+        spend(c, ctx, "nuyen", price, f"Bought {pack['name']}" + (f" ({grade})" if grade != "Standard" else ""))
+    for it in made:
+        it["uid"] = _uid(c)
+        if not _merge_stack(c, it):
+            c["inventory"].append(it)
+    if pack.get("cash"):
+        gain(c, ctx, "nuyen", pack["cash"], f"{pack['name']}: cash")
+    if ess and ctx.approved and not ctx.admin:
+        boxes = max(1, int(round(ess * 3)))
+        ctx.log.append(f"had the {pack['name']} implanted (surgery: {boxes} boxes on each monitor).")
+        _surgery(c, boxes)
+    return f"{pack['name']}: {len(made)} items added" + (f" for {fmt_money(price)}." if not free else ".")
 
 
 def _surgery(c, boxes):
@@ -1563,6 +1906,10 @@ def a_save_contact(c, p, ctx):
     if not name:
         raise RuleError("A contact needs a name.")
     supply = [s for s in (raw.get("supply") or []) if s in SUPPLY][:20]
+    cap = min([_int((K.QUALITIES[q["name"]].get("effects") or {}).get("loyalty_cap"), 12) for q in qualities_of(c)
+               if (K.QUALITIES[q["name"]].get("effects") or {}).get("loyalty_cap")] or [12])
+    if _int(raw.get("loyalty"), 1) > cap and not ctx.admin:
+        raise RuleError(f"Your qualities cap contacts' Loyalty at {cap}.")
     contact = {"name": name, "type": _clip(raw.get("type"), 40),
                "connection": max(1, min(12, _int(raw.get("connection"), 1))),
                "loyalty": max(1, min(12, _int(raw.get("loyalty"), 1))),
@@ -1911,6 +2258,8 @@ def take_damage(c, track, amount, drain=False):
     amount = max(0, _int(amount))
     if not amount:
         return
+    if not drain and _qeffect(qualities_of(c), "injury_prone"):
+        amount += 1                               # Injury Prone: one extra box of the same type
     d = derive(c)
     if track == "stun":
         sd = _int(c["stun_damage"]) + amount
@@ -2090,7 +2439,8 @@ ACTIONS = {
     "add_knowledge": a_add_knowledge, "remove_knowledge": a_remove_knowledge,
     "set_language": a_set_language, "remove_language": a_remove_language,
     "add_quality": a_add_quality, "remove_quality": a_remove_quality, "set_quality_level": a_set_quality_level,
-    "buy": a_buy, "buy_custom": a_buy_custom, "give": a_give, "edit_item": a_edit_item,
+    "buy": a_buy, "buy_pack": a_buy_pack, "set_infected": a_set_infected, "infected_power": a_infected_power,
+    "set_infected_essence": a_set_infected_essence, "buy_custom": a_buy_custom, "give": a_give, "edit_item": a_edit_item,
     "toggle_equipped": a_toggle_equipped, "remove_item": a_remove_item, "sell_item": a_sell_item,
     "reload": a_reload, "unload": a_unload, "bond_focus": a_bond_focus, "set_vehicle_damage": a_set_vehicle_damage,
     "set_program": a_set_program, "set_matrix": a_set_matrix,

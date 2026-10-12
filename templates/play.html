@@ -34,39 +34,46 @@
 
 <!-- ===== MAP ===== -->
 <section class="view" id="view-map">
-  <div class="workspace">
-    <aside class="tools player-tools">
-      <div class="tool-group">
-        <p class="hint" id="p-help">Waiting for the game master to place you on a map.</p>
-        <div id="p-actions" class="col"></div>
-      </div>
-      <details class="tool-group" open id="tracker-panel" hidden>
-        <summary>Initiative <span class="hint" id="p-round"></span></summary>
-        <div id="p-tracker" class="tracker"></div>
-      </details>
-      <details class="tool-group" open>
-        <summary>Condition</summary>
-        <div id="p-condition" class="col"></div>
-      </details>
-      <details class="tool-group" open id="dice-panel">
-        <summary>Dice</summary>
-        <div id="p-roller"></div>
-      </details>
-      <details class="tool-group" open>
-        <summary>Table log</summary>
-        <div class="log" id="p-log"></div>
-      </details>
-      <div class="tool-group always">
-        <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle" checked> Isometric view</label>
-        <label class="check"><input type="checkbox" id="legend-toggle" checked> Show legend</label>
-        <p class="hint">Drag your token or click a room to move. Double-click to ping. Scroll to zoom, right-drag to pan. <kbd>F</kbd> fits the map, <kbd>C</kbd> centres on you, <kbd>I</kbd> toggles the isometric view.</p>
+  <div class="workspace map-layout" id="layout">
+    <aside class="drawer player-drawer" aria-label="Your runner">
+      <div class="drawer-head"><span class="drawer-title" id="drawer-name">You</span><button type="button" class="drawer-toggle ghost" aria-label="Toggle the side panel">‹</button></div>
+      <div class="drawer-body">
+        <section class="pane-block">
+          <h4 class="pane-h">Condition</h4>
+          <div id="p-condition" class="col"></div>
+        </section>
+        <section class="pane-block">
+          <h4 class="pane-h">Around you</h4>
+          <p class="hint" id="p-help">Waiting for the game master to place you on a map.</p>
+          <div id="p-actions" class="col"></div>
+        </section>
       </div>
     </aside>
-    <main class="canvas-wrap" id="canvas-wrap">
-      <canvas id="map"></canvas>
-      <div class="legend" id="legend"></div>
-      <canvas id="minimap" class="minimap"></canvas>
-      <div id="map-empty" class="overlay" hidden><div class="panel"><h3>No map yet</h3><p class="muted">Your GM hasn't placed your token on a map. Meanwhile, build your character.</p><button class="primary" data-goto="sheet">Open my character</button></div></div>
+    <main class="stage">
+      <div class="combat-strip" id="tracker-panel" hidden aria-label="Initiative">
+        <div class="strip-inner"><span class="strip-round" id="p-round"></span><div class="strip-order" id="p-tracker" role="list"></div><span class="strip-note" id="p-turn-note"></span></div>
+      </div>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="map"></canvas>
+        <div class="legend" id="legend"></div>
+        <canvas id="minimap" class="minimap"></canvas>
+        <details class="view-menu">
+          <summary title="View options">View</summary>
+          <div class="view-menu-pop">
+            <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle" checked> Isometric view</label>
+            <label class="check"><input type="checkbox" id="legend-toggle" checked> Legend</label>
+            <p class="hint">Drag your token or click a room to move. Double-click to ping. Scroll to zoom, right-drag to pan. <kbd>F</kbd> fits the map, <kbd>C</kbd> centres on you, <kbd>I</kbd> toggles the isometric view, <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
+          </div>
+        </details>
+        <div id="map-empty" class="overlay" hidden><div class="panel"><h3>No map yet</h3><p class="muted">Your GM hasn't placed your token on a map. Meanwhile, build your character.</p><button class="primary" data-goto="sheet">Open my character</button></div></div>
+      </div>
+      <section class="dock" id="dice-panel" aria-label="Dice and table log">
+        <div class="dock-head"><span class="dock-title">Dice &amp; table log</span><span class="dock-last" id="dock-last"></span><button type="button" class="dock-toggle ghost" aria-label="Toggle the dice panel">▾</button></div>
+        <div class="dock-body">
+          <div class="dock-roller" id="p-roller"></div>
+          <div class="log dock-log" id="p-log"></div>
+        </div>
+      </section>
     </main>
   </div>
 </section>
@@ -97,6 +104,7 @@
 <section class="view" id="view-wiki"><div class="page"><div class="page-inner"><div class="wiki" id="wiki"></div></div></div></section>
 
 <script src="/static/api.js"></script>
+<script src="/static/layout.js"></script>
 <script src="/static/gridcore.js"></script>
 <script src="/static/srui.js"></script>
 <script src="/static/sheet.js"></script>

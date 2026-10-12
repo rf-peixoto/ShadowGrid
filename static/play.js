@@ -42,7 +42,7 @@ $('btn-password').onclick = async () => {
 // ================================================================ header chips
 function renderChips() {
   const me = S.st && S.st.me; if (!me) return;
-  $('me-name').textContent = me.name; $('me-dot').style.background = me.color;
+  $('me-name').textContent = me.name; $('me-dot').style.background = me.color; $('drawer-name').textContent = me.name;
   $('game-name').textContent = S.st.game.name;
   $('chip-karma').textContent = me.karma;
   $('chip-nuyen').textContent = money(me.nuyen);
@@ -73,7 +73,7 @@ function applyState(st) {
   if (st.view.now) S.clockSkew = Date.now() / 1000 - st.view.now;
   renderChips();
   applyView(st.view);
-  SR.renderLog($('p-log'), st.rolls);
+  renderPlayerLog(st.rolls);
   if (sheetUI) sheetUI.updateLog(st.rolls);
   if (st.sheetRev !== S.sheetRev) {
     S.sheetRev = st.sheetRev;
@@ -89,10 +89,15 @@ function onSheet(sh) {
   if (mapRoller) mapRoller.render();
   if (S.view === 'store') renderStore();
 }
+function renderPlayerLog(rolls) {
+  SR.renderLog($('p-log'), rolls);
+  const r = (rolls || [])[0];
+  $('dock-last').textContent = r ? 'Last: ' + SR.rollSummary(r) : '';
+}
 function onRolled(res) {
   if (res.sheet && sheetUI) sheetUI.setSheet(res.sheet);
   if (res.me && S.st) { Object.assign(S.st.me, res.me); renderChips(); }
-  if (res.rolls) { SR.renderLog($('p-log'), res.rolls); if (sheetUI) sheetUI.updateLog(res.rolls); }
+  if (res.rolls) { renderPlayerLog(res.rolls); if (sheetUI) sheetUI.updateLog(res.rolls); }
   if (res.me && sheetUI) { sheetUI.mergeMe(res.me); }
   if (mapRoller && S.view !== 'map') mapRoller.render();
 }
@@ -139,18 +144,23 @@ function applyView(v) {
 /* initiative order, when the GM shows it */
 function renderTracker() {
   const t = S.st && S.st.view.tracker, panel = $('tracker-panel');
+  const was = !panel.hidden;
   panel.hidden = !t;
+  if (was !== !panel.hidden) Layout.relayout();
   if (!t) return;
-  $('p-round').textContent = `round ${t.round}`;
+  $('p-round').textContent = `Round ${t.round}`;
   const el = $('p-tracker'); el.innerHTML = '';
   for (const e of t.entries) {
     const mine = e.kind === 'player' && e.ref === S.st.me.id;
-    el.append(h('div.tr-row' + (e.current ? '.current' : '') + (mine ? '.mine' : ''), h('span.dot', { style: { background: e.color } }),
-      h('span.grow', e.name), e.minor ? h('span.hint', { title: '1 Major + Minor actions' }, `1+${e.minor}`) : null, h('b', e.total == null ? '—' : e.total)));
+    el.append(h('span.strip-chip' + (e.current ? '.current' : '') + (mine ? '.mine' : '') + (e.total == null ? '.unrolled' : ''), { role: 'listitem',
+      title: `${e.name}${e.minor ? `: 1 Major + ${e.minor} Minor` : ''}` }, h('span.dot', { style: { background: e.color } }),
+      h('span.nm', mine ? `${e.name} (you)` : e.name), h('b.sc', e.total == null ? '–' : e.total)));
   }
   const me = t.entries.find(e => e.kind === 'player' && e.ref === S.st.me.id);
-  if (!me || me.total == null) el.append(h('p.hint', 'Roll your initiative from the dice panel.'));
-  else if (me.current) el.append(h('p.good', 'Your turn!'));
+  const note = $('p-turn-note');
+  note.className = 'strip-note' + (me && me.current ? ' your-turn' : '');
+  note.textContent = !me ? '' : me.total == null ? 'Roll your initiative in the dice panel.' : me.current ? 'Your turn!' : '';
+  const cur = el.querySelector('.current'); if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 /* fit the map, then zoom in on our own token so the explored area is readable */
 function focusToken() {
@@ -352,28 +362,63 @@ function renderStore() {
   const ch = S.sheet.char, sh = S.sheet, approved = sh.approved;
   $('store-nuyen').textContent = money(ch.nuyen);
   $('store-custom').hidden = approved;
-  $('store-note').replaceChildren(approved ? h('div.banner', h('p', `Purchases are final. You can buy legal gear up to Availability ${CAT.store.alwaysAvail}; anything else needs a contact who covers it with a Connection higher than its Availability. The store buys gear back at ${sh.sellPct}%.`,
+  $('store-note').replaceChildren(approved ? h('div.banner', h('p', `Legal gear up to Availability ${CAT.store.alwaysAvail} is always on sale. Everything else needs a contact who sources it, with a Connection above its Availability. Purchases are final; the store buys gear back at ${sh.sellPct}%.`,
     h('button.small', { type: 'button', onclick: () => { setView('sheet'); sheetUI.go('contacts'); } }, 'My contacts ›'))) :
     h('div.banner.info', h('p', `Character creation: everything up to Availability ${CAT.store.creationMaxAvail} is on sale, and anything you buy can be returned for a full refund from the Gear section of your character.`)));
   const cats = $('store-cats'); cats.innerHTML = '';
-  for (const c of ['All', ...CAT.store.categories]) cats.append(h('button' + (S.storeCat === c ? '.active' : ''), { type: 'button', onclick: () => { S.storeCat = c; renderStore(); } }, c));
+  for (const c of ['All', ...CAT.store.categories, 'PACKs']) cats.append(h('button' + (S.storeCat === c ? '.active' : ''), { type: 'button', onclick: () => { S.storeCat = c; renderStore(); } }, c));
   const q = $('store-search').value.trim().toLowerCase();
   const only = $('store-avail-only').checked;
   const grid = $('store-grid'); grid.innerHTML = '';
   const owned = {}; for (const it of ch.inventory) if (it.ref) owned[it.ref] = (owned[it.ref] || 0) + (it.unit ? 1 : (it.qty || 1));
   let n = 0, hidden = 0, lastSub = null;
-  for (const e of CAT.store.items) {
+  for (const e of [...CAT.store.items, ...CAT.packs]) {
     if (S.storeCat !== 'All' && S.storeCat !== e.cat) continue;
+    if (e.pack && S.storeCat === 'All' && !q) continue;           // PACKs live in their own tab (or show up in searches)
     if (q && !(e.name + ' ' + e.sub + ' ' + (e.desc || '')).toLowerCase().includes(q)) continue;
     const acc = sh.store[e.id] || [true, '', 0];
     if (only && !acc[0]) { hidden++; continue; }
     n++;
     const sub = `${e.cat} · ${e.sub}`;
     if (sub !== lastSub && !q) { grid.append(h('h3.store-sub', sub)); lastSub = sub; }
-    grid.append(storeCard(e, acc, owned[e.id]));
+    grid.append(e.pack ? packCard(e, acc) : storeCard(e, acc, owned[e.id]));
   }
   if (!n) grid.append(h('p.empty', hidden ? 'Nothing you can get here yet. Untick “Only what I can get” to see what your contacts would need.' : 'Nothing matches. Try another search.'));
   else if (hidden) grid.append(h('p.hint', `${hidden} item${hidden > 1 ? 's' : ''} hidden: none of your contacts can get them.`));
+}
+/* A Sixth World Companion PACK: one price for a whole kit (augmentation PACKs come in grades). */
+function packCard(e, acc) {
+  const ch = S.sheet.char, ok = acc[0];
+  const grade = e.packGrades ? h('select', { title: 'Grade' }, option('Standard', 'Standard grade'), Object.keys(e.packGrades).map(g => option(g))) : null;
+  const priceEl = h('span.price'), essEl = h('span.hint'), btn = h('button.primary.small', { type: 'button' });
+  const mult = (S.sheet.derived.price_markup || [0, 0])[0];
+  function calc() {
+    const g = grade && grade.value !== 'Standard' ? e.packGrades[grade.value] : null;
+    const cost = Math.round((g ? g.cost : e.cost) * (1 + mult)), ess = g ? g.essence : e.essenceN;
+    priceEl.textContent = money(cost);
+    essEl.textContent = `Avail ${e.avail}` + (ess ? ` · Essence ${ess}` : '');
+    btn.textContent = !ok ? 'Unavailable' : cost > ch.nuyen ? 'Not enough ¥' : 'Buy PACK';
+    btn.disabled = !ok || cost > ch.nuyen;
+    btn.title = !ok ? acc[1] : '';
+    return { cost, g: grade ? grade.value : 'Standard' };
+  }
+  if (grade) grade.onchange = calc;
+  btn.onclick = async () => {
+    const v = calc();
+    if (!await UI.confirm(`Buy the ${e.name}${v.g !== 'Standard' ? ` (${v.g})` : ''} for ${money(v.cost)}? It adds ${e.contents.length} entries to your gear.${S.sheet.approved ? ' Purchases are final.' : ''}`, { ok: 'Buy' })) return;
+    try { const sh = await api('/api/me/sheet/action', 'POST', { action: 'buy_pack', ref: e.id, grade: v.g }); sheetUI.setSheet(sh); toast(sh.message, 4000); }
+    catch (err) { toast(err.message, 5000); }
+  };
+  const card = h('div.item-card.pack' + (ok ? '' : '.locked'),
+    h('div.cat', e.sub), h('h4', e.name), h('p.hint', e.desc),
+    e.includes ? h('p.hint', `Includes the ${e.includes}.`) : null,
+    e.skills ? h('p.hint', `Recommended skills: ${e.skills}`) : null,
+    h('details', h('summary', `Contents (${e.contents.length})`), h('ul.pack-list', e.contents.map(x => h('li', x)))),
+    ok ? null : h('p.why', '🔒 ' + acc[1]),
+    h('div.buy-opts', grade),
+    h('div.buy', h('div.col', priceEl, essEl), btn));
+  calc();
+  return card;
 }
 function storeCard(e, acc, owned) {
   const ch = S.sheet.char, ok = acc[0];
@@ -382,7 +427,8 @@ function storeCard(e, acc, owned) {
   const qty = !e.implant && !e.rating ? h('input', { type: 'number', min: 1, max: 100, value: 1, title: e.sub === 'Ammunition' ? 'Boxes of 10' : 'Quantity' }) : null;
   const priceEl = h('span.price'), availEl = h('span.hint'), whyEl = h('p.why');
   const btn = h('button.primary.small', { type: 'button' });
-  const metaMult = (ch.metatype === 'Troll' || (ch.metatype === 'Dwarf' && e.cat === 'Armor')) ? 1.1 : 1;
+  const mk = S.sheet.derived.price_markup || [0, 0];
+  const metaMult = 1 + mk[0] + (e.cat === 'Armor' ? mk[1] : 0);
   function calc() {
     let cost = e.costN, av = e.availN, legal = e.legalN, ess = e.essenceN ?? null, r = 1;
     if (e.byRating) {
@@ -418,8 +464,7 @@ function storeCard(e, acc, owned) {
     h('div.cat', e.sub + (owned ? '' : '')), h('h4', e.name, owned ? h('span.tag.approved', { style: { marginLeft: '.4rem' } }, `owned ×${owned}`) : null),
     h('p.stats', SR.itemStats(e)), e.desc ? h('p.hint', e.desc) : null,
     whyEl,
-    h('div.buy-opts', rating ? h('label', 'Rating', rating) : null, grade, qty ? h('label', e.sub === 'Ammunition' ? 'Boxes' : 'Qty', qty) : null),
-    h('div.buy', h('div.col', priceEl, availEl), btn));
+    h('div.buy', h('div.col', priceEl, availEl), h('div.buy-opts', rating ? h('label', 'Rating', rating) : null, grade, qty ? h('label', e.sub === 'Ammunition' ? 'Boxes' : 'Qty', qty) : null), btn));
   calc();
   return card;
 }
@@ -472,6 +517,7 @@ function renderRuns(runs) {
 
 // ================================================================ boot
 async function boot() {
+  Layout.init($('layout'), 'player');
   try {
     CAT = await SR.catalog();
     await refresh(true);

@@ -24,9 +24,18 @@
   </div>
 </header>
 
-<div class="workspace">
-  <aside class="tools" id="tools">
-
+<div class="workspace map-layout" id="layout">
+  <aside class="drawer" id="tools" aria-label="Tools">
+    <div class="drawer-head">
+      <nav class="drawer-tabs" role="tablist" data-mode="play" hidden>
+        <button type="button" role="tab" data-pane-btn="map" title="Who you see the map as, fog brushes, doors, tokens and snapshots">Map</button>
+        <button type="button" role="tab" data-pane-btn="runners" id="tab-runners" title="Runners: health, statuses, attacks and placement">Runners</button>
+        <button type="button" role="tab" data-pane-btn="selected" id="tab-selected" title="The marker or cell you clicked">Selected</button>
+      </nav>
+      <span class="drawer-title" data-mode="edit">Build</span>
+      <button type="button" class="drawer-toggle ghost" aria-label="Toggle the side panel">‹</button>
+    </div>
+    <div class="drawer-body">
     <!-- ===== EDIT MODE ===== -->
     <div class="tool-group" data-mode="edit">
       <div class="tool-buttons">
@@ -83,9 +92,13 @@
       </div>
     </div>
 
+
     <!-- ===== PLAY MODE ===== -->
     <div class="tool-group" data-mode="play" hidden>
-      <div class="view-as" id="view-as"></div>
+      <section class="pane" data-pane="map">
+        <h4 class="pane-h">See the map as</h4>
+        <div class="view-as" id="view-as"></div>
+        <h4 class="pane-h">Tool</h4>
       <div class="tool-buttons">
         <button data-tool="reveal" class="tool active" title="Reveal cells by dragging (P)">Reveal</button>
         <button data-tool="hide" class="tool" title="Hide cells again (E)">Hide</button>
@@ -107,7 +120,7 @@
       <div class="tool-opts" data-for="token">
         <p class="hint">Click a room cell to move the selected player's token there. The map reveals around it using their view radius.</p>
       </div>
-
+        <h4 class="pane-h">Fog</h4>
       <div class="fog-actions" id="fog-player" hidden>
         <div class="row between"><strong id="fog-player-name"></strong><span class="row tight"><label class="check" title="Jump to whatever map this player is on"><input type="checkbox" id="follow-player"> Follow</label><label class="check"><input type="checkbox" id="map-station"> Map station</label></span></div>
         <div class="row tight">
@@ -125,61 +138,68 @@
         </div>
       </div>
       <p id="no-campaign" class="hint" hidden>Assign this map to a game (Colors &amp; settings) to place runners, roll dice and take snapshots.</p>
-
-      <details id="combat-panel" open>
-        <summary>Combat</summary>
-        <div id="combat-root"></div>
-      </details>
-
-      <details id="players-panel" open>
-        <summary>Runners</summary>
-        <div id="player-list" class="mini-list"></div>
-        <button id="btn-add-player" class="small">Invite player</button>
-      </details>
-
-      <details id="dice-panel" open>
-        <summary>Dice</summary>
-        <div class="roller compact" id="gm-roller">
-          <div class="row tight"><input id="dice-label" class="grow" placeholder="Label, e.g. Guard: Perception" autocomplete="off"></div>
-          <div class="opts">
-            <label>Dice <input type="number" id="dice-n" min="1" max="60" value="6"></label>
-            <label>Thr. <input type="number" id="dice-thr" min="0" max="30" placeholder="–"></label>
-            <label class="check"><input type="checkbox" id="dice-wild"> Wild</label>
-            <label class="check" title="Only you see hidden rolls"><input type="checkbox" id="dice-hidden"> Hidden</label>
-          </div>
-          <div class="row tight"><button id="dice-roll" class="small primary grow">Roll</button><span class="quick" id="dice-quick"></span></div>
-        </div>
-        <div class="log" id="roll-log" style="max-height:300px;margin-top:.5rem"></div>
-      </details>
-
-      <details id="snapshots-panel">
-        <summary>Snapshots</summary>
-        <div class="row tight">
+        <details id="snapshots-panel" class="pane-sub">
+          <summary>Snapshots</summary>
+                  <div class="row tight">
           <input id="snapshot-name" placeholder="e.g. End of session 4" class="grow">
           <button id="btn-snapshot" class="small">Save</button>
         </div>
         <div id="snapshot-list" class="mini-list"></div>
-      </details>
+        </details>
+      </section>
+      <section class="pane" data-pane="runners">
+        <div id="players-panel">
+          <div id="player-list" class="mini-list"></div>
+          <button id="btn-add-player" class="small">Invite player</button>
+        </div>
+      </section>
+      <section class="pane" data-pane="selected" id="pane-selected">
+        <p class="hint" id="selected-empty">Click a marker or a cell on the map to inspect it here: NPC stats, condition monitor, statuses and attacks.</p>
+      </section>
     </div>
 
     <div class="inspector" id="inspector" hidden>
       <h3 id="insp-title">Cell</h3>
       <div id="insp-body"></div>
     </div>
-
-    <div class="tool-group always">
-      <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle"> Isometric view</label>
-      <label class="check"><input type="checkbox" id="legend-toggle" checked> Show legend</label>
-      <label class="check"><input type="checkbox" id="rooms-toggle" checked> Show room names</label>
-      <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map.</p>
     </div>
   </aside>
 
-  <main class="canvas-wrap" id="canvas-wrap">
-    <canvas id="map"></canvas>
-    <div class="legend" id="legend"></div>
-    <canvas id="minimap" class="minimap"></canvas>
-    <div class="statusbar" id="statusbar"><span id="st-cell">–</span><span id="st-room"></span><span id="st-marker"></span><span id="st-door"></span></div>
+  <main class="stage">
+    <div class="combat-strip" id="combat-panel" hidden aria-label="Initiative">
+      <div id="combat-root" class="strip-inner"></div>
+    </div>
+    <div class="canvas-wrap" id="canvas-wrap">
+      <canvas id="map"></canvas>
+      <div class="legend" id="legend"></div>
+      <canvas id="minimap" class="minimap"></canvas>
+      <details class="view-menu">
+        <summary title="View options">View</summary>
+        <div class="view-menu-pop">
+          <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle"> Isometric view</label>
+          <label class="check"><input type="checkbox" id="legend-toggle" checked> Legend</label>
+          <label class="check"><input type="checkbox" id="rooms-toggle" checked> Room names</label>
+          <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map. <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
+        </div>
+      </details>
+      <div class="statusbar" id="statusbar"><span id="st-cell">–</span><span id="st-room"></span><span id="st-marker"></span><span id="st-door"></span></div>
+    </div>
+    <section class="dock" id="dice-panel" data-mode="play" aria-label="Dice and table log">
+      <div class="dock-head"><span class="dock-title">Dice &amp; table log</span><span class="dock-last" id="dock-last"></span><button type="button" class="dock-toggle ghost" aria-label="Toggle the dice panel">▾</button></div>
+      <div class="dock-body">
+        <div class="roller compact dock-roller" id="gm-roller">
+          <div class="row tight"><input id="dice-label" class="grow" placeholder="What is it for? e.g. Guard: Perception" autocomplete="off"></div>
+          <div class="opts">
+            <label>Dice <input type="number" id="dice-n" min="1" max="60" value="6"></label>
+            <label>Threshold <input type="number" id="dice-thr" min="0" max="30" placeholder="–"></label>
+            <label class="check"><input type="checkbox" id="dice-wild"> Wild Die</label>
+            <label class="check" title="Only you see hidden rolls"><input type="checkbox" id="dice-hidden"> Hidden</label>
+          </div>
+          <div class="row tight"><button id="dice-roll" class="small primary grow">Roll</button><span class="quick" id="dice-quick"></span></div>
+        </div>
+        <div class="log dock-log" id="roll-log"></div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -235,6 +255,7 @@
 </dialog>
 
 <script src="/static/api.js"></script>
+<script src="/static/layout.js"></script>
 <script src="/static/srui.js"></script>
 <script src="/static/gridcore.js"></script>
 <script src="/static/editor.js"></script>

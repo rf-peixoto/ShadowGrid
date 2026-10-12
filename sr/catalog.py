@@ -193,9 +193,13 @@ def offer(e, rating=None, grade="Standard", metatype=""):
         cost *= g["cost"]
         essence = round(essence * g["essence"], 2)
         a = max(0, a + g["avail"])
-    size = G_SIZE.get(metatype)
-    if size and (size[0] == "all" or e["cat"] == "Armor"):
-        cost *= 1 + size[1]
+    if isinstance(metatype, (tuple, list)):          # (all gear %, fitted gear %) from rules.price_markup
+        all_pct, fitted_pct = metatype
+    else:
+        size = G_SIZE.get(metatype)
+        all_pct = size[1] if size and size[0] == "all" else 0
+        fitted_pct = size[1] if size and size[0] == "fitted" else 0
+    cost *= 1 + all_pct + (fitted_pct if e["cat"] == "Armor" else 0)
     return {"rating": r if rating_range(e) else None, "cost": int(math.ceil(cost - 1e-9)),
             "avail": a, "legal": legal, "essence": essence}
 
