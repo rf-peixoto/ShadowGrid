@@ -1,4 +1,4 @@
-/* Player app: map (GridMap player view), character sheet, store, runs and wiki in one page. */
+/* Player app: map (player view), character sheet, store, runs and wiki in one page. */
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
@@ -13,7 +13,7 @@ const post = (path, body) => api('/api/me/' + path, 'POST', body || {});
 
 // ================================================================ tabs
 function setView(v) {
-  if (!['map', 'sheet', 'store', 'runs', 'wiki'].includes(v)) v = 'map';
+  if (!['map', 'sheet', 'store', 'runs', 'handouts', 'wiki'].includes(v)) v = 'map';
   S.view = v;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
@@ -22,6 +22,7 @@ function setView(v) {
   if (v === 'sheet' && sheetUI) sheetUI.render();
   if (v === 'store') renderStore();
   if (v === 'runs') loadRuns();
+  if (v === 'handouts') renderHandouts(true);
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view));
 document.addEventListener('click', e => { const g = e.target.closest('[data-goto]'); if (g) setView(g.dataset.goto); });
@@ -79,8 +80,36 @@ function applyState(st) {
     S.sheetRev = st.sheetRev;
     if (sheetUI && !sheetUI.editing()) sheetUI.reload();
   }
-  const sig = JSON.stringify(st.runsSig);
+  const sig = JSON.stringify(st.runsSig) + JSON.stringify(st.sessionsSig || []);
   if (sig !== S.runsSig) { S.runsSig = sig; if (S.view === 'runs') loadRuns(); }
+  const hsig = JSON.stringify((st.handouts || []).map(x => [x.id, x.updatedAt]));
+  if (hsig !== S.handoutsSig) { S.handoutsSig = hsig; renderHandouts(S.view === 'handouts'); }
+}
+
+// ================================================================ handouts
+function seenHandouts() { try { return JSON.parse(localStorage.getItem('sg.seenHandouts') || '{}'); } catch { return {}; } }
+function renderHandouts(markSeen) {
+  const list = (S.st && S.st.handouts) || [];
+  const seen = seenHandouts();
+  const unseen = list.filter(x => seen[x.id] !== x.updatedAt);
+  if (markSeen) {
+    const next = {}; list.forEach(x => { next[x.id] = x.updatedAt; });
+    try { localStorage.setItem('sg.seenHandouts', JSON.stringify(next)); } catch { /* ignore */ }
+  }
+  const badge = $('badge-handouts');
+  badge.hidden = markSeen || !unseen.length; badge.textContent = unseen.length;
+  if (unseen.length && !markSeen && S.handoutsSigShown !== undefined) toast(`New handout from your GM: ${unseen[0].title}`, 4500);
+  S.handoutsSigShown = true;
+  const el = $('handouts-list'); el.innerHTML = '';
+  if (!list.length) { el.append(h('div.card.empty', h('h3', 'No handouts yet'), h('p', 'When your GM shares a dossier, a picture or a message, it appears here.'))); return; }
+  for (const ho of list) {
+    const isNew = unseen.includes(ho);
+    el.append(h('div.run-card.handout' + (isNew ? '.fresh' : ''),
+      h('div.head', h('h3', ho.title), isNew ? h('span.tag.active', 'New') : h('span.hint', ho.shownAt ? timeAgo(ho.shownAt) : '')),
+      h('div.handout-body',
+        ho.image ? h('a.handout-img', { href: `/uploads/${ho.image}`, target: '_blank', rel: 'noopener', title: 'Open the full image' }, h('img', { src: `/uploads/${ho.image}`, alt: ho.title, loading: 'lazy' })) : null,
+        ho.body ? renderMarkdown(ho.body) : null)));
+  }
 }
 function onSheet(sh) {
   S.sheet = sh;
@@ -116,7 +145,7 @@ function renderCondition() {
   if (dv.wound_modifier) el.append(h('p.hint.mb0', `Wound modifier ${dv.wound_modifier} dice (applied to rolls).`));
 }
 
-// ================================================================ map view (GridMap player view)
+// ================================================================ map view (player view)
 const { key, geom, tracePoly, drawMarker, renderScene, makeViewport, MARKER_BY_ID, MARKER_TYPES, doorOnEdge, findPath, drawPing } = GridCore;
 const canvas = $('map'), ctx2d = canvas.getContext('2d'), wrap = $('canvas-wrap');
 const scene = document.createElement('canvas'), sctx = scene.getContext('2d');
@@ -154,7 +183,7 @@ function renderTracker() {
     const mine = e.kind === 'player' && e.ref === S.st.me.id;
     el.append(h('span.strip-chip' + (e.current ? '.current' : '') + (mine ? '.mine' : '') + (e.total == null ? '.unrolled' : ''), { role: 'listitem',
       title: `${e.name}${e.minor ? `: 1 Major + ${e.minor} Minor` : ''}` }, h('span.dot', { style: { background: e.color } }),
-      h('span.nm', mine ? `${e.name} (you)` : e.name), h('b.sc', e.total == null ? '–' : e.total)));
+      h('span.nm', mine ? `${e.name} (you)` : e.name), h('b.sc', e.total == null ? '–' : e.total), mine ? SR.actionPips(e) : null));
   }
   const me = t.entries.find(e => e.kind === 'player' && e.ref === S.st.me.id);
   const note = $('p-turn-note');
@@ -496,6 +525,22 @@ $('store-custom').onclick = async () => {
 // ================================================================ runs
 async function loadRuns() {
   try { renderRuns((await api('/api/me/runs')).runs); } catch (e) { /* transient */ }
+  try { renderSessionRecaps((await api('/api/me/sessions')).sessions); } catch (e) { /* transient */ }
+}
+function renderSessionRecaps(list) {
+  const el = $('sessions-list'); el.innerHTML = '';
+  if (!list.length) return;
+  el.append(h('div.section-head.mt', h('h2', 'Session log'), h('span.hint', 'Recaps your GM shared.')));
+  for (const s of list) {
+    const st = s.recap.stats, when = new Date(s.startedAt * 1000);
+    const tl = h('ol.timeline', s.recap.events.filter(e => e.kind !== 'init').map(e => h('li.' + e.kind + (e.flag ? '.' + e.flag : ''),
+      h('span.t', new Date(e.at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), h('span.x', e.kind === 'note' ? `${e.who} ${e.text}` : e.text))));
+    el.append(h('div.run-card.session',
+      h('div.head', h('h3', s.title), h('span.hint', when.toLocaleDateString())),
+      h('p.hint', `${st.minutes} minutes · ${st.fights} fight(s) · ${st.attacks} attacks · ${st.rolls} rolls`),
+      s.notes ? renderMarkdown(s.notes) : null,
+      h('details.timeline-wrap', h('summary', `Timeline (${tl.children.length})`), tl)));
+  }
 }
 function renderRuns(runs) {
   const el = $('runs-list'); el.innerHTML = '';
@@ -530,7 +575,8 @@ async function boot() {
     Wiki($('wiki'), CAT.wiki);
     const first = location.hash.slice(1) || (S.st.me.status !== 'approved' && !S.st.view.map ? 'sheet' : 'map');
     setView(first);
-    setInterval(() => refresh(false), 1200);
+    setInterval(() => refresh(false), 15000);
+    Live.on(() => refresh(false));
   } catch (e) { if (e.message !== 'auth') toast('Could not load: ' + e.message, 6000); }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });

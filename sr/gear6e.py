@@ -422,7 +422,7 @@ ELECTRONICS = [
     _g("White Noise Generator", "Electronics", "Countermeasures", "3", "R*50", rating=(1, 6)),
     # Software
     _g("Agent", "Cyberdecks & Software", "Software", "R", "R*1500", rating=(1, 6)),
-    _g("Autosoft", "Cyberdecks & Software", "Software", "R", "R*500", rating=(1, 6), desc="Drone skill program."),
+    _g("Autosoft", "Cyberdecks & Software", "Software", "R", "R*500", rating=(1, 9), desc="Drone skill program: pick Maneuvering, Targeting, Clearsight, Evasion, Electronic Warfare or Stealth."),
     _g("Cyberprogram, Basic", "Cyberdecks & Software", "Software", "1", 60),
     _g("Cyberprogram, Hacking", "Cyberdecks & Software", "Software", "4", 250),
     _g("Datasoft", "Cyberdecks & Software", "Software", "2", 120),

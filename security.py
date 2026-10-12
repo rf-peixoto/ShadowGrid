@@ -9,7 +9,7 @@ from functools import wraps
 from flask import abort, jsonify, redirect, request, session, url_for
 
 # ---------- hashcash ----------
-LOGIN_POW_BITS = int(os.environ.get("GRIDMAP_LOGIN_POW_BITS", "13"))
+LOGIN_POW_BITS = int(os.environ.get("SHADOWGRID_LOGIN_POW_BITS", "13"))
 CHALLENGE_TTL = 300
 
 _challenges = {}
@@ -53,7 +53,7 @@ def verify_pow(challenge, counter, min_bits):
 
 # ---------- rate limiting (token bucket, in memory) ----------
 _buckets = {}
-TRUST_PROXY = os.environ.get("GRIDMAP_TRUST_PROXY") == "1"
+TRUST_PROXY = os.environ.get("SHADOWGRID_TRUST_PROXY") == "1"
 
 
 def client_ip():
@@ -73,7 +73,7 @@ def rate_limited(name, per_minute, burst=None):
         @wraps(fn)
         def wrapper(*a, **kw):
             # per signed-in player when there is one (a whole table often shares one IP at home)
-            key = (name, client_ip(), session.get("pid") or ("gm" if session.get("admin") else ""))
+            key = (name, client_ip(), session.get("pid") or ("gm" if session.get("gamemaster") else ""))
             now = time.time()
             with _lock:
                 tokens, last = _buckets.get(key, (burst, now))
@@ -95,13 +95,13 @@ def rate_limited(name, per_minute, burst=None):
 # ---------- auth ----------
 def csrf_ok():
     """Cheap CSRF guard: browsers can't add this header cross-site without CORS."""
-    return request.method not in ("POST", "PUT", "DELETE", "PATCH") or request.headers.get("X-Requested-With") == "GridMap"
+    return request.method not in ("POST", "PUT", "DELETE", "PATCH") or request.headers.get("X-Requested-With") == "ShadowGrid"
 
 
-def admin_required(fn):
+def gamemaster_required(fn):
     @wraps(fn)
     def wrapper(*a, **kw):
-        if not session.get("admin"):
+        if not session.get("gamemaster"):
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Sign in required."}), 401
             if session.get("pid"):
@@ -115,7 +115,7 @@ def admin_required(fn):
 
 # ---------- hardening headers ----------
 SECURITY_HEADERS = {
-    "Server": os.environ.get("GRIDMAP_SERVER_IDENT", "nginx"),
+    "Server": os.environ.get("SHADOWGRID_SERVER_IDENT", "nginx"),
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "same-origin",
@@ -132,7 +132,11 @@ SECURITY_HEADERS = {
 def apply_security_headers(resp):
     for k, v in SECURITY_HEADERS.items():
         resp.headers[k] = v
-    if not request.path.startswith("/static/"):
+    if request.path.startswith("/uploads/"):
+        # uploaded images: never run as a document, cached privately for an hour
+        resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+        resp.headers["Cache-Control"] = "private, max-age=3600"
+    elif not request.path.startswith("/static/"):
         resp.headers["Cache-Control"] = "no-store"
     resp.headers.pop("X-Powered-By", None)
     return resp

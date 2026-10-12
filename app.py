@@ -1,8 +1,9 @@
-"""ShadowGrid - Shadowrun 6E character sheets + GridMap fog-of-war maps for one table.
+"""ShadowGrid - Shadowrun Sixth World character sheets and fog-of-war maps for one table.
 
-Run locally:      python app.py
-Serve publicly:   python serve.py     (see README)
-Set GM password:  python app.py set-password
+Install:                      ./install.sh
+Play on your home network:    ./local.sh     (same as python app.py, reachable from the LAN)
+Serve on the internet:        ./serve.sh
+Set the gamemaster password:  python app.py set-password
 """
 import getpass
 import os
@@ -11,20 +12,23 @@ import sqlite3
 import sys
 import time
 
-from flask import jsonify, redirect, render_template, request, session, url_for
+from flask import Response, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import backup  # noqa: F401  (registers routes)
 import fight  # noqa: F401  (registers routes)
 import game  # noqa: F401  (registers routes)
+import handouts  # noqa: F401  (registers routes)
+import sessions  # noqa: F401  (registers routes)
 import maps  # noqa: F401  (registers routes)
-from core import (DB_PATH, app, body, current_player_row, err, get_db, init_db, kv_get, kv_set)
-from security import LOGIN_POW_BITS, admin_required, issue_challenge, rate_limited, verify_pow
+from core import (BUS, DB_PATH, MAX_STREAMS, app, body, current_player_row, err, get_db, init_db, kv_get, kv_set)
+from security import LOGIN_POW_BITS, gamemaster_required, issue_challenge, rate_limited, verify_pow
 
 
 # ====================================================================== sign in / out
 @app.route("/login")
 def login():
-    if session.get("admin"):
+    if session.get("gamemaster"):
         return redirect(url_for("index"))
     if current_player_row():
         return redirect(url_for("play"))
@@ -47,13 +51,13 @@ def login_post():
     pw = str(b.get("password") or "")
     db = get_db()
     nxt = b.get("next") if isinstance(b.get("next"), str) and re.fullmatch(r"/(?![/\\])[A-Za-z0-9_\-./#?=&]*", b.get("next")) else None
-    if username.lower() == "admin":
-        if not check_password_hash(kv_get(db, "admin_password"), pw):
+    if username.lower() == "gamemaster":
+        if not check_password_hash(kv_get(db, "gamemaster_password"), pw):
             time.sleep(0.5)
             return err("Wrong username or password.", 401)
         session.clear()
         session.permanent = True
-        session["admin"] = True
+        session["gamemaster"] = True
         return jsonify({"ok": True, "next": nxt if nxt and not nxt.startswith("/play") else "/"})
     row = db.execute("SELECT * FROM players WHERE username=?", (username,)).fetchone()
     if not row or not check_password_hash(row["pw_hash"], pw):
@@ -82,20 +86,20 @@ def invite_page(token):
 
 # ====================================================================== pages
 @app.route("/")
-@admin_required
+@gamemaster_required
 def index():
     return render_template("index.html")
 
 
 @app.route("/game/<cid>")
-@admin_required
+@gamemaster_required
 def game_page(cid):
     game.game_or_404(cid)
     return render_template("game.html", game_id=cid)
 
 
 @app.route("/game/<cid>/sheet/<pid>")
-@admin_required
+@gamemaster_required
 def gm_sheet_page(cid, pid):
     row = game.fetch_player_row(pid)
     if row["campaign_id"] != cid:
@@ -104,7 +108,7 @@ def gm_sheet_page(cid, pid):
 
 
 @app.route("/map/<map_id>")
-@admin_required
+@gamemaster_required
 def editor(map_id):
     maps.fetch_map(map_id)
     return render_template("editor.html", map_id=map_id)
@@ -114,10 +118,67 @@ def editor(map_id):
 def play():
     row = current_player_row()
     if not row:
-        if session.get("admin"):
+        if session.get("gamemaster"):
             return redirect(url_for("index"))
         return redirect(url_for("login"))
     return render_template("play.html")
+
+
+# ====================================================================== printable sheets
+@app.route("/print/sheet")
+def print_own_sheet():
+    if not current_player_row():
+        return redirect(url_for("index" if session.get("gamemaster") else "login"))
+    return render_template("print.html", sheet_url="/api/me/sheet")
+
+
+@app.route("/print/sheet/<pid>")
+@gamemaster_required
+def print_player_sheet(pid):
+    game.fetch_player_row(pid)
+    return render_template("print.html", sheet_url=f"/api/players/{pid}/sheet")
+
+
+@app.route("/print/blank")
+def print_blank_sheet():
+    if not session.get("gamemaster") and not current_player_row():
+        return redirect(url_for("login", next="/print/blank"))
+    return render_template("print.html", sheet_url="")
+
+
+# ====================================================================== live updates
+@app.route("/api/events")
+def events():
+    """Server-sent events: "change" whenever anything was written, a comment every 20 s to keep the
+    connection open. Pages refetch their state on "change". The stream ends after ~25 minutes and the
+    browser reconnects on its own."""
+    if not session.get("gamemaster") and not current_player_row():
+        return jsonify({"error": "Sign in required."}), 401
+    if BUS.streams >= MAX_STREAMS:
+        return jsonify({"error": "Too many open pages."}), 503
+
+    def gen():
+        with BUS.cond:
+            BUS.streams += 1
+        try:
+            seen = BUS.seq
+            yield f"retry: 3000\nevent: hello\ndata: {seen}\n\n"
+            end = time.time() + 25 * 60
+            while time.time() < end:
+                cur = BUS.wait(seen, 20)
+                if cur != seen:
+                    seen = cur
+                    time.sleep(0.08)          # let a burst of writes settle into one event
+                    seen = BUS.seq
+                    yield f"event: change\ndata: {seen}\n\n"
+                else:
+                    yield ": ping\n\n"
+        finally:
+            with BUS.cond:
+                BUS.streams -= 1
+
+    return Response(gen(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ====================================================================== errors
@@ -153,7 +214,7 @@ def server_error(_e):
 # ====================================================================== CLI
 def set_password_cli():
     init_db(quiet=True)
-    pw = getpass.getpass("New GM (admin) password: ")
+    pw = getpass.getpass("New gamemaster password: ")
     if len(pw) < 8:
         print("Use at least 8 characters.")
         sys.exit(1)
@@ -161,17 +222,30 @@ def set_password_cli():
         print("Passwords do not match.")
         sys.exit(1)
     db = sqlite3.connect(DB_PATH)
-    kv_set(db, "admin_password", generate_password_hash(pw))
+    kv_set(db, "gamemaster_password", generate_password_hash(pw))
     db.commit()
     db.close()
-    print("Password updated. Sign in with username 'admin'.")
+    print("Password updated. Sign in with username 'gamemaster'.")
+
+
+def has_password_cli():
+    """Exit 0 when a gamemaster password exists (used by install.sh)."""
+    db = sqlite3.connect(DB_PATH)
+    try:
+        row = db.execute("SELECT v FROM kv WHERE k='gamemaster_password'").fetchone()
+    except sqlite3.Error:
+        row = None
+    db.close()
+    sys.exit(0 if row else 1)
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "set-password":
         set_password_cli()
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "has-password":
+        has_password_cli()
     init_db()
-    app.run(debug=False, threaded=True, host=os.environ.get("GRIDMAP_HOST", "127.0.0.1"), port=int(os.environ.get("GRIDMAP_PORT", "5000")))
+    app.run(debug=False, threaded=True, host=os.environ.get("SHADOWGRID_HOST", "127.0.0.1"), port=int(os.environ.get("SHADOWGRID_PORT", "5000")))
 else:
     init_db()

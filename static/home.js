@@ -1,4 +1,4 @@
-/* GM home page: games, their maps and runners. Map generator from GridMap. */
+/* GM home page: games, their maps and runners. Map generator. */
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
@@ -164,6 +164,50 @@ function genMap(c) {
   }, 'gd-name');
 }
 $('btn-new-campaign').onclick = newCampaign;
+
+// ---------------------------------------------------------------- backups
+const bytes = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+const KIND = { auto: 'Daily', manual: 'Saved by you', 'before-restore': 'Before a restore' };
+async function backupsDialog() {
+  const list = h('div.backup-list');
+  const file = h('input', { type: 'file', accept: '.zip,application/zip', hidden: true });
+  async function draw(rows) {
+    rows = rows || (await api('/api/backups')).backups;
+    list.innerHTML = '';
+    if (!rows.length) { list.append(h('p.hint', 'No backups yet.')); return; }
+    list.append(h('table.compact', h('thead', h('tr', h('th', 'When'), h('th', 'Kind'), h('th', 'Size'), h('th', ''))),
+      h('tbody', rows.map(b => h('tr',
+        h('td', new Date(b.at * 1000).toLocaleString()), h('td.hint', KIND[b.kind] || b.kind), h('td.hint', bytes(b.size)),
+        h('td', h('div.row.tight.end',
+          h('a.btn.small', { href: `/api/backups/${encodeURIComponent(b.name)}` }, 'Download'),
+          h('button.small', { type: 'button', onclick: () => restore(() => api(`/api/backups/${encodeURIComponent(b.name)}/restore`, 'POST', {}), new Date(b.at * 1000).toLocaleString()) }, 'Restore…'),
+          h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete the backup from ${new Date(b.at * 1000).toLocaleString()}?`, { danger: true, ok: 'Delete' })) draw((await api(`/api/backups/${encodeURIComponent(b.name)}`, 'DELETE')).backups); } }, 'Delete'))))))));
+  }
+  async function restore(run, label) {
+    if (!await UI.confirm(`Restore the backup from ${label}? Everything (games, maps, runners, images) goes back to that moment, and everyone is signed out. The current state is saved as a backup first, so you can undo this.`, { danger: true, ok: 'Restore' })) return;
+    try { const r = await run(); await UI.info('Backup restored', h('p', r.message)); location.href = '/login'; }
+    catch (e) { toast(e.message, 6000); }
+  }
+  file.onchange = async () => {
+    const f = file.files[0]; if (!f) return;
+    file.value = '';
+    restore(async () => {
+      const fd = new FormData(); fd.append('file', f);
+      const res = await fetch('/api/backup/restore', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'ShadowGrid' } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }, `the file ${f.name}`);
+  };
+  const body = h('div',
+    h('p.hint', 'A backup holds everything: games, maps, runners and their sheets, runs, handouts and their images. One is made automatically every day (the last 10 are kept).'),
+    h('div.row.tight', h('button.primary', { type: 'button', onclick: async () => { toast('Saving a backup…'); draw((await api('/api/backups', 'POST', {})).backups); toast('Backup saved.'); } }, 'Back up now'),
+      h('button', { type: 'button', onclick: () => file.click() }, 'Restore from a file…'), file),
+    h('div.mt', list));
+  draw();
+  UI.modal('Backups', body, { ok: null, cancel: 'Close', wide: true });
+}
+$('btn-backups').onclick = backupsDialog;
 load().then(() => {
   // deep links from the game page: /?newmap=<gameId> or /?genmap=<gameId>
   const q = new URLSearchParams(location.search), id = q.get('newmap') || q.get('genmap');

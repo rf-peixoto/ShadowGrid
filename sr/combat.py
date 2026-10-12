@@ -8,11 +8,14 @@ sr.rules) or map markers carrying an ``npc`` stat block and a ``cm`` monitor.
 import math
 import re
 
+from . import actions6e as ACT
 from . import catalog as CAT
 from . import core6e as K
 from . import dice as DICE
 from . import gear6e as G
 from . import magic6e as M
+from . import matrix6e as MX
+from . import rigging6e as RIG
 from . import npc6e as N
 from . import rules as R
 
@@ -170,11 +173,61 @@ def spirit_npc(kind, force):
             "pm": s["cm"], "sm": s["cm"], "force": s["force"]}
 
 
+def ic_npc(kind, rating):
+    """IC for a host of this rating: Host Rating x 2 for its pools and Defense (errata), the host's Attack Rating."""
+    r = max(1, min(12, _int(rating, 3)))
+    attrs = {a: r for a in K.PHYSICAL + K.MENTAL}
+    weapons = []
+    if kind in MX.IC_DAMAGING:
+        weapons.append({"name": f"{kind} attack", "skill": "Cracking", "dv": (r + 1) // 2, "type": "M", "element": "",
+                        "ar": [r * 2] * 5, "modes": [], "count": 1, "category": "IC", "matrix": True,
+                        "biofeedback": MX.IC_BIOFEEDBACK.get(kind), "pool": r * 2, "pool_label": "Host rating × 2"})
+    else:
+        weapons.append({"name": f"{kind} test", "skill": "Cracking", "dv": 0, "type": "M", "element": "", "ar": [r * 2] * 5,
+                        "modes": [], "count": 1, "category": "IC", "matrix": True, "pool": r * 2, "pool_label": "Host rating × 2"})
+    pm = 8 + (r + 1) // 2
+    return {"template": f"{kind} (host rating {r})", "kind": "IC", "pr": None, "attrs": attrs, "dr": r * 2, "init": r * 2,
+            "init_dice": 4, "grunt": False, "edge": 0, "skills": {"Cracking": r, "Electronics": r}, "specs": {}, "move": "—",
+            "weapons": weapons, "notes": f"{kind}: {MX.IC[kind]}\nInitiative: Host Rating x 2 + 4D6 (hot-sim speed).",
+            "pm": pm, "sm": 0, "force": r, "matrix": {"rating": r}}
+
+
+VEHICLES = [e for e in CAT.ITEMS if e.get("cat") in ("Vehicles", "Drones") and e.get("handling")]
+VEHICLE_BY_ID = {e["id"]: e for e in VEHICLES}
+
+
+def vehicle_npc(v, name=None, link=None):
+    """A vehicle or drone on the map: one Condition Monitor of (Body / 2) + 8, Defense Rating Pilot + Armor,
+    soaks with Body, rams for its Body in DV. ``link`` ties it to a runner's own vehicle (damage is shared)."""
+    body, armor, pilot = _int(v.get("body"), 1), _int(v.get("armor")), _int(v.get("pilot"))
+    drone = v.get("cat") == "Drones"
+    attrs = {a: max(1, pilot) for a in K.PHYSICAL + K.MENTAL}
+    attrs["Body"] = max(1, body)
+    attrs["Strength"] = max(1, body)
+    ram = {"name": RIG.RAM["name"], "skill": "Piloting", "dv": body, "type": "P", "element": "",
+           "ar": [body + pilot, None, None, None, None], "modes": [], "count": 1, "category": "Ram"}
+    return {"template": name or v.get("name"), "kind": "Drone" if drone else "Vehicle", "pr": None, "attrs": attrs,
+            "dr": pilot + armor, "init": pilot * 2, "init_dice": 4 if drone else 1, "grunt": False, "edge": 0,
+            "skills": {"Piloting": pilot, "Perception": _int(v.get("sensor"))}, "specs": {},
+            "move": f"Speed {v.get('speed_interval')}/{v.get('top_speed')} · Accel {v.get('accel')}",
+            "weapons": [ram],
+            "notes": (f"{v.get('sub', '')}. Handling {v.get('handling')}, Sensor {v.get('sensor')}, Seats {v.get('seats', '—')}.\n"
+                      "Stun damage with a DV up to its Body does nothing; above that it counts as Physical. "
+                      "A rigger driving it uses their own Piloting for Defense Rating (Piloting + Armor): adjust DR if needed."),
+            "pm": RIG.MONITOR_BASE + (body + 1) // 2, "sm": 0, "force": None,
+            "matrix": {"rating": max(1, pilot)},
+            "vehicle": {k: str(v.get(k, "")) for k in ("handling", "accel", "speed_interval", "top_speed", "body", "armor", "pilot", "sensor", "seats")},
+            "link": link}
+
+
 def templates():
     """Template list for the GM's picker."""
     out = [{"key": f"t:{i}", "name": t["name"], "kind": t.get("kind"), "pr": t.get("pr")}
            for i, t in enumerate(N.NPC_TEMPLATES)]
     out += [{"key": f"s:{k}", "name": f"{k} spirit", "kind": "Spirit", "pr": None, "force": True} for k in M.SPIRITS]
+    out += [{"key": f"ic:{k}", "name": f"{k} IC", "kind": "IC", "pr": None, "force": True, "forceLabel": "Host rating"} for k in MX.IC]
+    out += [{"key": f"v:{e['id']}", "name": f"{e['name']} ({e.get('sub')})", "kind": "Drone" if e["cat"] == "Drones" else "Vehicle", "pr": None}
+            for e in VEHICLES]
     return out
 
 
@@ -186,6 +239,10 @@ def npc_from_key(key, force=None):
             return parse_template(N.NPC_TEMPLATES[i])
     if key.startswith("s:") and key[2:] in M.SPIRITS:
         return spirit_npc(key[2:], force or 3)
+    if key.startswith("ic:") and key[3:] in MX.IC:
+        return ic_npc(key[3:], force or 3)
+    if key.startswith("v:") and key[2:] in VEHICLE_BY_ID:
+        return vehicle_npc(VEHICLE_BY_ID[key[2:]])
     raise R.RuleError("Unknown template.")
 
 
@@ -211,7 +268,9 @@ def clean_npc(v):
                         "ar": ar, "modes": [m for m in (w.get("modes") or []) if m in G.FIRING_MODES][:4],
                         "grenade": [str(x)[:6] for x in (w.get("grenade") or [])][:3] or None,
                         "blast": str(w.get("blast") or "")[:8], "count": max(0, min(99, _int(w.get("count"), 1))),
-                        "category": str(w.get("category") or "")[:30]})
+                        "category": str(w.get("category") or "")[:30],
+                        "matrix": bool(w.get("matrix")), "biofeedback": w.get("biofeedback") if w.get("biofeedback") in ("S", "P", "sim") else None,
+                        "pool": max(0, min(60, _int(w.get("pool")))) or None, "pool_label": str(w.get("pool_label") or "")[:40] or None})
     skills = {}
     for k, r in (v.get("skills") or {}).items():
         if isinstance(k, str) and len(k) <= 40:
@@ -226,14 +285,24 @@ def clean_npc(v):
             "init_dice": max(1, min(5, _int(v.get("init_dice"), 1))), "grunt": bool(v.get("grunt")),
             "edge": max(0, min(10, _int(v.get("edge")))), "skills": skills, "specs": specs,
             "move": str(v.get("move") or "")[:20], "weapons": weapons, "notes": str(v.get("notes") or "")[:4000],
-            "force": _int(v.get("force")) or None}
+            "force": _int(v.get("force")) or None,
+            "matrix": {"rating": max(0, min(12, _int((v.get("matrix") or {}).get("rating"))))} if isinstance(v.get("matrix"), dict) else None,
+            "vehicle": _clean_vehicle(v.get("vehicle")),
+            "link": {"pid": str(v["link"].get("pid"))[:40], "uid": str(v["link"].get("uid"))[:20]} if isinstance(v.get("link"), dict) else None}
+
+
+def _clean_vehicle(v):
+    if not isinstance(v, dict):
+        return None
+    keys = ("handling", "accel", "speed_interval", "top_speed", "body", "armor", "pilot", "sensor", "seats")
+    return {k: str(v.get(k) or "")[:12] for k in keys}
 
 
 def npc_cm(npc):
     """Fresh marker monitor for an NPC: grunts have one track (pm), others Physical + Stun."""
     if npc.get("grunt"):
         return {"pm": npc["pm"], "sm": 0, "ov": 0, "p": 0, "s": 0, "grunt": True}
-    return {"pm": npc["pm"], "sm": npc["sm"], "ov": 0 if npc.get("kind") in ("Spirit",) else npc["attrs"].get("Body", 1) * 2,
+    return {"pm": npc["pm"], "sm": npc["sm"], "ov": 0 if npc.get("kind") in ("Spirit", "IC", "Vehicle", "Drone") else npc["attrs"].get("Body", 1) * 2,
             "p": 0, "s": 0}
 
 
@@ -287,22 +356,105 @@ def marker_damage(cm, track, amount):
 class Fighter:
     """Uniform view over a player character or an NPC marker for combat math."""
 
-    def __init__(self, name, attrs, dr, wound, skills=None, specs=None, char=None, derived=None, npc=None, cm=None):
+    def __init__(self, name, attrs, dr, wound, skills=None, specs=None, char=None, derived=None, npc=None, cm=None, statuses=None, marker=None):
         self.name, self.attrs, self.dr, self.wound = name, attrs, dr, wound
         self.skills, self.specs = skills or {}, specs or {}
         self.char, self.d, self.npc, self.cm = char, derived, npc, cm
+        self.statuses = statuses or {}
+        self.marker = marker
+        self.entry = None            # initiative tracker entry, when in combat
 
     @classmethod
     def from_char(cls, name, c):
         d = R.derive(c)
-        return cls(name, d["attributes"], d["defense_rating"], d["wound_modifier"], char=c, derived=d)
+        skills = {k: v for k, v in (c.get("skills") or {}).items() if v}
+        return cls(name, d["attributes"], d["defense_rating"], d["wound_modifier"], skills=skills, char=c, derived=d,
+                   statuses=c.get("statuses") or {})
 
     @classmethod
     def from_marker(cls, mk):
         npc = mk.get("npc") or {"attrs": {}, "dr": 0, "skills": {}, "specs": {}}
-        attrs = {a: _int((npc.get("attrs") or {}).get(a), 1) for a in K.PHYSICAL + K.MENTAL + ["Magic"]}
+        attrs = {a: _int((npc.get("attrs") or {}).get(a), 1) for a in K.PHYSICAL + K.MENTAL + ["Magic", "Resonance"]}
         return cls(mk.get("label") or "Enemy", attrs, _int(npc.get("dr")), marker_wound(mk.get("cm")),
-                   skills=npc.get("skills"), specs=npc.get("specs"), npc=npc, cm=mk.get("cm"))
+                   skills=npc.get("skills"), specs=npc.get("specs"), npc=npc, cm=mk.get("cm"), statuses=mk.get("statuses") or {}, marker=mk)
+
+    def rank(self, skill):
+        r = _int((self.skills or {}).get(skill))
+        if not r and self.npc and self.npc.get("kind") == "Spirit" and skill in ("Close Combat", "Astral", "Exotic Weapons", "Perception"):
+            r = _int(self.npc.get("force"))
+        return r
+
+    def status(self, name):
+        """0 when absent, the level or number when it has one, 1 otherwise."""
+        v = (self.statuses or {}).get(name)
+        if not v:
+            return 0
+        return 1 if v is True else _int(v, 1)
+
+    # Edge: runners use their sheet; NPC markers keep a running pool (grunt groups start at their PR)
+    def edge(self):
+        if self.char is not None:
+            return _int(self.char.get("current_edge"))
+        if self.marker is not None:
+            return _int(self.marker.get("edge_cur"), _int((self.npc or {}).get("edge")))
+        return 0
+
+    def spend_edge(self, n, why):
+        if n <= 0:
+            return
+        if self.status("Dazed"):
+            raise R.RuleError(f"{self.name} is Dazed and can't spend Edge.")
+        if self.edge() < n:
+            raise R.RuleError(f"{self.name} needs {n} Edge for {why} (has {self.edge()}).")
+        if self.char is not None:
+            self.char["current_edge"] = self.edge() - n
+        elif self.marker is not None:
+            self.marker["edge_cur"] = self.edge() - n
+
+    def gain_edge(self, n=1):
+        """Gain Edge up to the cap; returns what was actually gained."""
+        if self.status("Dazed"):
+            return 0
+        if self.char is not None:
+            cap = min(R.EDGE_CAP, self.d["edge_max"]) if self.d else R.EDGE_CAP
+            new = min(cap, self.edge() + n)
+            got = new - self.edge()
+            self.char["current_edge"] = new
+            return got
+        if self.marker is not None:
+            new = min(R.EDGE_CAP, self.edge() + n)
+            got = new - self.edge()
+            self.marker["edge_cur"] = new
+            return got
+        return 0
+
+    # ---- Matrix
+    def matrix_rating(self):
+        return _int(((self.npc or {}).get("matrix") or {}).get("rating"))
+
+    def matrix_defense(self):
+        if self.char is not None:
+            mx = self.d["matrix"]
+            if not mx.get("device"):
+                raise R.RuleError(f"{self.name} isn't on the Matrix (no active device).")
+            parts = [["Data Processing", mx["data_processing"]], ["Firewall", mx["firewall"]]]
+            if mx.get("penalty"):
+                parts.append(["Matrix damage on the device", mx["penalty"]])
+            return parts
+        r = self.matrix_rating()
+        if not r:
+            raise R.RuleError(f"{self.name} has no Matrix presence (give it an IC or device template).")
+        return [["Rating × 2", r * 2]]
+
+    def matrix_dr(self):
+        if self.char is not None:
+            return self.d["matrix"].get("dr", 0)
+        return self.matrix_rating() * 2
+
+    def matrix_soak(self):
+        if self.char is not None:
+            return [["Firewall", self.d["matrix"].get("firewall", 0)]]
+        return [["Rating", self.matrix_rating()]]
 
     def defense_pool(self):
         parts = [["Reaction", self.attrs.get("Reaction", 1)], ["Intuition", self.attrs.get("Intuition", 1)]]
@@ -338,66 +490,182 @@ def _total(parts):
     return max(0, sum(p[1] for p in parts))
 
 
-def resolve_attack(att, weapon, target, opts):
-    """Roll an attack, the defense and the soak. Returns a result dict (no state is changed here,
-    except for the attacker's sheet ammo, which the caller handles).
+def _status_value(spec, level):
+    """"+#" -> +level, "-2#" -> -2 x level, ints as they are."""
+    if isinstance(spec, str):
+        sign = -1 if spec.startswith("-") else 1
+        mult = spec.strip("+-#") or "1"
+        return sign * int(mult) * level
+    return spec
 
-    ``weapon``: {"name", "parts", "ar" (list), "dv", "type", "element", "mode", "direct", "mana", "spell"}
-    ``opts``: range, attack_mod, defense_mod, soak_mod, wild, extra_dv
+
+def status_parts(f, key, ranged=False):
+    """Dice (or DR / AR / initiative) modifiers from a combatant's statuses for one kind of test."""
+    out = []
+    for name, mod in ACT.STATUS_MODS.items():
+        lv = f.status(name)
+        if not lv or key not in mod or name == "Cover":
+            continue
+        if mod.get("ranged_only") and not ranged:
+            continue
+        v = _status_value(mod[key], lv)
+        if v:
+            out.append([name + (f" {lv}" if isinstance(f.statuses.get(name), int) and not isinstance(f.statuses.get(name), bool) else ""), v])
+    return out
+
+
+def sustain_parts(f):
+    if f.char is None:
+        return []
+    n = R.sustain_count(f.char)
+    return [[f"Sustaining {n} spell{'s' if n > 1 else ''}", n * ACT.SUSTAIN_PENALTY]] if n else []
+
+
+def interrupt_ok(key, weapon):
+    """Can this defensive interrupt be used against this attack? -> (ok, reason)."""
+    it = ACT.INTERRUPTS.get(key)
+    if not it:
+        return False, "Unknown defense action."
+    if weapon.get("matrix") and key != "full_defense":
+        return False, f"{it['name']} doesn't help in the Matrix (Full Matrix Defense does)."
+    if weapon.get("spell") and weapon.get("direct") and key != "full_defense":
+        return False, f"{it['name']} doesn't help against a direct spell."
+    melee = bool(weapon.get("melee"))
+    if it["vs"] == "melee" and not melee:
+        return False, f"{it['name']} only works against melee attacks."
+    if it["vs"] == "ranged" and melee:
+        return False, f"{it['name']} only works against ranged attacks."
+    return True, ""
+
+
+def _interrupt_dice(f, key):
+    add = ACT.INTERRUPTS[key]["add"]
+    if isinstance(add, int):
+        return add
+    kind, name = add.split(":", 1)
+    return f.rank(name) if kind == "skill" else _int(f.attrs.get(name), 1)
+
+
+def resolve_attack(att, weapon, target, opts):
+    """Roll an attack, the defense and the soak. Returns a result dict (no state is changed here).
+
+    ``weapon``: {"name", "parts", "ar" (list), "dv", "type", "element", "mode", "direct", "spell", "melee", "astral"}
+    ``opts``: range, attack_mod, defense_mod, soak_mod, wild, extra_dv, unopposed,
+              defense (interrupt key), full_defense (bool, already active), cover (0-4), called (key),
+              split (number of targets sharing the pool), counterspell ([name, dice]), dirt (attacker penalty)
     """
     rng = opts.get("range") if opts.get("range") in G.RANGES else "Near"
     ri = G.RANGES.index(rng)
     ar_list = weapon.get("ar") or [None] * 5
     ar = ar_list[ri] if ri < len(ar_list) else None
-    if ar is None and not weapon.get("spell"):
+    if ar is None and not weapon.get("spell") and not weapon.get("astral"):
         raise R.RuleError(f"The {weapon['name']} can't attack at {rng} range.")
+    melee = bool(weapon.get("melee"))
+    ranged = not melee and not weapon.get("astral")
+    called = ACT.CALLED_SHOTS.get(opts.get("called") or "")
+
+    # ---- attack pool
     a_parts = [list(p) for p in weapon["parts"]]
     if att.wound:
         a_parts.append(["Wound modifier", att.wound])
+    a_parts += sustain_parts(att) + status_parts(att, "attack", ranged)
+    if opts.get("dirt"):
+        a_parts.append(["Hit the Dirt", ACT.HIT_THE_DIRT_PENALTY])
+    if called:
+        a_parts.append([called["name"], called["dice"]])
     if _int(opts.get("attack_mod")):
         a_parts.append(["Modifier", _int(opts["attack_mod"])])
+    split = max(1, _int(opts.get("split"), 1))
+    if split > 1:
+        whole = _total(a_parts)
+        a_parts.append([f"Split among {split} targets", (whole // split) - whole])
     a_roll = DICE.new_roll(max(1, _total(a_parts)), wild=bool(opts.get("wild")))
+    if ar is not None:
+        for name, v in status_parts(att, "ar", ranged):
+            ar = max(0, ar + v)
+
+    # ---- Defense Rating (cover, statuses; the Matrix has neither)
+    matrix = bool(weapon.get("matrix"))
+    cover = 0 if matrix else max(0, min(4, _int(opts.get("cover"))))
+    dr = target.matrix_dr() if matrix else target.dr + cover + sum(v for _, v in status_parts(target, "dr"))
     out = {"attacker": att.name, "target": target.name, "weapon": weapon["name"], "range": rng,
-           "mode": weapon.get("mode"), "ar": ar, "dr": target.dr,
+           "mode": weapon.get("mode"), "ar": ar, "dr": dr, "cover": cover, "melee": melee,
+           "called": called["name"] if called else None, "split": split,
            "attack": {"parts": a_parts, "dice": a_roll["dice"], "hits": a_roll["hits"], "glitch": a_roll["glitch"],
                       "critical": a_roll["critical"]}}
-    if ar is not None:
-        diff = ar - target.dr
-        out["edge_hint"] = ("attacker" if diff >= 4 else "defender" if diff <= -4 else None)
-    # defense
-    if weapon.get("spell") and weapon.get("direct"):
-        d_parts = [["Willpower", target.attrs.get("Willpower", 1)], ["Intuition", target.attrs.get("Intuition", 1)]]
+    if ar is not None and not weapon.get("astral"):
+        diff = ar - dr
+        out["edge_hint"] = ("attacker" if diff >= ACT.EDGE_HINT_MARGIN else "defender" if diff <= -ACT.EDGE_HINT_MARGIN else None)
+
+    # ---- defense pool
+    A = target.attrs
+    if matrix:
+        d_parts = target.matrix_defense()
+    elif weapon.get("astral"):
+        d_parts = [[x, _int(A.get(x), 1)] for x in ACT.ASTRAL["defense"]]
+    elif weapon.get("spell") and weapon.get("direct"):
+        d_parts = [["Willpower", A.get("Willpower", 1)], ["Intuition", A.get("Intuition", 1)]]
     elif weapon.get("spell"):
-        d_parts = [["Reaction", target.attrs.get("Reaction", 1)], ["Willpower", target.attrs.get("Willpower", 1)]]
+        d_parts = [["Reaction", A.get("Reaction", 1)], ["Willpower", A.get("Willpower", 1)]]
     else:
         d_parts = target.defense_pool()
+        if target.status("Immobilized"):
+            d_parts = [p for p in d_parts if p[0] != "Reaction"] + [["Immobilized: no Reaction", 0]]
     if target.wound:
         d_parts.append(["Wound modifier", target.wound])
+    d_parts += sustain_parts(target) + status_parts(target, "defense", ranged)
+    if target.status("Prone") and not matrix and not weapon.get("astral") and not (weapon.get("spell") and weapon.get("direct")):
+        far = ranged and rng in ACT.PRONE["far_ranges"]
+        d_parts.append(["Prone", ACT.PRONE["defense_far"] if far else ACT.PRONE["defense_near"]])
+    if cover:
+        d_parts.append([f"Cover {'I II III IV'.split()[cover - 1]}", cover])
+    fd_label, fd_dice = ("Full Matrix Defense (Firewall)", target.matrix_soak()[0][1]) if matrix else ("Full Defense (Willpower)", _int(A.get("Willpower"), 1))
+    if opts.get("full_defense"):
+        d_parts.append([fd_label, fd_dice])
+    dkey = opts.get("defense")
+    if dkey and dkey != "full_defense":
+        d_parts.append([ACT.INTERRUPTS[dkey]["name"], _interrupt_dice(target, dkey)])
+    elif dkey == "full_defense" and not opts.get("full_defense"):
+        d_parts.append([fd_label, fd_dice])
+    if opts.get("counterspell") and weapon.get("spell"):
+        name, dice = opts["counterspell"]
+        d_parts.append([f"Counterspelling ({name})", _int(dice)])
     if _int(opts.get("defense_mod")):
         d_parts.append(["Modifier", _int(opts["defense_mod"])])
-    grunt_unopposed = bool(opts.get("unopposed"))
-    d_hits = 0
-    d_roll = None
-    if not grunt_unopposed:
+    unopposed = bool(opts.get("unopposed"))
+    d_hits, d_roll = 0, None
+    if not unopposed:
         d_roll = DICE.new_roll(max(1, _total(d_parts))) if _total(d_parts) > 0 else {"hits": 0, "dice": [], "glitch": False, "critical": False}
         d_hits = d_roll["hits"]
-    out["defense"] = {"parts": d_parts, "dice": (d_roll or {}).get("dice", []), "hits": d_hits, "unopposed": grunt_unopposed,
-                      "glitch": (d_roll or {}).get("glitch", False)}
+    out["defense"] = {"parts": d_parts, "dice": (d_roll or {}).get("dice", []), "hits": d_hits, "unopposed": unopposed,
+                      "glitch": (d_roll or {}).get("glitch", False), "action": ACT.INTERRUPTS[dkey]["name"] if dkey else None}
     net = a_roll["hits"] - d_hits
     out["net"] = net
     hit = net > 0 or (net == 0 and a_roll["hits"] > 0 and not weapon.get("spell"))
     out["hit"] = hit
     if not hit:
         out["damage"] = 0
+        out["effects"] = []
         out["summary"] = f"{att.name} misses {target.name} ({a_roll['hits']} vs {d_hits} hits)."
         return out
+
+    # ---- damage and soak
     dtype = weapon.get("type") or "P"
+    extra = _int(opts.get("extra_dv")) + (called["dv"] if called else 0)
+    soak_parts = []
     if weapon.get("spell") and weapon.get("direct"):
-        dv = max(0, net) + _int(weapon.get("dv"))
-        soak_parts, s_hits = [], 0
+        dv = max(0, net) + _int(weapon.get("dv")) + extra
+        s_hits = 0
     else:
-        dv = _int(weapon.get("dv")) + max(0, net) + _int(opts.get("extra_dv"))
-        soak_parts = target.soak_pool()
+        dv = _int(weapon.get("dv")) + max(0, net) + extra
+        if matrix:
+            soak_parts = target.matrix_soak()
+        elif weapon.get("astral"):
+            soak_parts = [[x, _int(A.get(x), 1)] for x in ACT.ASTRAL["soak"]]
+        else:
+            soak_parts = target.soak_pool()
+            if target.status("Wet") and weapon.get("element") in ("Cold", "Electricity"):
+                soak_parts.append(["Wet", ACT.WET_SOAK])
         if _int(opts.get("soak_mod")):
             soak_parts.append(["Modifier", _int(opts["soak_mod"])])
         s_roll = DICE.new_roll(max(1, _total(soak_parts))) if _total(soak_parts) > 0 else {"hits": 0, "dice": []}
@@ -407,18 +675,33 @@ def resolve_attack(att, weapon, target, opts):
     out["dv"] = dv
     out["type"] = dtype
     out["damage"] = dmg
-    out["track"] = "stun" if dtype == "S" else "physical"
+    out["track"] = "matrix" if matrix else "stun" if dtype == "S" else "physical"
     effects = []
     if dmg and weapon.get("element") in ELEMENT_STATUS:
         effects.append(ELEMENT_STATUS[weapon["element"]])
-    if dmg > target.attrs.get("Body", 1):
+    if dmg > target.attrs.get("Body", 1) and not weapon.get("astral") and not matrix:
         effects.append(("Prone", None))
     out["effects"] = [[e[0], e[1]] for e in effects]
-    word = "Physical" if dtype == "P" else "Stun"
+    out["disarmed"] = bool(called and called.get("disarm"))
+    word = "Matrix damage" if matrix else "Physical" if dtype == "P" else "Stun"
     out["summary"] = (f"{att.name} hits {target.name} with {weapon['name']}: DV {dv}{dtype}"
                       + (f", soaked {s_hits}" if soak_parts else "") + f" → {dmg} {word}"
-                      + (f" ({', '.join(e[0] for e in effects)})" if effects else "") + ".")
+                      + (f" ({', '.join(e[0] for e in effects)})" if effects else "")
+                      + (f"; {target.name} drops their weapon" if out["disarmed"] else "") + ".")
     return out
+
+
+def astral_profile(f):
+    """Astral combat attack for a runner or an NPC (dual-natured critters, spirits, projecting magicians)."""
+    skill, attr = ACT.ASTRAL["attack"]
+    rank = f.rank(skill)
+    parts = [[attr, _int(f.attrs.get(attr), 1)], [skill, rank] if rank else [f"{skill} (untrained)", -1]]
+    dv_base = _int(f.attrs.get(ACT.ASTRAL["dv_attr"]), 1)
+    if f.npc and f.npc.get("kind") == "Spirit":
+        dv_base = _int(f.npc.get("force"), dv_base)
+    dv = (dv_base + 1) // 2 if ACT.ASTRAL["dv_half"] else dv_base
+    return {"name": "Astral combat", "parts": parts, "ar": [None] * 5, "dv": dv, "type": ACT.ASTRAL["type"],
+            "element": "", "mode": None, "astral": True, "melee": True}
 
 
 def npc_weapon_profile(f, w, mode=None):
@@ -430,8 +713,11 @@ def npc_weapon_profile(f, w, mode=None):
         fm = G.FIRING_MODES[mode]
         ar = [None if a is None else max(0, a + fm["ar"]) for a in ar]
         dv += fm["dv"]
-    return {"name": w.get("name") or "Attack", "parts": f.npc_attack_parts(w), "ar": ar, "dv": dv,
-            "type": w.get("type") or "P", "element": w.get("element") or "", "mode": mode}
+    parts = [[w.get("pool_label") or "Dice", _int(w["pool"])]] if w.get("pool") else f.npc_attack_parts(w)
+    return {"name": w.get("name") or "Attack", "parts": parts, "ar": ar, "dv": dv,
+            "type": w.get("type") or "P", "element": w.get("element") or "", "mode": mode,
+            "matrix": bool(w.get("matrix")), "biofeedback": w.get("biofeedback"),
+            "melee": (w.get("skill") or "Close Combat") == "Close Combat"}
 
 
 def char_weapon_profile(f, key, mode, rng, amp=0):
@@ -440,14 +726,27 @@ def char_weapon_profile(f, key, mode, rng, amp=0):
     if key == "weapon:unarmed":
         p = R.unarmed_profile(c, d)
         return {"name": "Unarmed strike", "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
-                "element": "", "mode": None, "uid": "unarmed"}
+                "element": "", "mode": None, "uid": "unarmed", "melee": True}
+    if key == "astral":
+        return astral_profile(f)
+    if key.startswith("matrix:"):
+        act = key[7:]
+        if act not in ("data_spike", "tarpit"):
+            raise R.RuleError("Pick a Matrix attack.")
+        mx = d["matrix"]
+        if not mx.get("device"):
+            raise R.RuleError(f"{f.name} has no active Matrix device.")
+        pool = R.pool_by_key(c, key, d)
+        dv = (mx["attack"] + 1) // 2 if act == "data_spike" else 1
+        return {"name": MX.MATRIX_ACTIONS[act]["name"], "parts": [list(p) for p in pool["parts"]], "ar": [mx["ar"]] * 5, "dv": dv,
+                "type": "M", "element": "", "mode": None, "matrix": True, "illegal": True, "tarpit": act == "tarpit"}
     if key.startswith("weapon:"):
         it = R.find_item(c, key[7:])
         p = R.weapon_profile(c, d, it, mode, rng)
         if not p:
             raise R.RuleError(f"{f.name} can't use the {it['name']} (untrained exotic weapon).")
         return {"name": it["name"], "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
-                "element": p["element"], "mode": p["mode"], "uid": it["uid"]}
+                "element": p["element"], "mode": p["mode"], "uid": it["uid"], "melee": p["skill"] == "Close Combat"}
     if key.startswith("natural:"):
         nws = d.get("natural_weapons") or []
         i = _int(key[8:], -1)
@@ -459,7 +758,7 @@ def char_weapon_profile(f, key, mode, rng, amp=0):
         if not p:
             raise R.RuleError(f"{f.name} can't use that natural weapon.")
         return {"name": w["name"], "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
-                "element": "", "mode": None, "uid": "unarmed"}
+                "element": "", "mode": None, "uid": "unarmed", "melee": w["skill"] == "Close Combat"}
     if key.startswith("spell:"):
         sp = (c.get("spells") or [])[_int(key[6:], -1)] if 0 <= _int(key[6:], -1) < len(c.get("spells") or []) else None
         if not sp or sp.get("category") != "Combat":

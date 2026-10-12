@@ -4,27 +4,33 @@ import json
 import re
 import secrets
 
-from flask import abort, jsonify, request, session
+from flask import Response, abort, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core import (APPROVED, DRAFT, GM_COLOR, INVITE_DAYS, PLAYER_COLORS, SUBMITTED, add_roll, app, body,
                   campaign_version, clamp_int, display_name, err, fetch_player_row, game_settings, get_db, ledger_add,
                   ledger_rows, load_char, new_id, now, player_required, roll_rows, row_to_player, save_char)
+import handouts as HO
+import sessions as SS
 from maps import player_view, row_to_map
-from security import admin_required, rate_limited
+from security import gamemaster_required, rate_limited
+from sr import actions6e as ACT
 from sr import catalog as CAT
 from sr import combat as X
 from sr import core6e as K
 from sr import dice as DICE
 from sr import gear6e as G
 from sr import magic6e as M
+from sr import matrix6e as MX
 from sr import packs as PK
+from sr import rigging6e as RIG
 from sr import companion6e as SWC
 from sr import rules as R
+from sr import toxins6e as TOX
 from sr import wiki as WIKI
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,24}$")
-RESERVED = {"admin", "gm", "root", "system"}
+RESERVED = {"gamemaster", "admin", "administrator", "gm", "root", "system"}
 BOOST_WINDOW = 15 * 60        # seconds after a roll during which Edge Boosts may still be applied
 
 
@@ -62,6 +68,12 @@ def catalog():
             "postBoosts": [{"key": k, "cost": v[0]} for k, v in DICE.POST_BOOSTS.items()],
             "npcTemplates": X.templates(),
             "rules": {"edgeCap": R.EDGE_CAP, "pushCost": DICE.PUSH_COST, "ampUpDrain": M.AMP_UP_DRAIN},
+            "matrixActions": MX.MATRIX_ACTIONS, "matrixEdge": MX.MATRIX_EDGE, "ic": MX.IC,
+            "autosofts": RIG.AUTOSOFTS, "rigControl": RIG.CONTROL, "ram": RIG.RAM,
+            "combat": {"interrupts": ACT.INTERRUPTS, "calledShots": ACT.CALLED_SHOTS, "anticipation": ACT.ANTICIPATION,
+                       "intercept": ACT.INTERCEPT, "multiple": ACT.MULTIPLE_ATTACKS, "edgeGainCap": ACT.EDGE_GAIN_CAP,
+                       "statusMods": ACT.STATUS_MODS, "ongoing": list(ACT.ONGOING), "sustainPenalty": ACT.SUSTAIN_PENALTY,
+                       "minorPerMajor": ACT.MINOR_PER_MAJOR},
             "wiki": WIKI.build(),
         }
     return CATALOG
@@ -69,7 +81,7 @@ def catalog():
 
 @app.route("/api/catalog")
 def api_catalog():
-    if not session.get("admin") and not session.get("pid"):
+    if not session.get("gamemaster") and not session.get("pid"):
         return err("Sign in required.", 401)
     return jsonify(catalog())
 
@@ -101,21 +113,27 @@ def store_access(c, approved):
     return out
 
 
-def sheet_payload(row, admin):
+def sheet_payload(row, gamemaster):
     c = load_char(row)
     d = R.derive(c)
+    if not gamemaster:      # the GM tracks Overwatch in secret; players only know what Check Overwatch Score told them
+        known = (c.get("matrix_state") or {}).get("os_known")
+        c["matrix_state"] = {"os": known, "os_known": known}
+        d["matrix"]["os"] = known
     approved = row["approved"] == APPROVED
     allies = [{"id": r["id"], "name": display_name(r), "color": r["color"]} for r in get_db().execute(
         "SELECT * FROM players WHERE campaign_id=? AND id<>? ORDER BY created_at", (row["campaign_id"], row["id"])).fetchall()]
     settings = game_settings(row["campaign_id"])
     return {"player": row_to_player(row, include_state=False), "char": c, "derived": d, "pools": R.pools(c, d),
-            "approved": approved, "locked": approved and not admin, "admin": admin,
+            "approved": approved, "locked": approved and not gamemaster, "gamemaster": gamemaster,
             "ledger": ledger_rows(pid=row["id"], limit=50), "allies": allies,
             "store": store_access(c, approved), "sellPct": settings["sellPct"],
+            "substances": [{k: x.get(k) for k in ("id", "name", "kind", "power", "duration", "effects", "attrs", "init_dice", "desc", "vectors", "damage", "addiction")}
+                           for x in substances(row["campaign_id"])],
             "spirits": [R.spirit_stats(s["type"], s["force"]) for s in c.get("spirits") or [] if s.get("type") in M.SPIRITS]}
 
 
-def char_tx(pid, admin, mutate):
+def char_tx(pid, gamemaster, mutate):
     """Load a character inside a write transaction, let ``mutate(c, ctx, row)`` change it,
     then persist it with ledger entries, log notes and rolls. Returns (row, ctx, message) or raises RuleError."""
     db = get_db()
@@ -126,14 +144,14 @@ def char_tx(pid, admin, mutate):
             abort(404)
         c = load_char(row)
         start = {"karma": c["karma"], "nuyen": c["nuyen"]}
-        ctx = R.Ctx(row["approved"] == APPROVED, admin, game_settings(row["campaign_id"])["sellPct"])
+        ctx = R.Ctx(row["approved"] == APPROVED, gamemaster, game_settings(row["campaign_id"])["sellPct"])
         msg = mutate(c, ctx, row)
         R.clamp_state(c)
         save_char(pid, c)
         running = dict(start)
         for kind, delta, reason in ctx.ledger:
             running[kind] += delta
-            ledger_add(row["campaign_id"], pid, kind, delta, running[kind], reason, admin)
+            ledger_add(row["campaign_id"], pid, kind, delta, running[kind], reason, gamemaster)
         who = display_name(row, c)
         for kind, data in ctx.rolls:
             add_roll(row["campaign_id"], pid, who, row["color"], kind, data)
@@ -146,19 +164,19 @@ def char_tx(pid, admin, mutate):
     return db.execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone(), ctx, msg
 
 
-def do_char_action(pid, admin):
+def do_char_action(pid, gamemaster):
     b = body()
     action = str(b.get("action") or "")
     try:
-        row, _ctx, msg = char_tx(pid, admin, lambda c, ctx, row: R.apply_action(c, action, b, ctx))
+        row, _ctx, msg = char_tx(pid, gamemaster, lambda c, ctx, row: R.apply_action(c, action, b, ctx))
     except R.RuleError as e:
         return err(str(e))
-    out = sheet_payload(row, admin)
+    out = sheet_payload(row, gamemaster)
     out["message"] = msg
     return jsonify(out)
 
 
-# ====================================================================== admin: games
+# ====================================================================== gamemaster: games
 def game_or_404(cid):
     row = get_db().execute("SELECT * FROM campaigns WHERE id=?", (cid,)).fetchone()
     if not row:
@@ -171,7 +189,7 @@ def touch_game(cid):
 
 
 @app.route("/api/overview")
-@admin_required
+@gamemaster_required
 def overview():
     db = get_db()
     games = []
@@ -186,7 +204,7 @@ def overview():
 
 
 @app.route("/api/campaigns", methods=["POST"])
-@admin_required
+@gamemaster_required
 def create_campaign():
     cid = new_id()
     t = now()
@@ -197,7 +215,7 @@ def create_campaign():
 
 
 @app.route("/api/campaigns/<cid>", methods=["PUT"])
-@admin_required
+@gamemaster_required
 def rename_campaign(cid):
     get_db().execute("UPDATE campaigns SET name=?, updated_at=? WHERE id=?",
                      (str(body().get("name") or "Game").strip()[:120], now(), cid))
@@ -206,7 +224,7 @@ def rename_campaign(cid):
 
 
 @app.route("/api/campaigns/<cid>", methods=["DELETE"])
-@admin_required
+@gamemaster_required
 def delete_campaign(cid):
     get_db().execute("DELETE FROM campaigns WHERE id=?", (cid,))
     get_db().commit()
@@ -214,7 +232,7 @@ def delete_campaign(cid):
 
 
 @app.route("/api/games/<cid>")
-@admin_required
+@gamemaster_required
 def game_detail(cid):
     g = game_or_404(cid)
     db = get_db()
@@ -226,19 +244,23 @@ def game_detail(cid):
                for r in db.execute("SELECT * FROM invites WHERE campaign_id=? ORDER BY created_at DESC", (cid,)).fetchall()]
     return jsonify({
         "game": {"id": g["id"], "name": g["name"], "settings": game_settings(cid)},
-        "players": [row_to_player(r, False) for r in db.execute("SELECT * FROM players WHERE campaign_id=? ORDER BY created_at", (cid,)).fetchall()],
+        "players": [dict(row_to_player(r, False), os=R._int((load_char(r).get("matrix_state") or {}).get("os")))
+                    for r in db.execute("SELECT * FROM players WHERE campaign_id=? ORDER BY created_at", (cid,)).fetchall()],
         "maps": [row_to_map(r, False) for r in db.execute("SELECT * FROM maps WHERE campaign_id=? ORDER BY name COLLATE NOCASE", (cid,)).fetchall()],
         "invites": invites,
         "runs": [run_to_dict(r) for r in db.execute("SELECT * FROM runs WHERE campaign_id=? ORDER BY CASE status WHEN 'Active' THEN 0 ELSE 1 END, created_at DESC", (cid,)).fetchall()],
         "ledger": ledger_rows(cid=cid, limit=100),
-        "rolls": roll_rows(cid, admin=True),
+        "rolls": roll_rows(cid, gamemaster=True),
+        "handouts": HO.game_handouts(cid),
+        "sessions": SS.game_sessions(cid),
+        "substances": substances(cid),
         "version": version, "now": now(),
     })
 
 
-# ====================================================================== admin: invites & accounts
+# ====================================================================== gamemaster: invites & accounts
 @app.route("/api/games/<cid>/invites", methods=["POST"])
-@admin_required
+@gamemaster_required
 def create_invite(cid):
     game_or_404(cid)
     days = clamp_int(body().get("days"), 1, 60, INVITE_DAYS)
@@ -252,7 +274,7 @@ def create_invite(cid):
 
 
 @app.route("/api/invites/<token>", methods=["DELETE"])
-@admin_required
+@gamemaster_required
 def revoke_invite(token):
     row = get_db().execute("SELECT campaign_id FROM invites WHERE token=?", (token,)).fetchone()
     get_db().execute("DELETE FROM invites WHERE token=? AND used_by IS NULL", (token,))
@@ -323,8 +345,8 @@ def accept_invite(token):
 
 
 @app.route("/api/players/<pid>/password", methods=["POST"])
-@admin_required
-def admin_reset_password(pid):
+@gamemaster_required
+def gamemaster_reset_password(pid):
     fetch_player_row(pid)
     pw = "-".join(secrets.token_urlsafe(4) for _ in range(3))
     get_db().execute("UPDATE players SET pw_hash=?, pw_rev=pw_rev+1 WHERE id=?", (generate_password_hash(pw), pid))
@@ -333,7 +355,7 @@ def admin_reset_password(pid):
 
 
 @app.route("/api/players/<pid>", methods=["DELETE"])
-@admin_required
+@gamemaster_required
 def delete_player(pid):
     row = fetch_player_row(pid)
     get_db().execute("DELETE FROM players WHERE id=?", (pid,))
@@ -343,7 +365,7 @@ def delete_player(pid):
 
 
 @app.route("/api/players/<pid>/review", methods=["POST"])
-@admin_required
+@gamemaster_required
 def review_sheet(pid):
     row = fetch_player_row(pid)
     b = body()
@@ -365,16 +387,16 @@ def review_sheet(pid):
     return jsonify(sheet_payload(fetch_player_row(pid), True))
 
 
-# ====================================================================== admin: sheets, grants, edge
+# ====================================================================== gamemaster: sheets, grants, edge
 @app.route("/api/players/<pid>/sheet")
-@admin_required
-def admin_sheet(pid):
+@gamemaster_required
+def gamemaster_sheet(pid):
     return jsonify(sheet_payload(fetch_player_row(pid), True))
 
 
 @app.route("/api/players/<pid>/sheet/action", methods=["POST"])
-@admin_required
-def admin_sheet_action(pid):
+@gamemaster_required
+def gamemaster_sheet_action(pid):
     return do_char_action(pid, True)
 
 
@@ -387,7 +409,7 @@ def _target_rows(cid, who):
 
 
 @app.route("/api/games/<cid>/grant", methods=["POST"])
-@admin_required
+@gamemaster_required
 def grant(cid):
     """Give (positive) or take (negative) Karma and/or Nuyen from one, several or all players."""
     game_or_404(cid)
@@ -413,7 +435,7 @@ def grant(cid):
 
 
 @app.route("/api/games/<cid>/edge", methods=["POST"])
-@admin_required
+@gamemaster_required
 def gm_edge(cid):
     """refresh: Edge back to the Edge attribute. gain/lose: +-1 (0..7)."""
     game_or_404(cid)
@@ -440,7 +462,7 @@ def gm_edge(cid):
 
 
 @app.route("/api/games/<cid>/settings", methods=["PUT"])
-@admin_required
+@gamemaster_required
 def game_settings_update(cid):
     g = game_or_404(cid)
     b = body()
@@ -452,8 +474,90 @@ def game_settings_update(cid):
     return jsonify({"settings": game_settings(cid)})
 
 
+# ====================================================================== toxins, drugs, diseases
+def substances(cid):
+    """The game's substance library: built-in (Companion) plus the GM's own."""
+    custom = [x for x in (game_settings(cid).get("substances") or []) if isinstance(x, dict)]
+    return [dict(x, builtin=True) for x in TOX.BUILTIN] + custom
+
+
+def find_substance(cid, sid):
+    sub = next((x for x in substances(cid) if x.get("id") == sid), None)
+    if not sub:
+        raise R.RuleError("Unknown substance.")
+    return sub
+
+
+@app.route("/api/games/<cid>/substances", methods=["PUT"])
+@gamemaster_required
+def substances_update(cid):
+    g = game_or_404(cid)
+    raw = body().get("substances")
+    if not isinstance(raw, list):
+        return err("Send the list of substances.")
+    out, seen = [], {x["id"] for x in TOX.BUILTIN}
+    for x in raw[:TOX.MAX_LIBRARY]:
+        sub = R.clean_substance(x)
+        if not sub:
+            continue
+        if not sub["id"] or sub["id"] in seen:
+            base = re.sub(r"[^a-z0-9]+", "-", sub["name"].lower()).strip("-")[:30] or "substance"
+            sub["id"] = f"{base}-{secrets.token_hex(2)}"
+        seen.add(sub["id"])
+        out.append(sub)
+    cur = json.loads(g["settings"] or "{}")
+    cur["substances"] = out
+    get_db().execute("UPDATE campaigns SET settings=?, updated_at=? WHERE id=?", (json.dumps(cur), now(), cid))
+    get_db().commit()
+    return jsonify({"substances": substances(cid)})
+
+
+@app.route("/api/players/<pid>/expose", methods=["POST"])
+@gamemaster_required
+def gamemaster_expose(pid):
+    """GM: expose a runner to a toxin, drug or disease (they roll Toxin Resistance)."""
+    b = body()
+    row = fetch_player_row(pid)
+    try:
+        sub = find_substance(row["campaign_id"], str(b.get("id") or ""))
+        row2, _ctx, msg = char_tx(pid, True, lambda c, ctx, r: R.expose(c, sub, ctx, resist=b.get("resist", True)))
+    except R.RuleError as e:
+        return err(str(e))
+    out = sheet_payload(row2, True)
+    out["message"] = msg
+    return jsonify(out)
+
+
+@app.route("/api/me/dose", methods=["POST"])
+@player_required
+@rate_limited("dose", 30)
+def me_dose(me):
+    """Take a dose of a drug you carry (one item with the drug's name is used up)."""
+    b = body()
+    try:
+        sub = find_substance(me["campaign_id"], str(b.get("id") or ""))
+        if sub.get("kind") != "drug":
+            raise R.RuleError("You can only take drugs yourself; your GM handles toxins and diseases.")
+
+        def mutate(c, ctx, row):
+            name = sub["name"].lower()
+            it = next((x for x in c["inventory"] if (x.get("name") or "").lower().startswith(name) and R._int(x.get("qty"), 1) > 0), None)
+            if not it:
+                raise R.RuleError(f"You don't carry any {sub['name']}.")
+            it["qty"] = R._int(it.get("qty"), 1) - 1
+            if it["qty"] <= 0:
+                c["inventory"].remove(it)
+            return R.expose(c, sub, ctx, resist=b.get("resist", True), label="Took a dose of")
+        row2, _ctx, msg = char_tx(me["id"], False, mutate)
+    except R.RuleError as e:
+        return err(str(e))
+    out = sheet_payload(row2, False)
+    out["message"] = msg
+    return jsonify(out)
+
+
 @app.route("/api/games/<cid>/lifestyle", methods=["POST"])
-@admin_required
+@gamemaster_required
 def charge_lifestyle(cid):
     """Start of a new month: charge every runner's lifestyle (nuyen may go negative)."""
     game_or_404(cid)
@@ -474,7 +578,7 @@ def charge_lifestyle(cid):
 
 
 # ====================================================================== healing
-def _heal(patient_id, healer_row, method, b, admin):
+def _heal(patient_id, healer_row, method, b, gamemaster):
     """Roll a healing test (healer's pool, or natural recovery) and apply it to the patient.
     Returns (error_response, None) or (None, message, roll id)."""
     if method not in R.HEAL_METHODS:
@@ -487,7 +591,7 @@ def _heal(patient_id, healer_row, method, b, admin):
         if method == "medkit":
             if not R.medkits(hc0):
                 return err("The healer has no medkit."), None
-            if not R.medkit_supplies(hc0) and not admin:
+            if not R.medkit_supplies(hc0) and not gamemaster:
                 return err("The medkit is out of supplies. Buy Medkit Supplies in the store."), None
         if push and method == "first_aid" and not R.medkits(hc0):
             return err("First aid without a medkit can't use Edge."), None
@@ -506,7 +610,7 @@ def _heal(patient_id, healer_row, method, b, admin):
             parts = R.natural_pool(c, method, bool(b.get("assisted")))
         elif method == "magic":
             sp = next((s for s in hc.get("spells") or [] if s.get("name") in R.HEAL_SPELLS), None)
-            if not sp and not admin:
+            if not sp and not gamemaster:
                 raise R.RuleError("The healer doesn't know a Heal spell.")
             prof = R.spell_profile(hc, hd, sp or {"name": "Heal", "drain": 3}) if hc.get("magic_type") in R.CASTERS else None
             if not prof:
@@ -553,7 +657,7 @@ def _heal(patient_id, healer_row, method, b, admin):
             _use_supplies(c)
         return text
     try:
-        _row, _ctx, msg = char_tx(patient_id, admin, mutate)
+        _row, _ctx, msg = char_tx(patient_id, gamemaster, mutate)
         if healer_row is not None and not self_heal:
             def after(c, ctx, row):
                 if push:
@@ -598,7 +702,7 @@ def me_heal(me):
 
 
 @app.route("/api/players/<pid>/heal", methods=["POST"])
-@admin_required
+@gamemaster_required
 def gm_heal(pid):
     b = body()
     row = fetch_player_row(pid)
@@ -638,7 +742,7 @@ def clean_assignees(cid, raw):
 
 
 @app.route("/api/games/<cid>/runs", methods=["POST"])
-@admin_required
+@gamemaster_required
 def create_run(cid):
     game_or_404(cid)
     b = body()
@@ -655,7 +759,7 @@ def create_run(cid):
 
 
 @app.route("/api/runs/<rid>", methods=["PUT"])
-@admin_required
+@gamemaster_required
 def update_run(rid):
     row = run_row(rid)
     b = body()
@@ -673,7 +777,7 @@ def update_run(rid):
 
 
 @app.route("/api/runs/<rid>/complete", methods=["POST"])
-@admin_required
+@gamemaster_required
 def complete_run(rid):
     row = run_row(rid)
     run = run_to_dict(row)
@@ -708,7 +812,7 @@ def complete_run(rid):
 
 
 @app.route("/api/runs/<rid>/abandon", methods=["POST"])
-@admin_required
+@gamemaster_required
 def abandon_run(rid):
     row = run_row(rid)
     if row["status"] != "Active":
@@ -719,7 +823,7 @@ def abandon_run(rid):
 
 
 @app.route("/api/runs/<rid>/reopen", methods=["POST"])
-@admin_required
+@gamemaster_required
 def reopen_run(rid):
     row = run_row(rid)
     if row["status"] != "Abandoned":
@@ -730,7 +834,7 @@ def reopen_run(rid):
 
 
 @app.route("/api/runs/<rid>", methods=["DELETE"])
-@admin_required
+@gamemaster_required
 def delete_run(rid):
     row = run_row(rid)
     get_db().execute("DELETE FROM runs WHERE id=?", (rid,))
@@ -741,7 +845,7 @@ def delete_run(rid):
 
 # ====================================================================== GM dice
 @app.route("/api/games/<cid>/roll", methods=["POST"])
-@admin_required
+@gamemaster_required
 @rate_limited("gm_roll", 90)
 def gm_roll(cid):
     game_or_404(cid)
@@ -763,13 +867,13 @@ def gm_roll(cid):
     except DICE.DiceError as e:
         return err(str(e))
     get_db().commit()
-    return jsonify({"rolls": roll_rows(cid, admin=True)})
+    return jsonify({"rolls": roll_rows(cid, gamemaster=True)})
 
 
 @app.route("/api/games/<cid>/rolls")
-@admin_required
+@gamemaster_required
 def gm_rolls(cid):
-    return jsonify({"rolls": roll_rows(cid, admin=True)})
+    return jsonify({"rolls": roll_rows(cid, gamemaster=True)})
 
 
 # ====================================================================== player: state, sheet, rolls, edge, runs
@@ -794,6 +898,9 @@ def me_state(me):
         "view": player_view(me), "rolls": roll_rows(me["campaign_id"]),
         "activeRuns": sum(1 for r in runs if r["status"] == "Active"), "runsSig": [[r["id"], r["status"], r["progress"]] for r in runs],
         "sheetRev": me["char_rev"],
+        "handouts": HO.visible_handouts(me),
+        "sessionsSig": [[r["id"], r["updated_at"]] for r in get_db().execute(
+            "SELECT id, updated_at FROM sessions WHERE campaign_id=? AND shared=1 AND ended_at IS NOT NULL", (me["campaign_id"],)).fetchall()],
     })
 
 
@@ -807,9 +914,87 @@ def me_sheet(me):
 @player_required
 @rate_limited("sheet_action", 240)
 def me_sheet_action(me):
-    if body().get("action") == "admin_set":
+    if body().get("action") == "gamemaster_set":
         return err("Only the GM can do that.", 403)
     return do_char_action(me["id"], False)
+
+
+# ====================================================================== character files
+CHAR_FILE_FORMAT = "shadowgrid-character-3"
+MAX_CHAR_FILE = 1_500_000
+
+
+def _export_char(row, hide_os=False):
+    c = load_char(row)
+    if hide_os:
+        known = (c.get("matrix_state") or {}).get("os_known")
+        c["matrix_state"] = {"os": known or 0, "os_known": known}
+    data = {"format": CHAR_FILE_FORMAT, "exported": now(), "name": display_name(row, c), "character": c}
+    safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in display_name(row, c)).strip() or "character"
+    return Response(json.dumps(data, indent=1), mimetype="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}.shadowgrid.json"'})
+
+
+def _import_char(row, gamemaster):
+    """Replace a sheet with a character file. Players can only do this while their sheet is a draft."""
+    if not gamemaster and row["approved"] == APPROVED:
+        return err("Your sheet is approved; ask your GM to import a character for you.")
+    raw = request.get_data(cache=False, as_text=False)[:MAX_CHAR_FILE + 1]
+    if len(raw) > MAX_CHAR_FILE:
+        return err("That file is too large.")
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return err("That isn't a character file.")
+    if not isinstance(data, dict) or data.get("format") != CHAR_FILE_FORMAT or not isinstance(data.get("character"), dict):
+        return err("That isn't a ShadowGrid character file (or it comes from another version).")
+    try:
+        c = R.import_character(data["character"])
+    except R.RuleError as e:
+        return err(str(e))
+    old = load_char(row)
+
+    def mutate(cur, ctx, r):
+        cur.clear()
+        cur.update(c)
+        cur["imported_at"] = now()
+        if cur["karma"] != old["karma"]:
+            ctx.ledger.append(("karma", cur["karma"] - old["karma"], "Imported from a character file"))
+        if cur["nuyen"] != old["nuyen"]:
+            ctx.ledger.append(("nuyen", cur["nuyen"] - old["nuyen"], "Imported from a character file"))
+        return f"Imported {cur.get('name') or 'the character'}."
+    try:
+        row2, _ctx, msg = char_tx(row["id"], gamemaster, mutate)
+    except R.RuleError as e:
+        return err(str(e))
+    out = sheet_payload(row2, gamemaster)
+    out["message"] = msg
+    return jsonify(out)
+
+
+@app.route("/api/me/sheet/export")
+@player_required
+def me_sheet_export(me):
+    return _export_char(me, hide_os=True)
+
+
+@app.route("/api/me/sheet/import", methods=["POST"])
+@player_required
+@rate_limited("sheet_import", 10)
+def me_sheet_import(me):
+    return _import_char(me, False)
+
+
+@app.route("/api/players/<pid>/sheet/export")
+@gamemaster_required
+def gamemaster_sheet_export(pid):
+    return _export_char(fetch_player_row(pid))
+
+
+@app.route("/api/players/<pid>/sheet/import", methods=["POST"])
+@gamemaster_required
+def gamemaster_sheet_import(pid):
+    return _import_char(fetch_player_row(pid), True)
 
 
 @app.route("/api/me/submit", methods=["POST"])
@@ -912,11 +1097,15 @@ def me_roll(me):
             raise R.RuleError(str(e))
         res["label"] = label
         res["parts"] = parts
+        if key.startswith("matrix:") and key[7:] in MX.MATRIX_ACTIONS:
+            extra += R.matrix_action_roll(c, d, key[7:], res, clamp_int(b.get("targetRating"), 0, 12, 0), ctx)
         if extra:
             res["note"] = " · ".join(extra)
         out["rid"] = add_roll(row["campaign_id"], row["id"], display_name(row, c), row["color"], "sr", res)
         if follow and follow[0] == "spell":
             R.after_cast(c, follow[1], ctx, clamp_int(b.get("drain"), 0, 20, 0))
+            if follow[1].get("duration") == "S" and res["hits"] > 0 and b.get("sustain", True):
+                R.start_sustaining(c, follow[1], ctx, res["hits"])
         elif follow:
             R.after_form(c, follow[1], ctx)
         return "Rolled."
@@ -925,7 +1114,7 @@ def me_roll(me):
     except R.RuleError as e:
         return err(str(e))
     res = {"rollId": out["rid"], "rolls": roll_rows(me["campaign_id"]), "me": row_to_player(fetch_player_row(me["id"]), False)}
-    if str(b.get("key") or "").startswith(("weapon:", "spell:", "form:")):
+    if str(b.get("key") or "").startswith(("weapon:", "spell:", "form:", "matrix:")):
         res["sheet"] = sheet_payload(fetch_player_row(me["id"]), False)   # ammo, drain or fading changed
     return jsonify(res)
 
@@ -980,8 +1169,9 @@ def me_initiative(me):
             score, dice, label = d["matrix"]["init_score"], d["matrix"]["init_dice"], f"Matrix initiative ({d['matrix']['mode']})"
         elif kind == "astral" and d["astral_initiative"]:
             score, dice, label = d["astral_initiative"]["score"], d["astral_initiative"]["dice"], "Astral initiative"
-        res = DICE.initiative(score, dice, plus3)
-        res["label"] = label + (" (+3 for 1 Edge)" if plus3 else "")
+        pen = sum(v for _, v in X.status_parts(X.Fighter("", {}, 0, 0, statuses=c.get("statuses") or {}), "init"))
+        res = DICE.initiative(score + pen, dice, plus3)
+        res["label"] = label + (" (+3 for 1 Edge)" if plus3 else "") + (f" ({pen} from statuses)" if pen else "")
         res["actions"] = {"major": 1, "minor": min(R.MAX_MINOR, 1 + dice)}
         add_roll(row["campaign_id"], row["id"], _who(row, c), row["color"], "init", res)
         import fight

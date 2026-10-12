@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from datetime import timedelta
 from functools import wraps
@@ -14,8 +15,13 @@ from security import apply_security_headers, csrf_ok
 from sr import rules as R
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("GRIDMAP_DB", os.path.join(BASE_DIR, "shadowgrid.db"))
-HTTPS = os.environ.get("GRIDMAP_HTTPS") == "1"
+DATA_DIR = os.environ.get("SHADOWGRID_DATA", os.path.join(BASE_DIR, "data"))
+DB_PATH = os.environ.get("SHADOWGRID_DB", os.path.join(DATA_DIR, "shadowgrid.db"))
+UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+for _d in (os.path.dirname(DB_PATH) or ".", UPLOAD_DIR, BACKUP_DIR):
+    os.makedirs(_d, mode=0o700, exist_ok=True)
+HTTPS = os.environ.get("SHADOWGRID_HTTPS") == "1"
 INVITE_DAYS = 7
 
 app = Flask(__name__)
@@ -107,7 +113,17 @@ CREATE TABLE IF NOT EXISTS ledger (
   player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, delta INTEGER NOT NULL, balance INTEGER NOT NULL, reason TEXT NOT NULL,
   by_gm INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS handouts (
+  id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', image TEXT, recipients TEXT NOT NULL DEFAULT '"all"',
+  shown INTEGER NOT NULL DEFAULT 0, shown_at REAL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', started_at REAL NOT NULL, ended_at REAL,
+  recap TEXT, shared INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_rolls_campaign ON rolls(campaign_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_handouts_campaign ON handouts(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_campaign ON sessions(campaign_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_maps_campaign ON maps(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_players_campaign ON players(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_runs_campaign ON runs(campaign_id);
@@ -142,16 +158,16 @@ def init_db(quiet=False):
     if not secret:
         secret = secrets.token_hex(32)
         kv_set(db, "secret_key", secret)
-    env_pw = os.environ.get("GRIDMAP_ADMIN_PASSWORD")
+    env_pw = os.environ.get("SHADOWGRID_GAMEMASTER_PASSWORD")
     if env_pw:
-        kv_set(db, "admin_password", generate_password_hash(env_pw))
-    elif not kv_get(db, "admin_password"):
+        kv_set(db, "gamemaster_password", generate_password_hash(env_pw))
+    elif not kv_get(db, "gamemaster_password"):
         pw = secrets.token_urlsafe(12)
-        kv_set(db, "admin_password", generate_password_hash(pw))
+        kv_set(db, "gamemaster_password", generate_password_hash(pw))
         if not quiet:
             print("=" * 64)
-            print("  Admin (GM) account bootstrapped.")
-            print("  Username: admin")
+            print("  Gamemaster (GM) account bootstrapped.")
+            print("  Username: gamemaster")
             print(f"  Password: {pw}      <- save it now, it is not shown again")
             print("  Change it any time with:  python app.py set-password")
             print("=" * 64, flush=True)
@@ -197,7 +213,7 @@ def err(msg, code=400):
 
 
 # ====================================================================== game settings
-GAME_DEFAULTS = {"sellPct": 50}
+GAME_DEFAULTS = {"sellPct": 50, "substances": []}
 
 
 def game_settings(cid):
@@ -290,14 +306,14 @@ def add_roll(cid, pid, who, color, kind, data, hidden=False):
     db = get_db()
     db.execute("INSERT INTO rolls (id,campaign_id,player_id,who,color,kind,data,hidden,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                (rid, cid, pid, str(who)[:60], color, kind, json.dumps(data), 1 if hidden else 0, t, t))
-    db.execute("DELETE FROM rolls WHERE campaign_id=? AND id NOT IN (SELECT id FROM rolls WHERE campaign_id=? ORDER BY created_at DESC LIMIT 300)", (cid, cid))
+    db.execute("DELETE FROM rolls WHERE campaign_id=? AND id NOT IN (SELECT id FROM rolls WHERE campaign_id=? ORDER BY created_at DESC LIMIT 3000)", (cid, cid))
     return rid
 
 
-def roll_rows(cid, admin=False, limit=40):
+def roll_rows(cid, gamemaster=False, limit=40):
     if not cid:
         return []
-    q = "SELECT * FROM rolls WHERE campaign_id=?" + ("" if admin else " AND hidden=0") + " ORDER BY created_at DESC LIMIT ?"
+    q = "SELECT * FROM rolls WHERE campaign_id=?" + ("" if gamemaster else " AND hidden=0") + " ORDER BY created_at DESC LIMIT ?"
     rows = get_db().execute(q, (cid, limit)).fetchall()
     return [{"id": r["id"], "playerId": r["player_id"], "who": r["who"], "color": r["color"], "kind": r["kind"],
              "data": json.loads(r["data"]), "hidden": bool(r["hidden"]), "at": r["created_at"], "updatedAt": r["updated_at"]} for r in rows]
@@ -308,7 +324,8 @@ def campaign_version(cid, map_id=None):
     db = get_db()
     v = 0.0
     if cid:
-        for table, col in (("players", "updated_at"), ("maps", "updated_at"), ("rolls", "updated_at"), ("runs", "updated_at")):
+        for table, col in (("players", "updated_at"), ("maps", "updated_at"), ("rolls", "updated_at"), ("runs", "updated_at"),
+                           ("handouts", "updated_at"), ("sessions", "updated_at")):
             row = db.execute(f"SELECT MAX({col}) FROM {table} WHERE campaign_id=?", (cid,)).fetchone()
             v = max(v, row[0] or 0.0)
         row = db.execute("SELECT updated_at FROM campaigns WHERE id=?", (cid,)).fetchone()
@@ -317,6 +334,38 @@ def campaign_version(cid, map_id=None):
         row = db.execute("SELECT updated_at FROM maps WHERE id=?", (map_id,)).fetchone()
         v = max(v, row[0] if row else 0.0)
     return repr(v)
+
+
+# ====================================================================== live updates (server-sent events)
+class Bus:
+    """In-process change signal: every successful write bumps ``seq`` and wakes the open event streams,
+    which tell their page to refetch (each page's fetch is a cheap "unchanged since version" check)."""
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.seq = 0
+        self.streams = 0
+
+    def notify(self):
+        with self.cond:
+            self.seq += 1
+            self.cond.notify_all()
+
+    def wait(self, seen, timeout):
+        with self.cond:
+            self.cond.wait_for(lambda: self.seq != seen, timeout=timeout)
+            return self.seq
+
+
+BUS = Bus()
+MAX_STREAMS = int(os.environ.get("SHADOWGRID_MAX_STREAMS", "150"))
+
+
+@app.after_request
+def _signal_writes(resp):
+    if request.method in ("POST", "PUT", "DELETE") and resp.status_code < 400:
+        BUS.notify()
+    return resp
 
 
 # ====================================================================== player auth
@@ -339,7 +388,7 @@ def player_required(fn):
         if not row:
             if request.path.startswith("/api/"):
                 return jsonify({"error": "Sign in required."}), 401
-            if session.get("admin"):
+            if session.get("gamemaster"):
                 return redirect(url_for("index"))
             return redirect(url_for("login", next=request.path))
         if not csrf_ok():

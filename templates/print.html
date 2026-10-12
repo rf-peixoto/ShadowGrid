@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Character sheet · ShadowGrid</title>
+<link rel="stylesheet" href="/static/print.css">
+</head>
+<body data-sheet-url="{{ sheet_url or '' }}">
+<div class="toolbar no-print">
+  <p><b>Print or save as PDF.</b> Click the button, then choose your printer or <em>Save as PDF</em> as the destination.</p>
+  <button id="btn-print" type="button">Print / Save as PDF</button>
+  <label class="check"><input type="checkbox" id="opt-gear" checked> Gear and contacts page</label>
+  <label class="check"><input type="checkbox" id="opt-skills"> All skills (also untrained)</label>
+</div>
+<main id="sheet"><p class="loading">Loading…</p></main>
+<script src="/static/api.js"></script>
+<script src="/static/srui.js"></script>
+<script src="/static/print.js"></script>
+</body>
+</html>

@@ -1,0 +1,133 @@
+"""Shadowrun Sixth World Matrix: actions, Overwatch Score, convergence, IC (core rulebook, The Matrix).
+
+Tests: legal actions use Electronics, illegal ones Cracking. Attack Rating = Attack + Sleaze,
+Defense Rating = Data Processing + Firewall (whoever is 4+ ahead gains Edge, 2 per round at most).
+
+Each action: name, legal, action (major/minor), access needed, attacker pool (skill, attribute),
+defense (text; "pool" is a list of the defender's Matrix/mental attributes, or "rating" for
+Device/Host Rating x 2), effect text, and Matrix damage when it attacks.
+"""
+
+OS_LIMIT = 40                 # convergence
+OS_PER_ILLEGAL_HIT = 1        # each hit the defender rolls on an illegal action
+OS_PER_HACKING_PROGRAM = 1    # an action helped by a hacking program (once per action)
+OS_PER_ROUND_USER = 1         # each host with illegal User access, per round
+OS_PER_ROUND_ADMIN = 3        # each host with illegal Admin access, per round
+DUMPSHOCK = {"cold": (3, "S"), "hot": (3, "P")}   # resisted with Willpower
+DEVICE_PENALTY_STEP = 3       # -1 die per 3 boxes of Matrix damage on the device
+NOISE_TABLE = [("Direct connection or under 100 m", 0), ("100 m to 1 km", 1), ("1 to 10 km", 3), ("10 to 100 km", 5), ("Over 100 km", 8)]
+
+MATRIX_ACTIONS = {
+    # ---- entry and access
+    "hack_on_the_fly": {"name": "Hack on the Fly", "legal": False, "action": "major", "access": "Outsider/User",
+                        "pool": ("Cracking", "Logic"), "defense": ["Intuition", "Firewall"], "uses": "sleaze",
+                        "effect": "Gain User access to the target (Admin when the GM allows it, at a harder Defense)."},
+    "brute_force": {"name": "Brute Force", "legal": False, "action": "major", "access": "Outsider/User/Admin",
+                    "pool": ("Cracking", "Logic"), "defense": ["Willpower", "Firewall"], "uses": "attack",
+                    "effect": "Gain access by force. Admin access without User access first: the target gets +4 Defense Rating."},
+    "backdoor_entry": {"name": "Backdoor Entry", "legal": False, "action": "major", "access": "Outsider",
+                       "pool": ("Cracking", "Logic"), "defense": ["Willpower", "Firewall"], "uses": "sleaze",
+                       "effect": "Enter a host through a weakness found with Probe (its net hits add dice)."},
+    "probe": {"name": "Probe", "legal": False, "action": "extended (1 minute)", "access": "any",
+              "pool": ("Cracking", "Logic"), "defense": "rating", "uses": "sleaze",
+              "effect": "Net hits become bonus dice for a later Backdoor Entry, for (10 − rating) hours or until you go offline."},
+    # ---- information
+    "matrix_perception": {"name": "Matrix Perception", "legal": True, "action": "major", "access": "any",
+                          "pool": ("Electronics", "Intuition"), "defense": ["Willpower", "Sleaze"],
+                          "effect": "Spot and analyse icons, including ones running silent (Minor with a cyberdeck, cyberjack or Resonance)."},
+    "matrix_search": {"name": "Matrix Search", "legal": True, "action": "extended (10 minutes)", "access": "any",
+                      "pool": ("Electronics", "Intuition"), "defense": None,
+                      "effect": "Find information; the GM sets the threshold."},
+    "check_os": {"name": "Check Overwatch Score", "legal": False, "action": "major", "access": "Admin",
+                 "pool": ("Cracking", "Logic"), "defense": 4,
+                 "effect": "On a success you learn your current Overwatch Score."},
+    "snoop": {"name": "Snoop", "legal": False, "action": "major", "access": "Admin",
+              "pool": ("Cracking", "Logic"), "defense": ["Logic", "Firewall"], "uses": "sleaze",
+              "effect": "Intercept the target's traffic while you keep Admin access."},
+    "trace_icon": {"name": "Trace Icon", "legal": False, "action": "major", "access": "Admin",
+                   "pool": ("Electronics", "Intuition"), "defense": ["Willpower", "Sleaze"], "uses": "sleaze",
+                   "effect": "Find the physical location of the target's device."},
+    "hash_check": {"name": "Hash Check", "legal": False, "action": "major", "access": "User/Admin",
+                   "pool": ("Electronics", "Logic"), "defense": None,
+                   "effect": "Check a file's integrity: threshold 1 with the hash, 4 without."},
+    # ---- attacks
+    "data_spike": {"name": "Data Spike", "legal": False, "action": "major", "access": "any",
+                   "pool": ("Cracking", "Logic"), "defense": ["Data Processing", "Firewall"], "uses": "attack",
+                   "damage": "attack", "effect": "Matrix damage: half your Attack (rounded up) + 1 per net hit."},
+    "tarpit": {"name": "Tarpit", "legal": False, "action": "major", "access": "any",
+               "pool": ("Cracking", "Logic"), "defense": ["Data Processing", "Firewall"], "uses": "attack",
+               "damage": "one", "effect": "1 + net hits Matrix damage, and the target's Data Processing drops by as much."},
+    "crash_program": {"name": "Crash Program", "legal": False, "action": "major", "access": "Admin",
+                      "pool": ("Cracking", "Logic"), "defense": ["Data Processing", "Device Rating"], "uses": "attack",
+                      "effect": "Crash a running program on the target."},
+    # ---- defense and stealth
+    "hide": {"name": "Hide", "legal": False, "action": "major", "access": "any",
+             "pool": ("Cracking", "Intuition"), "defense": ["Intuition", "Data Processing"], "uses": "sleaze",
+             "effect": "An icon that has spotted you loses track of you."},
+    "erase_signature": {"name": "Erase Matrix Signature", "legal": False, "action": "major", "access": "User/Admin",
+                        "pool": ("Electronics", "Logic"), "defense": ["Willpower", "Firewall"], "uses": "attack",
+                        "effect": "Remove a Resonance signature (requires Resonance)."},
+    "full_matrix_defense": {"name": "Full Matrix Defense", "legal": True, "action": "major", "access": "any",
+                            "pool": None, "defense": None,
+                            "effect": "Add Firewall to your Matrix Defense tests until the end of the round."},
+    # ---- files
+    "edit_file": {"name": "Edit File", "legal": True, "action": "major", "access": "User/Admin",
+                  "pool": ("Electronics", "Logic"), "defense": ["Intuition", "Firewall"], "effect": "Create, change, copy or delete a file."},
+    "encrypt_file": {"name": "Encrypt File", "legal": True, "action": "major", "access": "User/Admin",
+                     "pool": ("Electronics", "Logic"), "defense": None, "effect": "Hits become the file's Encryption rating."},
+    "crack_file": {"name": "Crack File", "legal": False, "action": "major", "access": "any",
+                   "pool": ("Cracking", "Logic"), "defense": "rating", "uses": "attack", "effect": "Break a file's encryption (rating x 2 dice)."},
+    "set_data_bomb": {"name": "Set Data Bomb", "legal": False, "action": "major", "access": "Admin",
+                      "pool": ("Electronics", "Logic"), "defense": "rating", "uses": "sleaze", "effect": "Booby-trap a file; hits set the bomb's rating."},
+    "disarm_data_bomb": {"name": "Disarm Data Bomb", "legal": True, "action": "major", "access": "any",
+                         "pool": ("Cracking", "Logic"), "defense": "rating", "effect": "Defuse a data bomb (rating x 2 dice)."},
+    # ---- devices
+    "control_device": {"name": "Control Device", "legal": True, "action": "major", "access": "User/Admin",
+                       "pool": ("Electronics", "Logic"), "defense": ["Willpower", "Firewall"],
+                       "effect": "Use a device remotely. Fails against a device a rigger is jumped into."},
+    "spoof_command": {"name": "Spoof Command", "legal": False, "action": "major", "access": "Outsider",
+                      "pool": ("Cracking", "Logic"), "defense": ["Data Processing", "Firewall"], "uses": "sleaze",
+                      "effect": "Send a command that looks like it comes from the device's owner (vs Pilot + Firewall for drones)."},
+    "format_device": {"name": "Format Device", "legal": True, "action": "major", "access": "Admin",
+                      "pool": ("Electronics", "Logic"), "defense": ["Willpower", "Firewall"], "effect": "The device's software is wiped on its next reboot."},
+    "reboot_device": {"name": "Reboot Device", "legal": True, "action": "major", "access": "Admin",
+                      "pool": ("Electronics", "Logic"), "defense": ["Willpower", "Firewall"],
+                      "effect": "The device shuts down and is back at the end of the next combat round; Overwatch, exploits and backdoors reset."},
+    "jam_signals": {"name": "Jam Signals", "legal": False, "action": "major", "access": "Admin",
+                    "pool": ("Cracking", "Logic"), "defense": None, "uses": "attack", "effect": "Each hit adds 1 noise to Matrix actions within 100 m."},
+    "jump_in": {"name": "Jump into Rigged Device", "legal": True, "action": "major", "access": "Admin",
+                "pool": ("Electronics", "Logic"), "defense": ["Willpower", "Firewall"],
+                "effect": "Take a rigged vehicle or drone over in VR (no test for your own devices)."},
+    "jack_out": {"name": "Jack Out", "legal": True, "action": "major", "access": "any",
+                 "pool": ("Electronics", "Willpower"), "defense": ["Charisma", "Data Processing"],
+                 "effect": "Leave the Matrix; a test only when link-locked. Leaving VR this way causes dumpshock."},
+}
+
+# IC: Host Rating x 2 for its dice pools and Defense, the host's Attack Rating. Effects on a hit.
+IC = {
+    "Acid":      "Each hit lowers the target's Firewall by 1 until reboot.",
+    "Binder":    "Each hit lowers the target's Data Processing by 1 until reboot.",
+    "Black IC":  "Matrix damage + net hits, link-locks the target and deals the same as biofeedback (Stun cold-sim, Physical hot-sim).",
+    "Blaster":   "Matrix damage + net hits, link-locks the target and deals Stun biofeedback.",
+    "Crash":     "Crashes one running program (the host picks).",
+    "Jammer":    "Each hit lowers the target's Attack by 1 until reboot.",
+    "Killer":    "Matrix damage: half the host's Attack + net hits.",
+    "Marker":    "Each hit lowers the target's Sleaze by 1 until reboot.",
+    "Patrol":    "Matrix Perception for the host: spots intruders and raises the alarm.",
+    "Probe":     "Each hit adds to the target's Overwatch Score.",
+    "Scramble":  "With Admin access gained by the host, reboots the target's device.",
+    "Sparky":    "Matrix damage + net hits and Physical biofeedback.",
+    "Tar Baby":  "Link-locks the target.",
+    "Track":     "Traces the target's physical location for the host's owners.",
+}
+IC_DAMAGING = {"Black IC", "Blaster", "Killer", "Sparky"}
+IC_BIOFEEDBACK = {"Black IC": "sim", "Blaster": "S", "Sparky": "P"}
+
+# Matrix Edge actions (need a cyberjack or Resonance)
+MATRIX_EDGE = [
+    (1, "Emergency Boost", "+1 to one Matrix attribute for one test."),
+    (2, "Hog", "Target's Data Processing −2 and one program slot fewer for Attack Rating rounds."),
+    (2, "Signal Scream", "Ignore noise on your next action."),
+    (2, "Technobabble", "Technomancers: use Charisma instead of Logic."),
+    (3, "Under the Radar", "Your next illegal action this turn doesn't raise the Overwatch Score."),
+]

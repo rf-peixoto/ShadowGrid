@@ -14,8 +14,10 @@
   <nav class="tabs" id="tabs" role="tablist">
     <button data-view="players" role="tab">Runners <span class="badge" id="badge-waiting" hidden></span></button>
     <button data-view="runs" role="tab">Runs <span class="badge" id="badge-runs" hidden></span></button>
+    <button data-view="handouts" role="tab">Handouts</button>
     <button data-view="maps" role="tab">Maps</button>
     <button data-view="log" role="tab">Dice &amp; log</button>
+    <button data-view="sessions" role="tab">Sessions <span class="badge live" id="badge-session" hidden>●</span></button>
     <button data-view="history" role="tab">History</button>
     <button data-view="wiki" role="tab">Wiki</button>
   </nav>
@@ -23,8 +25,10 @@
 </header>
 <section class="view" id="view-players"><div class="page"><div class="page-inner" id="players-root"></div></div></section>
 <section class="view" id="view-runs"><div class="page"><div class="page-inner" id="runs-root"></div></div></section>
+<section class="view" id="view-handouts"><div class="page"><div class="page-inner" id="handouts-root"></div></div></section>
 <section class="view" id="view-maps"><div class="page"><div class="page-inner" id="maps-root"></div></div></section>
 <section class="view" id="view-log"><div class="page"><div class="page-inner" id="log-root"></div></div></section>
+<section class="view" id="view-sessions"><div class="page"><div class="page-inner" id="sessions-root"></div></div></section>
 <section class="view" id="view-history"><div class="page"><div class="page-inner" id="history-root"></div></div></section>
 <section class="view" id="view-wiki"><div class="page"><div class="page-inner"><div class="wiki" id="wiki"></div></div></div></section>
 <script src="/static/api.js"></script>

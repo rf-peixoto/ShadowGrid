@@ -1,7 +1,16 @@
 /* Shared client helpers: JSON API with CSRF header, toasts, DOM builder, dialogs. */
+// append()/prepend() skip null, undefined and false, like h() does, so optional parts never print "null".
+(() => {
+  for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+    for (const name of ['append', 'prepend']) {
+      const orig = proto[name];
+      proto[name] = function (...nodes) { return orig.apply(this, nodes.filter(n => n !== null && n !== undefined && n !== false)); };
+    }
+  }
+})();
 window.api = async function api(path, method = 'GET', body) {
   const res = await fetch(path, {
-    method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'GridMap' },
+    method, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ShadowGrid' },
     body: body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
   });
   if (res.status === 401) { location.href = '/login?next=' + encodeURIComponent(location.pathname); throw new Error('auth'); }
@@ -88,5 +97,68 @@ window.renderWiki = function renderWiki(text) {
     list = null;
     if (line.trim()) out.append(h('p', line));
   }
+  return out;
+};
+
+/* Live updates: one server-sent-events stream per page. Live.on(fn) calls fn (debounced) whenever
+   something changed on the server; pages keep a slow poll as a safety net. */
+window.Live = (() => {
+  const subs = [];
+  let es = null, timer = null, fails = 0;
+  const fire = () => { clearTimeout(timer); timer = setTimeout(() => subs.forEach(fn => { try { fn(); } catch (e) { console.error(e); } }), 60); };
+  function connect() {
+    if (es || typeof EventSource === 'undefined') return;
+    es = new EventSource('/api/events');
+    es.addEventListener('hello', () => { fire(); fails = 0; });   // catch anything written before the stream was open
+    es.addEventListener('change', fire);
+    es.onerror = () => { fails++; if (es.readyState === EventSource.CLOSED) { es = null; setTimeout(connect, Math.min(30000, 2000 * fails)); } };
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) fire(); });
+  return { on(fn) { subs.push(fn); connect(); }, connected: () => !!es && es.readyState === 1 };
+})();
+
+/* Safe Markdown for handouts and session notes: headings (#), **bold**, *italic*, `code`, [links](https://…),
+   lists (- or 1.), > quotes, --- rules and paragraphs. Builds DOM nodes only; HTML in the text stays text. */
+window.renderMarkdown = function renderMarkdown(text) {
+  const out = h('div.md');
+  const inline = s => {
+    const frag = document.createDocumentFragment();
+    const re = /(\*\*([^*]+)\*\*|__([^_]+)__|\*([^*\s][^*]*)\*|_([^_\s][^_]*)_|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g;
+    let last = 0, m;
+    while ((m = re.exec(s))) {
+      if (m.index > last) frag.append(s.slice(last, m.index));
+      if (m[2] || m[3]) frag.append(h('strong', m[2] || m[3]));
+      else if (m[4] || m[5]) frag.append(h('em', m[4] || m[5]));
+      else if (m[6]) frag.append(h('code', m[6]));
+      else if (m[7]) frag.append(h('a', { href: m[8], target: '_blank', rel: 'noopener noreferrer nofollow' }, m[7]));
+      last = re.lastIndex;
+    }
+    if (last < s.length) frag.append(s.slice(last));
+    return frag;
+  };
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  let para = [], list = null, quote = null;
+  const flush = () => {
+    if (para.length) { const p = h('p'); para.forEach((l, i) => { if (i) p.append(h('br')); p.append(inline(l)); }); (quote || out).append(p); para = []; }
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, '');
+    let m;
+    if (!line.trim()) { flush(); list = null; quote = null; continue; }
+    if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) { flush(); list = null; quote = null; out.append(h('h' + (m[1].length + 2), inline(m[2]))); continue; }
+    if (/^(-{3,}|\*{3,})$/.test(line.trim())) { flush(); list = null; quote = null; out.append(h('hr')); continue; }
+    if ((m = /^>\s?(.*)$/.exec(line))) { if (!quote) { flush(); list = null; quote = h('blockquote'); out.append(quote); } para.push(m[1]); continue; }
+    if ((m = /^\s*([-*+]|\d+[.)])\s+(.*)$/.exec(line))) {
+      flush(); quote = null;
+      const ordered = /\d/.test(m[1]);
+      if (!list || (list.tagName === 'OL') !== ordered) { list = h(ordered ? 'ol' : 'ul'); out.append(list); }
+      list.append(h('li', inline(m[2]))); continue;
+    }
+    if (list && /^\s{2,}/.test(raw)) { list.lastChild.append(' ', inline(line.trim())); continue; }
+    list = null;
+    if (quote) { flush(); quote = null; }
+    para.push(line);
+  }
+  flush();
   return out;
 };

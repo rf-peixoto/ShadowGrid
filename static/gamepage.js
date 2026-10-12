@@ -8,7 +8,7 @@ try { Object.assign(S.gm, JSON.parse(localStorage.getItem('sg.gmroller') || '{}'
 
 // ================================================================ tabs & polling
 function setView(v) {
-  if (!['players', 'runs', 'maps', 'log', 'history', 'wiki'].includes(v)) v = 'players';
+  if (!['players', 'runs', 'handouts', 'maps', 'log', 'sessions', 'history', 'wiki'].includes(v)) v = 'players';
   S.view = v;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
@@ -41,7 +41,9 @@ function render() {
   $('badge-waiting').hidden = !waiting; $('badge-waiting').textContent = waiting; $('badge-waiting').title = `${waiting} sheet(s) waiting for approval`;
   const active = S.data.runs.filter(r => r.status === 'Active').length;
   $('badge-runs').hidden = !active; $('badge-runs').textContent = active;
-  ({ players: renderPlayers, runs: renderRuns, maps: renderMaps, log: renderLog, history: renderHistory, wiki: () => {} })[S.view]();
+  const live = (S.data.sessions || []).find(x => x.active);
+  $('badge-session').hidden = !live; $('badge-session').title = live ? `“${live.title}” is running` : '';
+  ({ players: renderPlayers, runs: renderRuns, handouts: renderHandouts, maps: renderMaps, sessions: renderSessions, log: renderLog, history: renderHistory, wiki: () => {} })[S.view]();
 }
 
 // ================================================================ runners
@@ -59,6 +61,7 @@ function renderPlayers() {
     h('button', { type: 'button', onclick: () => award(null) }, 'Award Karma / Nuyen…'),
     h('button', { type: 'button', onclick: () => edge('all', 'refresh'), title: 'Every runner back to their Edge rating' }, 'Refresh everyone’s Edge'),
     h('button', { type: 'button', onclick: chargeLifestyle, title: 'Start of a new month: every runner pays their lifestyle' }, 'Charge monthly lifestyle'),
+    h('button', { type: 'button', onclick: substanceLibrary, title: 'The toxins, drugs and diseases of this game' }, 'Toxins & drugs…'),
     h('span.grow'),
     h('button.ghost', { type: 'button', onclick: storeSettings, title: 'How much the store pays for gear players sell' }, `Store buys gear at ${(S.data.game.settings || {}).sellPct ?? 50}%`)));
   const waiting = ps.filter(p => p.status === 'waiting');
@@ -76,7 +79,7 @@ function renderPlayers() {
         h('td', h('div.player-name', h('span.dot', { style: { background: p.color } }), h('a', { href: `/game/${CID}/sheet/${p.id}` }, p.name)),
           h('div.hint', '@' + p.username, ' · ', [p.metatype, p.role].filter(Boolean).join(' '), ' · ', online ? h('span.good', 'online') : (p.lastSeen ? 'seen ' + timeAgo(p.lastSeen) : 'never signed in'))),
         h('td', SR.statusTag(p.status), p.pendingContacts ? h('div', h('a.tag.waiting', { href: `/game/${CID}/sheet/${p.id}`, title: 'New or changed contacts to confirm' }, `${p.pendingContacts} contact${p.pendingContacts > 1 ? 's' : ''} to confirm`)) : null),
-        h('td', h('div.row.tight', miniCM(p.cm), SR.healthTag(p.cm.status))),
+        h('td', h('div.row.tight', miniCM(p.cm), SR.healthTag(p.cm.status), p.os ? h('a.chip.os-chip' + (p.os >= 30 ? '.hot' : ''), { href: `/game/${CID}/sheet/${p.id}`, title: 'Overwatch Score (players don’t see it). At 40 the GOD converges.' }, h('span.k', 'OS'), h('b', p.os)) : null)),
         h('td.nowrap', h('div.row.tight', SR.pips(p.edge.cur, p.edge.max),
           h('button.small.ghost', { type: 'button', title: 'Take 1 Edge', disabled: !p.edge.cur, onclick: () => edge([p.id], 'lose') }, '−'),
           h('button.small.ghost', { type: 'button', title: 'Award 1 Edge (max 7)', disabled: p.edge.cur >= 7, onclick: () => edge([p.id], 'gain') }, '+'),
@@ -238,7 +241,200 @@ async function editRun(r) {
   catch (e) { toast(e.message); }
 }
 
+// ================================================================ toxins, drugs and diseases
+const VECTORS = ['Contact', 'Ingestion', 'Inhalation', 'Injection'];
+const EFFECTS = ['Nausea', 'Disorientation', 'Paralysis', 'Ongoing'];
+const CORE_ATTRS = ['Body', 'Agility', 'Reaction', 'Strength', 'Willpower', 'Logic', 'Intuition', 'Charisma'];
+async function substanceLibrary() {
+  let list = (S.data.substances || []).filter(x => !x.builtin).map(x => ({ ...x }));
+  const box = h('div');
+  function draw() {
+    box.innerHTML = '';
+    const all = [...(S.data.substances || []).filter(x => x.builtin), ...list];
+    box.append(h('p.hint', 'Runners resist with Body + Willpower; each hit lowers the Power by 1, and what is left applies (damage, statuses, a drug’s bonuses). Enter the core book’s toxins and drugs with their book values. Expose a runner from their sheet (Combat); players take drugs they carry from their own sheet.'),
+      h('table.compact', h('thead', h('tr', h('th', 'Name'), h('th', 'Kind'), h('th', 'Power'), h('th', 'Effect'), h('th', ''))),
+        h('tbody', all.map(x => h('tr', h('td', h('b', x.name), x.builtin ? h('span.hint', ` · ${x.source}`) : null), h('td', x.kind), h('td.num', x.power),
+          h('td.hint', [x.damage ? `${x.damage === 'P' ? 'Physical' : 'Stun'} damage` : '', ...(x.effects || []), Object.entries(x.attrs || {}).map(([a, v]) => `${a} ${v > 0 ? '+' : ''}${v}`).join(', '), x.init_dice ? `+${x.init_dice}D6 Init` : ''].filter(Boolean).join(' · ')),
+          h('td', h('div.row.tight.end', x.builtin ? h('span.hint', 'built in') : [
+            h('button.small', { type: 'button', onclick: async () => { const e = await editSubstance(x); if (e) { Object.assign(x, e); draw(); } } }, 'Edit'),
+            h('button.small.danger', { type: 'button', onclick: () => { list = list.filter(y => y !== x); draw(); } }, '✕')])))))),
+      h('button.mt', { type: 'button', onclick: async () => { const e = await editSubstance(null); if (e) { list.push(e); draw(); } } }, '+ New toxin, drug or disease'));
+  }
+  draw();
+  if (!await UI.modal('Toxins & drugs', box, { ok: 'Save library', wide: true })) return;
+  try { const r = await api(`/api/games/${CID}/substances`, 'PUT', { substances: list }); S.data.substances = r.substances; toast('Library saved.'); } catch (e) { toast(e.message); }
+}
+async function editSubstance(x) {
+  x = x || { name: '', kind: 'toxin', vectors: ['Injection'], speed: 'Immediate', power: 8, duration: '', damage: 'S', effects: [], attrs: {}, init_dice: 0, addiction: 0, crash: null, desc: '' };
+  const name = h('input', { value: x.name, required: true, maxlength: 60 });
+  const kind = h('select', ['toxin', 'drug', 'disease'].map(k => option(k, k, x.kind === k)));
+  const power = h('input', { type: 'number', min: 0, max: 30, value: x.power });
+  const speed = h('input', { value: x.speed || '', placeholder: 'Immediate, 1 combat round…' }), duration = h('input', { value: x.duration || '', placeholder: 'e.g. 10 × 1D6 minutes' });
+  const damage = h('select', option('', 'No damage', !x.damage), option('S', 'Stun', x.damage === 'S'), option('P', 'Physical', x.damage === 'P'));
+  const vec = VECTORS.map(v => h('label.check', h('input', { type: 'checkbox', checked: (x.vectors || []).includes(v), dataset: { v } }), v));
+  const eff = EFFECTS.map(v => h('label.check', h('input', { type: 'checkbox', checked: (x.effects || []).includes(v), dataset: { v } }), v));
+  const attrs = CORE_ATTRS.map(a => h('label', a.slice(0, 3), h('input', { type: 'number', min: -6, max: 6, value: (x.attrs || {})[a] || 0, dataset: { a }, style: { width: '3.6rem' } })));
+  const initd = h('input', { type: 'number', min: 0, max: 4, value: x.init_dice || 0 }), addiction = h('input', { type: 'number', min: 0, max: 10, value: x.addiction || 0 });
+  const cr = x.crash || {}, crashDv = h('input', { type: 'number', min: 0, max: 30, value: cr.dv || 0 }), crashType = h('select', option('S', 'Stun', cr.damage !== 'P'), option('P', 'Physical', cr.damage === 'P'));
+  const desc = h('textarea', { rows: 2, maxlength: 600 }, x.desc || '');
+  const ok = await UI.modal(x.name ? `Edit ${x.name}` : 'New substance', h('div',
+    h('div.form-grid', h('label', 'Name', name), h('label', 'Kind', kind), h('label', 'Power', power), h('label', 'Speed', speed), h('label', 'Duration', duration), h('label', 'Damage', damage)),
+    h('h4.mt', 'Vectors'), h('div.row', vec), h('h4.mt', 'Effects (statuses: Nauseated, Dazed, Immobilized, Poisoned)'), h('div.row', eff),
+    h('h4.mt', 'Drug bonuses while in effect'), h('div.row.tight', attrs, h('label', 'Init dice', initd)),
+    h('div.form-grid.mt', h('label', 'Crash damage', crashDv), h('label', 'Crash type', crashType), h('label', 'Addiction test threshold (0 = none)', addiction)),
+    h('label.stack', 'Notes', desc)), { ok: 'Done', wide: true });
+  if (!ok) return null;
+  const pick = boxes => boxes.map(l => l.querySelector('input')).filter(i => i.checked).map(i => i.dataset.v);
+  const at = {}; attrs.forEach(l => { const i = l.querySelector('input'); if (+i.value) at[i.dataset.a] = +i.value; });
+  return { id: x.id, name: name.value.trim(), kind: kind.value, power: +power.value || 0, speed: speed.value, duration: duration.value, damage: damage.value,
+    vectors: pick(vec), effects: pick(eff), attrs: at, init_dice: +initd.value || 0, addiction: +addiction.value || 0,
+    crash: +crashDv.value ? { dv: +crashDv.value, damage: crashType.value, effects: [] } : null, desc: desc.value, source: 'Custom' };
+}
+
+// ================================================================ sessions
+const EVENT_ICON = { attack: '⚔', roll: '🎲', note: '•', ledger: '¥', run: '◆', handout: '✉', init: '⏱' };
+function statChips(st) {
+  return h('div.row.tight.session-stats',
+    h('span.chip', h('span.k', 'Length'), h('b', `${st.minutes} min`)),
+    h('span.chip', h('span.k', 'Fights'), h('b', st.fights)),
+    h('span.chip', { title: `${st.hits} of ${st.attacks} attacks did damage` }, h('span.k', 'Attacks landed'), h('b', `${st.hits} of ${st.attacks}`)),
+    h('span.chip', h('span.k', 'Rolls'), h('b', st.rolls)),
+    st.glitches || st.critical ? h('span.chip', h('span.k', 'Glitches'), h('b', st.glitches + st.critical)) : null,
+    h('span.chip', h('span.k', 'Awarded'), h('b', `${st.karma} K · ${money(st.nuyen)}`)));
+}
+function timeline(events, open) {
+  const list = h('ol.timeline');
+  for (const e of events.filter(x => x.kind !== 'init')) {
+    list.append(h('li.' + e.kind + (e.hidden ? '.hidden' : '') + (e.flag ? '.' + e.flag : ''),
+      h('span.t', new Date(e.at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+      h('span.i', EVENT_ICON[e.kind] || '•'),
+      h('span.x', e.kind === 'note' ? `${e.who} ${e.text}` : e.text, e.hidden ? h('span.hint', ' (hidden)') : null)));
+  }
+  return h('details.timeline-wrap', { open }, h('summary', `Timeline (${list.children.length})`), list.children.length ? list : h('p.hint', 'Nothing happened yet.'));
+}
+function renderSessions() {
+  const root = $('sessions-root'); root.innerHTML = '';
+  const list = S.data.sessions || [];
+  const live = list.find(x => x.active);
+  root.append(h('div.section-head', h('h2', 'Sessions'),
+    live ? h('button.primary', { type: 'button', onclick: () => endSession(live) }, 'End session') :
+      h('button.primary', { type: 'button', onclick: startSession }, 'Start session')));
+  root.append(h('p.hint', 'Start a session when the table sits down and end it afterwards. Fights, rolls, awards, runs and handouts in between become a recap you can annotate, share with the players and export.'));
+  if (!list.length) { root.append(h('div.card.empty', h('h3', 'No sessions yet'), h('p', 'Start one at the beginning of your next game night.'), h('button.primary', { type: 'button', onclick: startSession }, 'Start session'))); return; }
+  for (const s of list) root.append(sessionCard(s));
+}
+function sessionCard(s) {
+  const rc = s.recap || { events: [], stats: { minutes: 0, fights: 0, attacks: 0, hits: 0, rolls: 0, glitches: 0, critical: 0, karma: 0, nuyen: 0, damage: [] } };
+  const st = rc.stats;
+  const notes = h('textarea', { rows: 4, maxlength: 30000, placeholder: 'What happened, in your words (Markdown). Players see it when you share the session.' }, s.notes);
+  notes.onchange = () => api(`/api/sessions/${s.id}`, 'PUT', { notes: notes.value }).then(() => toast('Notes saved.')).catch(e => toast(e.message));
+  const when = new Date(s.startedAt * 1000);
+  const highlights = h('ul.plain.highlights',
+    st.best ? h('li', 'Best roll: ', h('b', st.best.text)) : null,
+    (st.damage || []).map(([n, v]) => h('li', `${n} dealt ${v} boxes of damage`)));
+  return h('div.run-card.session' + (s.active ? '.live' : ''),
+    h('div.head', h('h3', { contenteditable: 'true', spellcheck: 'false', title: 'Click to rename',
+      onblur: e => { const t = e.target.textContent.trim(); if (t && t !== s.title) api(`/api/sessions/${s.id}`, 'PUT', { title: t }).then(reload).catch(x => toast(x.message)); else e.target.textContent = s.title; },
+      onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } } }, s.title),
+      s.active ? h('span.tag.active', 'Running') : h('span.hint', `${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`)),
+    statChips(st), highlights.children.length ? highlights : null,
+    h('label.stack', 'Your notes', notes),
+    timeline(rc.events, s.active),
+    h('div.row.tight',
+      s.active ? h('button.primary', { type: 'button', onclick: () => endSession(s) }, 'End session') :
+        h('label.check', { title: 'Players see the recap and your notes in their Runs tab (without hidden rolls)' },
+          h('input', { type: 'checkbox', checked: s.shared, onchange: e => api(`/api/sessions/${s.id}`, 'PUT', { shared: e.target.checked }).then(() => { toast(e.target.checked ? 'Shared with the players.' : 'No longer shared.'); reload(); }) }), 'Share with players'),
+      !s.active ? h('a.btn.small', { href: `/api/sessions/${s.id}/export` }, 'Export (.md)') : null,
+      h('button.ghost.danger.small', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete the session “${s.title}” and its recap? The table log and history are not affected.`, { danger: true, ok: 'Delete' })) { await api(`/api/sessions/${s.id}`, 'DELETE'); reload(); } } }, 'Delete')));
+}
+async function startSession() {
+  const n = (S.data.sessions || []).length + 1;
+  const t = await UI.prompt('Start a session', 'Title', { value: `Session ${n}`, ok: 'Start', required: false });
+  if (t === null) return;
+  try { await api(`/api/games/${CID}/sessions`, 'POST', { title: t }); toast('Session started. Have a good game.'); reload(); } catch (e) { toast(e.message); }
+}
+async function endSession(s) {
+  if (!await UI.confirm(`End “${s.title}”? Its recap is saved; you can still edit the notes and share it.`, { ok: 'End session' })) return;
+  try { await api(`/api/sessions/${s.id}/end`, 'POST', {}); toast('Session ended. The recap is saved.'); reload(); } catch (e) { toast(e.message); }
+}
+
+// ================================================================ handouts
+function recipientsText(rec) {
+  if (rec === 'all') return [h('span.chip', 'Every runner')];
+  if (!rec.length) return [h('span.warn', 'Nobody yet')];
+  return rec.map(id => { const p = players().find(x => x.id === id); return h('span.chip', p ? h('span.dot', { style: { background: p.color } }) : null, pname(id)); });
+}
+function renderHandouts() {
+  const root = $('handouts-root'); root.innerHTML = '';
+  root.append(h('div.section-head', h('h2', 'Handouts'), h('button.primary', { type: 'button', onclick: () => editHandout(null) }, 'New handout')));
+  root.append(h('p.hint', 'Dossiers, maps, photos and messages for the runners. A handout stays hidden until you show it; then the runners you picked find it in their Handouts tab.'));
+  const list = S.data.handouts || [];
+  if (!list.length) { root.append(h('div.card.empty', h('h3', 'No handouts yet'), h('p', 'Write a note in Markdown, add a PNG or JPEG image, and choose who gets it.'), h('button.primary', { type: 'button', onclick: () => editHandout(null) }, 'New handout'))); return; }
+  for (const ho of list) root.append(handoutCard(ho, true));
+}
+function handoutCard(ho, gm) {
+  const img = ho.image ? h('a.handout-img', { href: `/uploads/${ho.image}`, target: '_blank', rel: 'noopener', title: 'Open the full image' }, h('img', { src: `/uploads/${ho.image}`, alt: ho.title, loading: 'lazy' })) : null;
+  const actions = gm ? h('div.row.tight',
+    h('button' + (ho.shown ? '' : '.primary'), { type: 'button', onclick: () => saveHandout(ho, { shown: !ho.shown }, ho.shown ? 'Hidden from the runners.' : 'Shown to the runners.') }, ho.shown ? 'Hide from runners' : 'Show to runners'),
+    h('button', { type: 'button', onclick: () => editHandout(ho) }, 'Edit'),
+    h('button.ghost.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete the handout “${ho.title}”?`, { danger: true, ok: 'Delete' })) { await api(`/api/handouts/${ho.id}`, 'DELETE'); reload(); } } }, 'Delete')) : null;
+  return h('div.run-card.handout' + (gm && !ho.shown ? '.dim' : ''),
+    h('div.head', h('h3', ho.title), gm ? h('span.tag.' + (ho.shown ? 'active' : 'abandoned'), ho.shown ? 'Shown' : 'Hidden') : h('span.hint', ho.shownAt ? timeAgo(ho.shownAt) : '')),
+    h('div.handout-body', img, ho.body ? renderMarkdown(ho.body) : null),
+    gm ? h('div.row.tight', h('span.hint', 'For:'), recipientsText(ho.recipients)) : null,
+    actions);
+}
+async function saveHandout(ho, patch, msg) {
+  try { await api(`/api/handouts/${ho.id}`, 'PUT', patch); toast(msg); reload(); } catch (e) { toast(e.message); }
+}
+async function editHandout(ho) {
+  ho = ho || { title: '', body: '', image: null, recipients: 'all', shown: false };
+  let image = ho.image;
+  const title = h('input', { value: ho.title, required: true, maxlength: 120, placeholder: 'e.g. Dossier: Dr. Kessler' });
+  const text = h('textarea', { rows: 10, maxlength: 20000, placeholder: '# Heading\n**bold**, *italic*, - lists, > quotes, [links](https://…)' }, ho.body);
+  const preview = h('div.md-preview');
+  const drawPreview = () => { preview.innerHTML = ''; preview.append(text.value.trim() ? renderMarkdown(text.value) : h('p.hint', 'The preview appears here.')); };
+  text.oninput = drawPreview; drawPreview();
+  const imgBox = h('div.handout-upload');
+  const file = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,image/png,image/jpeg', hidden: true });
+  function drawImage() {
+    imgBox.innerHTML = '';
+    if (image) imgBox.append(h('img', { src: `/uploads/${image}`, alt: '' }), h('button.small', { type: 'button', onclick: () => { image = null; drawImage(); } }, 'Remove image'));
+    imgBox.append(h('button.small', { type: 'button', onclick: () => file.click() }, image ? 'Replace image…' : 'Add an image…'), h('span.hint', 'PNG or JPEG, up to 8 MB'), file);
+  }
+  file.onchange = async () => {
+    const f = file.files[0]; file.value = ''; if (!f) return;
+    if (!/\.(png|jpe?g)$/i.test(f.name)) { toast('Only .png, .jpg and .jpeg images.'); return; }
+    const fd = new FormData(); fd.append('file', f);
+    try {
+      const res = await fetch(`/api/games/${CID}/uploads`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'ShadowGrid' } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      image = data.image; drawImage();
+    } catch (e) { toast(e.message, 5000); }
+  };
+  drawImage();
+  const sel = selector(ho.recipients === 'all' ? null : ho.recipients);
+  const show = h('input', { type: 'checkbox', checked: ho.shown });
+  const ok = await UI.modal(ho.id ? `Edit “${ho.title}”` : 'New handout', h('div',
+    h('label.stack', 'Title', title),
+    h('div.md-edit', h('label.stack', 'Text (Markdown)', text), h('div', h('span.hint', 'Preview'), preview)),
+    h('h3', 'Image'), imgBox,
+    h('h3', 'Who gets it'), players().length ? sel : h('p.hint', 'Invite players first; until then it goes to every runner.'),
+    h('label.check.mt', show, 'Show it to them now')), { ok: ho.id ? 'Save' : 'Create handout', wide: true });
+  if (!ok) return;
+  const allPicked = !players().length || sel.value().length === players().length;
+  const out = { title: title.value.trim(), body: text.value, image, recipients: allPicked ? 'all' : sel.value(), shown: show.checked };
+  try { await api(ho.id ? `/api/handouts/${ho.id}` : `/api/games/${CID}/handouts`, ho.id ? 'PUT' : 'POST', out); toast(show.checked ? 'Handout shown to the runners.' : 'Handout saved (hidden).'); reload(); }
+  catch (e) { toast(e.message); }
+}
+
 // ================================================================ maps
+async function deleteMap(m, here) {
+  const who = here.length ? ` ${here.map(p => p.name).join(', ')} will be taken off it.` : '';
+  if (!await UI.confirm(`Delete the map "${m.name}"? This can't be undone.${who}`, { danger: true, ok: 'Delete map' })) return;
+  try { await api(`/api/maps/${m.id}`, 'DELETE'); toast(`Deleted "${m.name}".`); reload(); } catch (e) { toast(e.message); }
+}
 function renderMaps() {
   const root = $('maps-root'); root.innerHTML = '';
   root.append(h('div.section-head', h('h2', 'Maps'), h('div.row.tight', h('a.btn.primary', { href: `/?newmap=${CID}` }, 'New map'), h('a.btn', { href: `/?genmap=${CID}` }, 'Generate map'))));
@@ -249,7 +445,10 @@ function renderMaps() {
     grid.append(h('div.map-card', h('a.map-name', { href: '/map/' + m.id }, m.name),
       h('div.meta', `${m.gridType === 'hex' ? 'Hex' : 'Square'} · ${m.width}×${m.height} · edited ${timeAgo(m.updatedAt)}`),
       h('div.row.tight', here.map(p => h('span.chip', h('span.dot', { style: { background: p.color } }), p.name))),
-      h('div.row.tight', h('a.btn.small', { href: '/map/' + m.id }, 'Edit'), h('a.btn.small', { href: `/map/${m.id}?play=1` }, 'Play'))));
+      h('div.row.tight', h('a.btn.small', { href: '/map/' + m.id }, 'Edit'), h('a.btn.small', { href: `/map/${m.id}?play=1` }, 'Play'),
+        h('button.small', { type: 'button', onclick: async () => { await api(`/api/maps/${m.id}/duplicate`, 'POST', {}); toast('Map duplicated.'); reload(); } }, 'Duplicate'),
+        h('a.btn.small', { href: `/api/maps/${m.id}/export` }, 'Export'),
+        h('button.small.danger', { type: 'button', onclick: () => deleteMap(m, here) }, 'Delete'))));
   }
   root.append(grid);
 }
@@ -324,7 +523,8 @@ function renderHistory() {
     const cat = await SR.catalog();
     Wiki($('wiki'), cat.wiki);
     setView(location.hash.slice(1) || 'players');
-    setInterval(poll, 3000);
+    setInterval(poll, 20000);
+    Live.on(poll);
   } catch (e) { if (e.message !== 'auth') toast(e.message); }
 })();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

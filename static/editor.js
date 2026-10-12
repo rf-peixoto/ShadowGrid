@@ -1,4 +1,4 @@
-/* GridMap GM editor (ShadowGrid). Depends on api.js, gridcore.js and srui.js. */
+/* ShadowGrid map editor for the gamemaster. Depends on api.js, gridcore.js and srui.js. */
 (() => {
 'use strict';
 const { MARKER_TYPES, MARKER_BY_ID, key, geom, tracePoly, drawMarker, renderScene, makeViewport, doorOnEdge, drawPing, paintedBounds } = GridCore;
@@ -13,7 +13,7 @@ const S = {
   dirty: false, saveTimer: null,
   sceneDirty: true, sceneZoom: 1, frame: null,
   fogQueue: null, fogTimer: null,
-  version: null, pollTimer: null, pollInterval: 6000, playersSig: '', rollsSig: '', follow: false, pingFrame: null, iso: {}, sceneIso: null,
+  version: null, pollTimer: null, pollInterval: 20000, playersSig: '', rollsSig: '', follow: false, pingFrame: null, iso: {}, sceneIso: null,
   rt: { doors: new Set(), markers: new Set(), all: false },   // runtime fields the editor itself changed since the last save
   tracker: null, templateNpc: null,
 };
@@ -185,7 +185,7 @@ function markDirty() {
   invalidate();
 }
 async function saveMap() {
-  if (!S.map) return;
+  if (!S.map || S.deleted) return;
   $('save-state').textContent = 'Saving…';
   try {
     const runtime = S.rt.all ? { doors: allDoorKeys(), markers: markers().map(m => m.id) } : { doors: [...S.rt.doors], markers: [...S.rt.markers] };
@@ -318,16 +318,26 @@ function cmFromAttrs(body, wil) {
   return { pm: body > 0 ? 8 + Math.ceil(body / 2) : 0, sm: wil > 0 ? 8 + Math.ceil(wil / 2) : 0, ov: body > 0 ? body * 2 : 0, p: 0, s: 0 };
 }
 /* NPC template for new markers (fetched once, copied into each marker) */
-function renderTemplateSelect() {
-  const sel = $('marker-template'); if (sel.options.length > 1) return;
+/* NPC templates by kind, plus the runners' own vehicles (linked: damage is shared with their sheet) */
+const KIND_LABEL = { Grunt: 'Grunts (Professional Rating)', Spirit: 'Spirits (pick a Force)', IC: 'IC (pick the host rating)', Vehicle: 'Vehicles', Drone: 'Drones' };
+function allTemplates() { return [...SR.CAT.npcTemplates, ...((S.ctx && S.ctx.vehicles) || [])]; }
+function templateGroups(sel) {
   const groups = {};
-  for (const t of SR.CAT.npcTemplates) (groups[t.kind] = groups[t.kind] || []).push(t);
-  for (const [k, list] of Object.entries(groups)) sel.append(h('optgroup', { label: k === 'Grunt' ? 'Grunts (Professional Rating)' : k + 's' }, list.map(t => option(t.key, t.pr != null ? `PR ${t.pr} · ${t.name}` : t.name))));
+  for (const t of allTemplates()) (groups[t.kind] = groups[t.kind] || []).push(t);
+  for (const [k, list] of Object.entries(groups)) sel.append(h('optgroup', { label: KIND_LABEL[k] || (k.endsWith('s') ? k : k + 's') }, list.map(t => option(t.key, t.pr != null ? `PR ${t.pr} · ${t.name}` : t.name))));
+}
+function renderTemplateSelect() {
+  const sel = $('marker-template');
+  const keep = sel.value;
+  while (sel.options.length > 1 || sel.querySelector('optgroup')) { const g = sel.querySelector('optgroup'); if (!g) break; g.remove(); }
+  templateGroups(sel);
+  sel.value = keep;
 }
 async function loadTemplate() {
   const k = $('marker-template').value;
-  const t = SR.CAT.npcTemplates.find(x => x.key === k);
+  const t = allTemplates().find(x => x.key === k);
   $('marker-force-wrap').hidden = !(t && t.force);
+  $('marker-force-label').textContent = t && t.forceLabel ? t.forceLabel : 'Spirit Force';
   if (!k) { S.templateNpc = null; cmHint(); return; }
   try { S.templateNpc = await api(`/api/npc-templates/${encodeURIComponent(k)}?force=${+$('marker-force').value || 3}`); cmHint(); }
   catch (e) { toast(e.message); }
@@ -503,7 +513,7 @@ function confirmDialog(text, onOk) {
 }
 
 // ------------------------------------------------------------ swatches & marker picker
-const RECENT_KEY = 'gridmap.recentColors';
+const RECENT_KEY = 'sg.recentColors';
 function loadRecent() { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } }
 function pushRecent(color) { localStorage.setItem(RECENT_KEY, JSON.stringify([color, ...loadRecent().filter(c => c !== color)].slice(0, 10))); renderPaintSwatches(); }
 function swatchButton(c, active, onClick) { const b = document.createElement('button'); b.className = 'swatch' + (active ? ' active' : ''); b.style.background = c; b.title = c; b.onclick = onClick; return b; }
@@ -743,12 +753,10 @@ function markerNpc(m) {
 }
 async function pickTemplate(m) {
   const sel = h('select', option('', 'Pick a template…'));
-  const groups = {};
-  for (const t of SR.CAT.npcTemplates) (groups[t.kind] = groups[t.kind] || []).push(t);
-  for (const [k, list] of Object.entries(groups)) sel.append(h('optgroup', { label: k }, list.map(t => option(t.key, t.pr != null ? `PR ${t.pr} · ${t.name}` : t.name))));
+  templateGroups(sel);
   const force = h('input', { type: 'number', min: 1, max: 12, value: 3 }), relabel = h('input', { type: 'checkbox', checked: !m.label });
   const ok = await UI.modal('NPC template', h('div', h('p.hint', 'Sets this marker’s stats, weapons and condition monitor (damage is reset).'), h('label.stack', 'Template', sel),
-    h('label.stack', 'Force (spirits only)', force), h('label.check', relabel, 'Rename the marker after the template')), { ok: 'Apply', narrow: true });
+    h('label.stack', 'Force (spirits) or host rating (IC)', force), h('label.check', relabel, 'Rename the marker after the template')), { ok: 'Apply', narrow: true });
   if (!ok || !sel.value) return;
   if (S.mode === 'edit') {
     try { const t = await api(`/api/npc-templates/${encodeURIComponent(sel.value)}?force=${+force.value || 3}`); pushUndo(); m.npc = t.npc; m.cm = t.cm; if (relabel.checked) m.label = t.npc.template; S.rt.markers.add(m.id); markDirty(); renderInspector(); }
@@ -806,12 +814,14 @@ function renderCombat() {
       { type: 'button', role: 'listitem', title: `${e.name}: ${e.total == null ? 'no initiative yet' : 'initiative ' + e.total}${e.minor ? ` · 1 Major + ${e.minor} Minor` : ''}${e.hidden ? ' · hidden from players' : ''}. Click for options.`,
         onclick: ev => chipMenu(e, ev.currentTarget) },
       h('span.dot', { style: { background: e.color } }), h('span.nm', e.name),
-      h('b.sc', e.total == null ? '–' : e.total), e.hidden ? h('span.eye', { title: 'Hidden from players' }, '◌') : null);
+      h('b.sc', e.total == null ? '–' : e.total), SR.actionPips(e), e.hidden ? h('span.eye', { title: 'Hidden from players' }, '◌') : null);
     order.append(chip);
   }
   if (!t.entries.length) order.append(h('span.strip-idle', 'Nobody in the order yet. Use + Add.'));
   const cur = t.entries.find(x => x.current);
+  const ongoing = combatants().some(c => { const st = c.kind === 'player' ? ((S.ctx.players.find(p => p.id === c.id) || {}).statuses || {}) : ((markers().find(m => m.id === c.id) || {}).statuses || {}); return (SR.CAT.combat.ongoing || []).some(k => st[k]); });
   const controls = h('div.strip-controls',
+    ongoing ? h('button.small.warn', { type: 'button', title: 'Everyone Burning, Corrosive or Poisoned resists the damage now (start of a round)', onclick: () => trackerOp('ongoing') }, '🔥 Ongoing damage') : null,
     h('label.check', { title: 'Players see the order (hidden enemies stay hidden)' }, h('input', { type: 'checkbox', checked: t.visible, onchange: e => trackerOp(e.target.checked ? 'show' : 'hide') }), 'Players see it'),
     h('button.small', { type: 'button', title: 'Roll initiative for every NPC', onclick: () => trackerOp('roll') }, 'Roll NPCs'),
     h('button.small', { type: 'button', onclick: addToCombat }, '+ Add'),
@@ -832,6 +842,10 @@ function chipMenu(e, anchor) {
   const act = fn => () => { close(); fn(); };
   const menu = h('div.chip-menu', { role: 'menu' },
     h('div.cm-head', h('span.dot', { style: { background: e.color } }), h('b', e.name), e.minor ? h('span.hint', `1 Major + ${e.minor} Minor`) : null),
+    h('div.cm-actions', h('span', 'Actions left ', SR.actionPips(e)),
+      h('span.row.tight', h('button.small', { type: 'button', title: 'Spend a Major Action', onclick: act(() => trackerOp('use', { id: e.id, action: 'major', delta: 1 })) }, 'Use Major'),
+        h('button.small', { type: 'button', title: 'Spend a Minor Action', onclick: act(() => trackerOp('use', { id: e.id, action: 'minor', delta: 1 })) }, 'Use Minor'),
+        h('button.small.ghost', { type: 'button', title: 'Give back all actions for this round', onclick: act(() => trackerOp('use', { id: e.id, reset: true, delta: 0 })) }, 'Reset'))),
     h('label', 'Initiative', score),
     h('button', { type: 'button', onclick: act(() => { trackerOp('turn', { id: e.id }); focusCombatant(e); }) }, 'Make it their turn'),
     h('button', { type: 'button', onclick: act(() => focusCombatant(e)) }, 'Show on the map'),
@@ -892,90 +906,202 @@ async function attackDialog(attacker, target) {
   if (!S.ctx.campaign) { toast('Assign this map to a game first.'); return; }
   const list = combatants();
   if (list.length < 2) { toast('You need at least two combatants on this map (runner tokens or markers with a monitor).'); return; }
+  const RULES = SR.CAT.combat;
   const optKey = c => `${c.kind}:${c.id}`;
+  const refOf = k => { const [kind, id] = k.split(':'); return { kind, id }; };
+  const pos = v => list.find(c => optKey(c) === v);
+  const dead = c => c.kind === 'marker' && GridCore.cmStatus((markers().find(m => m.id === c.id) || {}).cm) === 'Dead';
   const attSel = h('select', list.map(c => option(optKey(c), c.name, attacker && attacker.kind === c.kind && attacker.id === c.id)));
-  const tgtSel = h('select', list.map(c => option(optKey(c), c.name, target && target.kind === c.kind && target.id === c.id)));
-  if (!target) {
+  let firstTarget = target ? `${target.kind}:${target.id}` : null;
+  if (!firstTarget) {
     const ak = attSel.value.split(':')[0];
-    const other = list.find(c => c.kind !== ak && !(c.kind === 'marker' && GridCore.cmStatus((markers().find(m => m.id === c.id) || {}).cm) === 'Dead')) || list.find(c => optKey(c) !== attSel.value);
-    if (other) tgtSel.value = optKey(other);
+    const other = list.find(c => c.kind !== ak && !dead(c)) || list.find(c => optKey(c) !== attSel.value);
+    firstTarget = other ? optKey(other) : null;
   }
+  const targets = [];                    // [{key, info, sight, defense, cover}]
   const weapon = h('select'), mode = h('select'), range = h('select', SR.RANGES.map(r => option(r, `${r} (${SR.CAT.store.rangeMeters[r]})`)));
-  const info = h('p.hint'), distInfo = h('span.hint');
+  const info = h('p.attack-info'), distInfo = h('span.hint'), attInfo = h('p.hint');
   let cellM = 2; try { cellM = +localStorage.getItem('sg.cellMeters') || 2; } catch { /* ignore */ }
   const meters = h('input', { type: 'number', min: 0.5, step: 0.5, value: cellM, style: { width: '4rem' }, title: 'Meters per cell', onchange: () => { try { localStorage.setItem('sg.cellMeters', meters.value); } catch { /* ignore */ } suggestRange(); } });
   const amod = h('input', { type: 'number', value: 0 }), dmod = h('input', { type: 'number', value: 0 }), smod = h('input', { type: 'number', value: 0 });
   const amp = h('input', { type: 'number', min: 0, max: 10, value: 0 }), xdv = h('input', { type: 'number', value: 0 }), dice = h('input', { type: 'number', min: 0, placeholder: 'auto' });
-  const wild = h('input', { type: 'checkbox' }), hidden = h('input', { type: 'checkbox' }), unopp = h('input', { type: 'checkbox' }), apply = h('input', { type: 'checkbox', checked: true });
-  let options = [], dr = 0;
-  const pos = v => list.find(c => optKey(c) === v);
+  const chk = (on, title) => h('input', { type: 'checkbox', checked: !!on, title });
+  const wild = chk(), hidden = chk(), unopp = chk(), apply = chk(true), autoEdge = chk(true), ignoreSight = chk(), ignoreActions = chk(), intercept = chk(), anticip = chk();
+  const called = h('select', option('', 'No called shot'), Object.entries(RULES.calledShots).map(([k, v]) => option(k, `${v.name}${v.edge ? ` · ${v.edge} Edge` : ''}`)));
+  const counter = h('select', option('', 'No counterspelling'));
+  const tgtBox = h('div.attack-targets');
+  const addSel = h('select', { 'aria-label': 'Add a target' });
+  let options = [], attOpts = {};
+
+  const cur = () => options.find(x => x.key === weapon.value) || {};
   function suggestRange() {
-    const a = pos(attSel.value), b = pos(tgtSel.value); if (!a || !b) return;
+    const a = pos(attSel.value), b = targets[0] && pos(targets[0].key); if (!a || !b) return;
     const d = cellDistance(a, b), m = d * (+meters.value || 2);
     distInfo.textContent = `${d} cells ≈ ${m} m`;
     range.value = bandFor(m); describe();
   }
-  async function loadOptions() {
+  async function loadAttacker() {
     const [kind, id] = attSel.value.split(':');
-    try { const r = await api(`/api/maps/${MAP_ID}/attack-options`, 'POST', { who: { kind, id } }); options = r.options; }
-    catch (e) { toast(e.message); options = []; }
+    try { attOpts = await api(`/api/maps/${MAP_ID}/attack-options`, 'POST', { who: { kind, id } }); options = attOpts.options; }
+    catch (e) { toast(e.message); options = []; attOpts = {}; }
     weapon.innerHTML = '';
     options.forEach(o => weapon.append(option(o.key, `${o.name} · ${o.pool} dice · DV ${o.dv}`)));
     picked = false;
-    await loadDr(); drawModes(); suggestRange(); pickReachable();
+    counter.innerHTML = ''; counter.append(option('', 'No counterspelling'));
+    for (const c of list) if (optKey(c) !== attSel.value) counter.append(option(optKey(c), c.name));
+    for (const t of targets) await loadTarget(t);
+    drawModes(); suggestRange(); pickReachable(); drawTargets();
   }
-  // until the GM picks a weapon, prefer the first one that reaches the target's range band
   let picked = false;
   function pickReachable() {
     if (picked) return;
     const i = SR.RANGES.indexOf(range.value);
-    const cur = options.find(x => x.key === weapon.value);
-    if (cur && cur.ar && cur.ar[i] != null) return;
-    const ok = options.find(o => o.ar && o.ar[i] != null);
+    const o = cur();
+    if (o.ar && (o.ar[i] != null || o.astral)) return;
+    const ok = options.find(x => x.ar && x.ar[i] != null);
     if (ok) { weapon.value = ok.key; drawModes(); }
   }
-  async function loadDr() {
-    const [kind, id] = tgtSel.value.split(':');
-    try { dr = (await api(`/api/maps/${MAP_ID}/attack-options`, 'POST', { who: { kind, id } })).dr; } catch { dr = 0; }
+  async function loadTarget(t) {
+    const ref = refOf(t.key);
+    try { t.info = await api(`/api/maps/${MAP_ID}/attack-options`, 'POST', { who: ref }); } catch { t.info = { dr: 0, defense: {} }; }
+    try { t.sight = (await api(`/api/maps/${MAP_ID}/sight`, 'POST', { a: refOf(attSel.value), b: ref })).sight; } catch { t.sight = null; }
   }
+  async function addTarget(key) {
+    if (!key || key === attSel.value || targets.some(t => t.key === key)) return;
+    const t = { key, defense: '', cover: 'auto' };
+    targets.push(t);
+    await loadTarget(t);
+    if (targets.length === 1) suggestRange();
+    drawTargets();
+  }
+  function defenseOptions(t) {
+    const o = cur(), out = [option('', 'Defends normally')];
+    const melee = !!o.melee, spell = !!o.spell, direct = !!o.direct;
+    for (const [k, it] of Object.entries(RULES.interrupts)) {
+      const dice = t.info && t.info.defense ? t.info.defense[k] : 0;
+      let why = '';
+      if (o.matrix && k !== 'full_defense') why = 'not in the Matrix';
+      else if (spell && direct && k !== 'full_defense') why = 'not vs direct spells';
+      else if (it.vs === 'melee' && !melee) why = 'melee only';
+      else if (it.vs === 'ranged' && melee) why = 'ranged only';
+      else if (t.info && t.info.inCombat) {
+        const left = it.cost === 'major' ? t.info.majorLeft : t.info.minorLeft;
+        const any = (t.info.majorLeft || 0) + (t.info.minorLeft || 0);
+        if (!left && !(it.cost === 'minor' && t.info.majorLeft) && !(it.cost === 'major' && t.info.minorLeft >= RULES.minorPerMajor) && !ignoreActions.checked) why = any ? `no ${it.cost} action left` : 'no actions left';
+      }
+      if (k === 'full_defense' && t.info && t.info.fullDefense) why = 'already active';
+      const nm = o.matrix && k === 'full_defense' ? 'Full Matrix Defense' : it.name;
+      out.push(h('option', { value: k, disabled: !!why, title: it.desc }, `${nm} (+${o.matrix && k === 'full_defense' ? 'Firewall' : dice + ' dice'}, ${it.cost === 'major' ? 'Major' : 'Minor'})${why ? ` · ${why}` : ''}`));
+    }
+    return out;
+  }
+  function sightText(sg) {
+    if (!sg) return h('span.hint', 'not on this map');
+    if (!sg.los) return h('span.bad', 'No line of sight');
+    return sg.cover ? h('span.warn', `Cover ${'I II III IV'.split(' ')[sg.cover - 1]} from the map`) : h('span.good', 'Clear line of sight');
+  }
+  function drawTargets() {
+    tgtBox.innerHTML = '';
+    const o = cur();
+    targets.forEach((t, i) => {
+      const c = pos(t.key);
+      const def = h('select', { onchange: e => { t.defense = e.target.value; describe(); } }, defenseOptions(t));
+      def.value = t.defense; if (def.value !== t.defense) t.defense = '';
+      const cov = h('select', { title: 'Cover: from the map, or set it yourself', onchange: e => { t.cover = e.target.value; describe(); } },
+        option('auto', 'Cover: auto'), option('0', 'No cover'), ['I', 'II', 'III', 'IV'].map((r, j) => option(String(j + 1), `Cover ${r}`)));
+      cov.value = t.cover;
+      const st = t.info && t.info.statuses ? Object.keys(t.info.statuses) : [];
+      tgtBox.append(h('div.attack-target',
+        h('div.at-name', h('span.dot', { style: { background: c ? c.color : '#888' } }), h('b', c ? c.name : t.key),
+          h('span.hint', ` DR ${t.info ? t.info.dr : '–'}`), t.info && t.info.fullDefense ? h('span.tag', 'Full Defense') : null,
+          st.length ? h('span.hint', ' · ' + st.join(', ')) : null),
+        h('div.at-sight', o.astral ? h('span.hint', 'astral: no line of sight needed') : o.matrix ? h('span.hint', 'Matrix: no line of sight needed') : sightText(t.sight)),
+        def, o.astral || o.matrix ? null : cov,
+        targets.length > 1 ? h('button.small.ghost', { type: 'button', title: 'Remove this target', onclick: () => { targets.splice(i, 1); drawTargets(); describe(); } }, '✕') : null));
+    });
+    addSel.innerHTML = '';
+    addSel.append(option('', targets.length ? '+ Add a target (Multiple Attacks)…' : 'Pick a target…'));
+    for (const c of list) if (optKey(c) !== attSel.value && !targets.some(t => t.key === optKey(c))) addSel.append(option(optKey(c), c.name + (dead(c) ? ' (dead)' : '')));
+    anticip.disabled = targets.length < 2;
+    describe();
+  }
+  addSel.onchange = () => { const v = addSel.value; addSel.value = ''; addTarget(v); };
   function drawModes() {
-    const o = options.find(x => x.key === weapon.value) || {};
+    const o = cur();
     mode.innerHTML = '';
     (o.modes || []).forEach(m => mode.append(option(m, `${m} · ${SR.CAT.store.firingModes[m].name}`)));
     mode.disabled = !(o.modes || []).length;
     amp.disabled = !o.spell;
-    describe();
+    counter.disabled = !o.spell;
+    intercept.disabled = !o.melee;
+    if (!o.melee) intercept.checked = false;
+    drawTargets();
   }
   function describe() {
-    const o = options.find(x => x.key === weapon.value); if (!o) { info.textContent = ''; return; }
-    const i = SR.RANGES.indexOf(range.value), fm = mode.value ? SR.CAT.store.firingModes[mode.value] : null;
+    const o = cur(); if (!o.key) { info.textContent = ''; return; }
+    const i = SR.RANGES.indexOf(range.value), fm = mode.value && !mode.disabled ? SR.CAT.store.firingModes[mode.value] : null;
     let ar = o.ar ? o.ar[i] : null;
     if (ar != null && fm) ar = Math.max(0, ar + fm.ar);
-    const ammo = o.clip ? ` · ${o.loaded}/${o.clip} loaded${fm ? `, uses ${fm.rounds}` : ''}` : o.qty ? ` · ${o.qty} left` : '';
-    const edge = ar != null ? (ar - dr >= 4 ? ' → attacker may gain 1 Edge' : dr - ar >= 4 ? ' → defender may gain 1 Edge' : '') : '';
-    info.textContent = ar == null ? `Can’t attack at ${range.value} range with this.` : `AR ${ar} vs DR ${dr}${edge}${ammo}${o.spell ? ` · drain ${o.drain}${+amp.value ? ' + ' + 2 * amp.value : ''}` : ''}${o.grenade ? ' · blast ' + o.grenade.join('/') : ''}`;
+    const cs = RULES.calledShots[called.value];
+    const n = targets.length || 1;
+    let pool = o.pool + (cs ? cs.dice : 0);
+    if (n > 1 && !anticip.checked) pool = Math.floor(pool / n);
+    const edge = (cs ? cs.edge : 0) + (n > 1 && anticip.checked ? RULES.anticipation.edge : 0);
+    const acts = ['1 Major'].concat(n > 1 ? ['1 Minor (Multiple Attacks)'] : [], cs ? ['1 Minor (called shot)'] : []);
+    const rounds = fm ? (mode.value === 'FA' ? fm.rounds : fm.rounds * n) : 0;
+    const parts = [];
+    if (o.astral) parts.push('Astral combat: no Attack Rating; defense Intuition + Logic');
+    else if (ar == null && !o.spell) parts.push(`Can’t attack at ${range.value} range with this.`);
+    else if (targets[0] && targets[0].info) {
+      const t0 = targets[0], cov = o.matrix ? 0 : t0.cover === 'auto' ? (t0.sight ? t0.sight.cover : 0) : +t0.cover;
+      const dr = (o.matrix ? (t0.info.matrixDr || 0) : t0.info.dr) + cov, diff = ar - dr;
+      parts.push(`AR ${ar} vs DR ${dr}${cov ? ` (cover +${cov})` : ''}` + (diff >= 4 ? ' → attacker gains 1 Edge' : diff <= -4 ? ' → defender gains 1 Edge' : ''));
+    }
+    parts.push(`${pool} dice${n > 1 ? ` per target (${n} targets)` : ''}`);
+    if (o.clip) parts.push(`${o.loaded}/${o.clip} loaded${rounds ? `, uses ${rounds}` : ''}`);
+    else if (o.qty) parts.push(`${o.qty} left`);
+    if (o.spell) parts.push(`drain ${o.drain}${+amp.value ? ' + ' + 2 * amp.value : ''}`);
+    if (edge) parts.push(`costs ${edge} Edge (has ${attOpts.edge ?? '?'})`);
+    if (attOpts.inCombat) parts.push(`uses ${acts.join(' + ')} · ${attOpts.majorLeft} Major / ${attOpts.minorLeft} Minor left`);
+    if (attOpts.dirt) parts.push('−2 dice (Hit the Dirt)');
+    info.textContent = parts.join(' · ');
   }
-  attSel.onchange = loadOptions; tgtSel.onchange = async () => { await loadDr(); suggestRange(); pickReachable(); };
-  weapon.onchange = () => { picked = true; drawModes(); }; mode.onchange = describe; range.onchange = describe; amp.oninput = describe;
+  attSel.onchange = () => { const k = attSel.value; const i = targets.findIndex(t => t.key === k); if (i >= 0) targets.splice(i, 1); loadAttacker(); };
+  weapon.onchange = () => { picked = true; drawModes(); };
+  for (const el of [mode, range, amp, called, anticip]) el.addEventListener('change', describe);
+  ignoreActions.onchange = drawTargets;
   const body = h('div',
-    h('div.form-grid', h('label', 'Attacker', attSel), h('label', 'Target', tgtSel), h('label', 'Weapon / spell', weapon), h('label', 'Firing mode', mode),
-      h('label', h('span', 'Range ', distInfo), range), h('label', 'Meters per cell', meters)),
+    h('div.form-grid', h('label', 'Attacker', attSel), h('label', 'Weapon / spell', weapon), h('label', 'Firing mode', mode),
+      h('label', h('span', 'Range ', distInfo), range)),
+    attInfo,
+    h('h3.mt', 'Targets'), tgtBox, addSel,
     info,
+    h('div.form-grid.mt', h('label', 'Called shot', called), h('label', 'Counterspelling (spells)', counter)),
+    h('div.row', h('label.check', { title: RULES.anticipation.desc }, anticip, `Anticipation (${RULES.anticipation.edge} Edge)`),
+      h('label.check', { title: RULES.intercept.desc }, intercept, 'Intercept (out of turn)')),
     h('details', h('summary', 'Modifiers'), h('div.form-grid', h('label', 'Attack dice ±', amod), h('label', 'Defense dice ±', dmod), h('label', 'Soak dice ±', smod),
-      h('label', 'Extra DV', xdv), h('label', 'Amp Up (spells)', amp), h('label', 'NPC dice (override)', dice))),
+      h('label', 'Extra DV', xdv), h('label', 'Amp Up (spells)', amp), h('label', 'NPC dice (override)', dice), h('label', 'Meters per cell', meters))),
     h('div.row', h('label.check', wild, 'Wild Die'), h('label.check', { title: 'Optional rule for grunts below PR 3: they don’t roll to defend' }, unopp, 'Unopposed (grunt)'),
-      h('label.check', hidden, 'Hidden roll'), h('label.check', apply, 'Apply damage')));
-  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: () => loadOptions() });
+      h('label.check', hidden, 'Hidden roll'), h('label.check', apply, 'Apply damage'),
+      h('label.check', { title: 'Give 1 Edge to whoever wins AR vs DR by 4+, at most 2 per round' }, autoEdge, 'Award Edge'),
+      h('label.check', { title: 'Indirect fire, scent, sound…' }, ignoreSight, 'Ignore line of sight'),
+      h('label.check', { title: 'Allow the attack even without actions left this round' }, ignoreActions, 'Ignore action limits')));
+  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: async () => { if (firstTarget) await addTarget(firstTarget); await loadAttacker(); } });
   if (!await okP) return;
-  const [ak, ai] = attSel.value.split(':'), [tk, ti] = tgtSel.value.split(':');
+  if (!targets.length) { toast('Pick a target.'); return; }
+  const defenses = {}, cover = {};
+  for (const t of targets) { if (t.defense) defenses[t.key] = t.defense; cover[t.key] = t.cover === 'auto' ? 'auto' : +t.cover; }
   try {
-    const r = await api(`/api/maps/${MAP_ID}/attack`, 'POST', { attacker: { kind: ak, id: ai }, target: { kind: tk, id: ti }, weapon: weapon.value, mode: mode.disabled ? null : mode.value,
-      range: range.value, attackMod: +amod.value || 0, defenseMod: +dmod.value || 0, soakMod: +smod.value || 0, extraDv: +xdv.value || 0, amp: +amp.value || 0,
-      dice: dice.value === '' ? null : +dice.value, wild: wild.checked, hidden: hidden.checked, unopposed: unopp.checked, apply: apply.checked });
-    toast(r.result.summary, 6000);
+    const r = await api(`/api/maps/${MAP_ID}/attack`, 'POST', { attacker: refOf(attSel.value), targets: targets.map(t => refOf(t.key)), weapon: weapon.value,
+      mode: mode.disabled ? null : mode.value, range: range.value, attackMod: +amod.value || 0, defenseMod: +dmod.value || 0, soakMod: +smod.value || 0,
+      extraDv: +xdv.value || 0, amp: +amp.value || 0, dice: dice.value === '' ? null : +dice.value, wild: wild.checked, hidden: hidden.checked,
+      unopposed: unopp.checked, apply: apply.checked, defenses, cover, called: called.value || null, anticipation: anticip.checked,
+      intercept: intercept.checked, counterspell: counter.value ? refOf(counter.value) : null, autoEdge: autoEdge.checked,
+      ignoreSight: ignoreSight.checked, ignoreActions: ignoreActions.checked });
+    toast(r.results.map(x => x.summary).join(' '), 7000);
     renderRolls(r.rolls);
     await reloadContext();
-  } catch (e) { toast(e.message, 5000); }
+  } catch (e) { toast(e.message, 6000); }
 }
 
 // ------------------------------------------------------------ legend
@@ -1025,6 +1151,15 @@ $('set-w').onchange = e => { S.map.width = Math.max(4, Math.min(200, +e.target.v
 $('set-h').onchange = e => { S.map.height = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };
 $('set-cs').onchange = e => { S.map.cellSize = Math.max(8, Math.min(128, +e.target.value || 8)); markDirty(); };
 $('set-campaign').onchange = async e => { S.map.campaignId = e.target.value || null; await saveMap(); await reloadContext(); toast('Game updated.'); };
+$('set-delete').onclick = async () => {
+  const here = (S.ctx.players || []).filter(p => p.currentMapId === MAP_ID);
+  const who = here.length ? ` ${here.map(p => p.name).join(', ')} will be taken off it.` : '';
+  $('settings-dialog').close();
+  if (!await UI.confirm(`Delete the map "${S.map.name}"? This can't be undone.${who}`, { danger: true, ok: 'Delete map' })) return;
+  S.deleted = true;
+  try { await api(`/api/maps/${MAP_ID}`, 'DELETE'); location.href = S.map.campaignId ? `/game/${S.map.campaignId}#maps` : '/'; }
+  catch (e) { S.deleted = false; toast(e.message); }
+};
 $('set-reset').onclick = async () => {
   const d = await api('/api/defaults');
   S.map.settings.colors = d.colors; S.map.settings.doorPalette = d.doorPalette;
@@ -1087,7 +1222,7 @@ function applyContext(c, full) {
   S.version = c.version;
   if (c.now) S.clockSkew = Date.now() / 1000 - c.now;
   if (c.rolls) renderRolls(c.rolls);
-  S.ctx.campaignMaps = c.campaignMaps; S.ctx.snapshots = c.snapshots; S.ctx.campaign = c.campaign; S.ctx.allMaps = c.allMaps;
+  S.ctx.campaignMaps = c.campaignMaps; S.ctx.snapshots = c.snapshots; S.ctx.campaign = c.campaign; S.ctx.allMaps = c.allMaps; if (c.vehicles) S.ctx.vehicles = c.vehicles;
   for (const np of c.players) { if (S.fogQueue && S.fogQueue.pid === np.id) continue; const lp = S.ctx.players.find(p => p.id === np.id); if (lp) Object.assign(lp, np); else S.ctx.players.push(np); }
   S.ctx.players = S.ctx.players.filter(p => c.players.some(np => np.id === p.id));
   if (full) S.map.data = c.map.data;
@@ -1117,13 +1252,14 @@ async function poll() {
   schedulePoll(S.pollInterval);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+Live.on(() => poll());
 
 // ------------------------------------------------------------ boot
 async function boot() {
   Layout.init($('layout'), 'gm');
   const [c, ov] = await Promise.all([api(`/api/maps/${MAP_ID}/context`), api('/api/overview'), SR.catalog()]);
   S.map = c.map;
-  S.ctx = { players: c.players, campaigns: ov.campaigns, campaignMaps: c.campaignMaps, snapshots: c.snapshots, campaign: c.campaign, allMaps: c.allMaps };
+  S.ctx = { players: c.players, campaigns: ov.campaigns, campaignMaps: c.campaignMaps, snapshots: c.snapshots, campaign: c.campaign, allMaps: c.allMaps, vehicles: c.vehicles || [] };
   S.version = c.version; if (c.now) S.clockSkew = Date.now() / 1000 - c.now;
   document.title = S.map.name + ' · ShadowGrid';
   $('map-name').value = S.map.name;

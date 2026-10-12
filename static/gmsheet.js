@@ -8,8 +8,10 @@
   });
   try { await SR.catalog(); await ui.load(); } catch (e) { if (e.message !== 'auth') toast(e.message); }
   // pick up the player's own changes while the GM has the sheet open
-  setInterval(async () => {
+  const check = async () => {
     if (document.hidden || ui.editing() || document.querySelector('dialog[open]')) return;
     try { const sh = await api(`/api/players/${pid}/sheet`); if (sh.player.charRev !== rev || sh.player.status !== ui.get().player.status) ui.setSheet(sh); } catch { /* transient */ }
-  }, 4000);
+  };
+  setInterval(check, 20000);
+  Live.on(check);
 })();

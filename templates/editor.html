@@ -69,7 +69,7 @@
         <label title="Optional, for enemies: gives the marker Physical and Stun condition monitors (8 + attribute/2)">Body / Willpower <span class="row tight"><input type="number" id="marker-body" min="1" max="20" placeholder="B" style="width:3.4rem"> <input type="number" id="marker-wil" min="1" max="20" placeholder="W" style="width:3.4rem"></span></label>
         <p class="hint" id="marker-cm-hint">Leave empty for markers without a condition monitor.</p>
         <label title="Core-book NPC: stats, weapons and condition monitor">NPC template <select id="marker-template"><option value="">None</option></select></label>
-        <label id="marker-force-wrap" hidden>Spirit Force <input type="number" id="marker-force" min="1" max="12" value="3" style="width:4rem"></label>
+        <label id="marker-force-wrap" hidden><span id="marker-force-label">Spirit Force</span> <input type="number" id="marker-force" min="1" max="12" value="3" style="width:4rem"></label>
         <label class="check"><input type="checkbox" id="link-on"> Leads to another map</label>
         <div id="link-opts" hidden>
           <label>Destination <select id="link-map"></select></label>
@@ -220,6 +220,8 @@
     </div>
     <p class="hint">Shrinking the map hides cells outside the new bounds; they come back if you grow it again.</p>
     <div class="row end">
+      <button type="button" id="set-delete" class="danger">Delete this map…</button>
+      <span class="grow"></span>
       <button type="button" id="set-reset">Reset colors</button>
       <button value="cancel">Close</button>
     </div>

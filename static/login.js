@@ -13,7 +13,7 @@
     try {
       const pow = await solve();
       status.textContent = 'Signing in…';
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'GridMap' },
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'ShadowGrid' },
         body: JSON.stringify({ ...payload, ...pow }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { status.textContent = data.error || 'Something went wrong.'; btn.disabled = false; return; }

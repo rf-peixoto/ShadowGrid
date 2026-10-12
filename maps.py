@@ -1,8 +1,7 @@
-"""GridMap: maps, fog of war, doors, markers, tokens, snapshots (GM) and the player's map view.
+"""Maps: fog of war, doors, markers, tokens, snapshots (GM) and the player's map view.
 
-Ported from GridMap. Changes: players are real accounts (session instead of a
-secret link), tokens and enemy markers carry Shadowrun condition monitors
-instead of a plain HP counter, and dice moved to the Shadowrun roller (game.py).
+Players are real accounts, tokens and enemy markers carry Shadowrun condition
+monitors, and dice live in the Shadowrun roller (game.py).
 """
 import json
 import re
@@ -12,11 +11,13 @@ from flask import Response, abort, jsonify, request
 import geometry as geo
 from core import (DEFAULT_SETTINGS, app, body, campaign_version, clamp_int, clean_color, display_name,
                   err, fetch_player, get_db, load_char, new_id, now, player_required, roll_rows,
-                  row_to_player, save_player)
+                  row_to_player, save_char, save_player)
 import fight
-from security import admin_required, rate_limited
+from security import gamemaster_required, rate_limited
 from sr import combat as X
 from sr import rules as R
+
+MAP_FORMAT = "shadowgrid-map-1"
 
 
 # ====================================================================== cleaning
@@ -261,21 +262,46 @@ def insert_map(b, default_name, campaign_id=None):
     return map_id
 
 
-# ====================================================================== admin api: maps
+# ====================================================================== gamemaster api: maps
 @app.route("/api/maps", methods=["POST"])
-@admin_required
+@gamemaster_required
 def create_map():
     return jsonify({"id": insert_map(body(), "Untitled map")}), 201
 
 
 @app.route("/api/maps/<map_id>", methods=["GET"])
-@admin_required
+@gamemaster_required
 def get_map(map_id):
     return jsonify(fetch_map(map_id))
 
 
+def runner_vehicles(rows):
+    """Vehicles and drones the runners own, as NPC template keys for the editor ("pv:<player>:<item>")."""
+    out = []
+    for r in rows:
+        c = load_char(r)
+        for it in R.vehicles_of(c):
+            out.append({"key": f"pv:{r['id']}:{it['uid']}", "name": f"{it['name']} ({display_name(r, c)})",
+                        "kind": "Runners' vehicles", "pr": None})
+    return out
+
+
+def runner_vehicle_npc(key):
+    """NPC stat block for a runner's own vehicle, linked to it (damage on the map is written back)."""
+    _, pid, uid = key.split(":", 2)
+    row = get_db().execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone()
+    if not row:
+        raise R.RuleError("That runner is gone.")
+    c = load_char(row)
+    it = next((x for x in R.vehicles_of(c) if x["uid"] == uid), None)
+    if not it:
+        raise R.RuleError("That vehicle is gone.")
+    npc = X.vehicle_npc(it, f"{it['name']} ({display_name(row, c)})", link={"pid": pid, "uid": uid})
+    return npc, R._int(it.get("damage"))
+
+
 @app.route("/api/maps/<map_id>/context", methods=["GET"])
-@admin_required
+@gamemaster_required
 def map_context(map_id):
     """Everything the editor needs in one call."""
     db = get_db()
@@ -287,15 +313,16 @@ def map_context(map_id):
     if m["campaignId"]:
         crow = db.execute("SELECT * FROM campaigns WHERE id=?", (m["campaignId"],)).fetchone()
         ctx["campaign"] = dict(crow) if crow else None
-        ctx["players"] = [row_to_player(r) for r in db.execute(
-            "SELECT * FROM players WHERE campaign_id=? ORDER BY created_at", (m["campaignId"],)).fetchall()]
+        prow = db.execute("SELECT * FROM players WHERE campaign_id=? ORDER BY created_at", (m["campaignId"],)).fetchall()
+        ctx["players"] = [row_to_player(r) for r in prow]
+        ctx["vehicles"] = runner_vehicles(prow)
         ctx["campaignMaps"] = [{"id": r["id"], "name": r["name"]} for r in db.execute(
             "SELECT id,name FROM maps WHERE campaign_id=? ORDER BY name", (m["campaignId"],)).fetchall()]
         ctx["snapshots"] = [{"id": r["id"], "name": r["name"], "createdAt": r["created_at"]} for r in db.execute(
             "SELECT id,name,created_at FROM snapshots WHERE campaign_id=? ORDER BY created_at DESC", (m["campaignId"],)).fetchall()]
     ctx["allMaps"] = [{"id": r["id"], "name": r["name"], "campaignId": r["campaign_id"]} for r in db.execute(
         "SELECT id,name,campaign_id FROM maps ORDER BY name").fetchall()]
-    ctx["rolls"] = roll_rows(m["campaignId"], admin=True)
+    ctx["rolls"] = roll_rows(m["campaignId"], gamemaster=True)
     ctx["tracker"] = fight.tracker_view(fight.load_tracker(m["campaignId"]), True) if m["campaignId"] else None
     ctx["now"] = now()
     return jsonify(ctx)
@@ -331,7 +358,7 @@ def keep_runtime(old, new, runtime):
 
 
 @app.route("/api/maps/<map_id>", methods=["PUT"])
-@admin_required
+@gamemaster_required
 def update_map(map_id):
     db = get_db()
     db.execute("BEGIN IMMEDIATE")
@@ -357,17 +384,29 @@ def update_map(map_id):
 
 
 @app.route("/api/maps/<map_id>", methods=["DELETE"])
-@admin_required
+@gamemaster_required
 def delete_map(map_id):
+    """Delete a map: runners on it are taken off, and its enemies leave the combat tracker."""
     db = get_db()
+    row = db.execute("SELECT campaign_id FROM maps WHERE id=?", (map_id,)).fetchone()
+    if not row:
+        return err("Map not found.", 404)
     db.execute("DELETE FROM maps WHERE id=?", (map_id,))
-    db.execute("UPDATE players SET current_map_id=NULL WHERE current_map_id=?", (map_id,))
+    db.execute("UPDATE players SET current_map_id=NULL, updated_at=? WHERE current_map_id=?", (now(), map_id))
+    cid = row["campaign_id"]
+    if cid:
+        t = fight.load_tracker(cid)
+        keep = [e for e in t["entries"] if not (e.get("kind") == "marker" and e.get("mapId") == map_id)]
+        if len(keep) != len(t["entries"]):
+            t["entries"] = keep
+            t["turn"] = min(t.get("turn", 0), max(0, len(keep) - 1))
+        fight.save_tracker(cid, t)   # also bumps the game's version so open pages refresh
     db.commit()
     return jsonify({"ok": True})
 
 
 @app.route("/api/maps/<map_id>/duplicate", methods=["POST"])
-@admin_required
+@gamemaster_required
 def duplicate_map(map_id):
     m = fetch_map(map_id)
     m["name"] += " (copy)"
@@ -375,29 +414,25 @@ def duplicate_map(map_id):
 
 
 @app.route("/api/maps/<map_id>/export", methods=["GET"])
-@admin_required
+@gamemaster_required
 def export_map(map_id):
     m = fetch_map(map_id)
     m.pop("id", None)
     m.pop("campaignId", None)
-    m["format"] = "gridmap-v2"
+    m["format"] = MAP_FORMAT
     safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in m["name"]).strip() or "map"
     return Response(json.dumps(m, indent=2), mimetype="application/json",
                     headers={"Content-Disposition": f'attachment; filename="{safe}.json"'})
 
 
 @app.route("/api/maps/import", methods=["POST"])
-@admin_required
+@gamemaster_required
 def import_map():
     b = request.get_json(force=True, silent=True)
-    if not isinstance(b, dict) or not isinstance(b.get("data"), dict):
-        return err("Not a GridMap export file.")
+    if not isinstance(b, dict) or b.get("format") != MAP_FORMAT or not isinstance(b.get("data"), dict):
+        return err("Not a ShadowGrid map file.")
     b = dict(b)
     b.pop("id", None)
-    # GridMap v2 exports used hp/hpMax on markers: convert to a physical monitor
-    for mk in b["data"].get("markers") or []:
-        if isinstance(mk, dict) and mk.get("hpMax") and not mk.get("cm"):
-            mk["cm"] = {"pm": mk.get("hpMax"), "sm": 0, "ov": 0, "p": max(0, (mk.get("hpMax") or 0) - (mk.get("hp") or 0))}
     return jsonify({"id": insert_map(b, "Imported map", request.args.get("campaign"))}), 201
 
 
@@ -419,7 +454,7 @@ def apply_reveal(p, map_id, m, action, cell_keys):
 
 
 @app.route("/api/maps/<map_id>/reveal", methods=["POST"])
-@admin_required
+@gamemaster_required
 def bulk_reveal(map_id):
     """Delta updates to players' fog: {players:'all'|[ids], cells:'all'|[keys], action:reveal|hide|station_on|station_off}."""
     m = fetch_map(map_id)
@@ -448,8 +483,8 @@ def bulk_reveal(map_id):
 
 
 @app.route("/api/maps/<map_id>/door", methods=["POST"])
-@admin_required
-def admin_toggle_door(map_id):
+@gamemaster_required
+def gamemaster_toggle_door(map_id):
     get_db().execute("BEGIN IMMEDIATE")
     m = fetch_map(map_id)
     b = body()
@@ -476,8 +511,8 @@ def admin_toggle_door(map_id):
 
 
 @app.route("/api/maps/<map_id>/marker", methods=["POST"])
-@admin_required
-def admin_update_marker(map_id):
+@gamemaster_required
+def gamemaster_update_marker(map_id):
     """In-place marker update used in Play mode: move it, set label/visibility, condition monitor, damage,
     NPC template or stat block."""
     get_db().execute("BEGIN IMMEDIATE")
@@ -488,13 +523,19 @@ def admin_update_marker(map_id):
         get_db().rollback()
         return err("Marker not found.", 404)
     if b.get("template"):
+        dmg = 0
         try:
-            npc = X.npc_from_key(b["template"], clamp_int(b.get("force"), 1, 12, 3))
+            if str(b["template"]).startswith("pv:"):
+                npc, dmg = runner_vehicle_npc(str(b["template"]))
+            else:
+                npc = X.npc_from_key(b["template"], clamp_int(b.get("force"), 1, 12, 3))
         except R.RuleError as e:
             get_db().rollback()
             return err(str(e))
         mk["npc"] = X.clean_npc(npc)
         mk["cm"] = clean_cm(X.npc_cm(npc))
+        if dmg:
+            mk["cm"]["p"] = min(mk["cm"]["pm"], dmg)
         if not mk.get("label") or b.get("relabel"):
             mk["label"] = (npc.get("template") or "Enemy")[:80]
     if "npc" in b:
@@ -531,13 +572,18 @@ def admin_update_marker(map_id):
         d = b["damage"] if isinstance(b["damage"], dict) else {}
         if d.get("track") in ("physical", "stun"):
             cm_damage(mk["cm"], d["track"], clamp_int(d.get("amount"), -99, 99, 0))
+    if (mk.get("npc") or {}).get("link") and ("damage" in b or "cm" in b):
+        cache = {}
+        fight.sync_vehicle(get_db(), mk, cache)
+        for pid, (_row, c) in cache.items():
+            save_char(pid, c)
     save_map_data(map_id, m["data"])
     get_db().commit()
     return jsonify({"marker": mk, "version": campaign_version(m["campaignId"], map_id)})
 
 
 @app.route("/api/maps/<map_id>/return-link", methods=["POST"])
-@admin_required
+@gamemaster_required
 def create_return_link(map_id):
     target = fetch_map(map_id)
     b = body()
@@ -556,9 +602,9 @@ def create_return_link(map_id):
     return jsonify({"ok": True})
 
 
-# ====================================================================== admin api: tokens
+# ====================================================================== gamemaster api: tokens
 @app.route("/api/players/<pid>", methods=["PUT"])
-@admin_required
+@gamemaster_required
 def update_player(pid):
     p = locked_player(pid)
     b = body()
@@ -586,8 +632,8 @@ def update_player(pid):
 
 
 @app.route("/api/players/<pid>/place", methods=["POST"])
-@admin_required
-def admin_place_player(pid):
+@gamemaster_required
+def gamemaster_place_player(pid):
     b = body()
     m = fetch_map(str(b.get("mapId") or ""))
     p = locked_player(pid)
@@ -601,8 +647,8 @@ def admin_place_player(pid):
 
 
 @app.route("/api/players/<pid>/unplace", methods=["POST"])
-@admin_required
-def admin_unplace_player(pid):
+@gamemaster_required
+def gamemaster_unplace_player(pid):
     """Take a token off its current map (it keeps what it explored)."""
     p = locked_player(pid)
     if p["currentMapId"]:
@@ -613,7 +659,7 @@ def admin_unplace_player(pid):
     return jsonify(fetch_player(pid))
 
 
-# ====================================================================== admin api: snapshots
+# ====================================================================== gamemaster api: snapshots
 def campaign_state(cid):
     db = get_db()
     players = {r["id"]: {"currentMapId": r["current_map_id"], "state": json.loads(r["state"])}
@@ -630,7 +676,7 @@ def campaign_state(cid):
 
 
 @app.route("/api/campaigns/<cid>/snapshots", methods=["POST"])
-@admin_required
+@gamemaster_required
 def create_snapshot(cid):
     b = body()
     sid = new_id()
@@ -641,7 +687,7 @@ def create_snapshot(cid):
 
 
 @app.route("/api/snapshots/<sid>/restore", methods=["POST"])
-@admin_required
+@gamemaster_required
 def restore_snapshot(sid):
     db = get_db()
     row = db.execute("SELECT * FROM snapshots WHERE id=?", (sid,)).fetchone()
@@ -665,7 +711,7 @@ def restore_snapshot(sid):
 
 
 @app.route("/api/snapshots/<sid>", methods=["DELETE"])
-@admin_required
+@gamemaster_required
 def delete_snapshot(sid):
     get_db().execute("DELETE FROM snapshots WHERE id=?", (sid,))
     get_db().commit()
@@ -673,7 +719,7 @@ def delete_snapshot(sid):
 
 
 @app.route("/api/defaults")
-@admin_required
+@gamemaster_required
 def defaults():
     return jsonify(DEFAULT_SETTINGS)
 

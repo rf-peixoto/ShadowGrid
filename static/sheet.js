@@ -89,6 +89,7 @@ function mount(root, cfg) {
       if (st === 'approved') b.append(h('button', { type: 'button', onclick: () => review('reopen') }, 'Reopen for free editing'));
       b.append(h('button', { type: 'button', onclick: gmOverride }, 'Set Karma / Nuyen / Edge…'));
       wrap.append(b);
+      if (ch.imported_at && st !== 'approved') wrap.append(h('div.banner.warn', h('p', h('b', 'Imported from a file. '), `This sheet was loaded from a character file ${timeAgo(ch.imported_at)}. Check Karma, Nuyen and gear before approving it.`)));
     } else if (st !== 'approved') {
       const b = h('div.banner' + (st === 'waiting' ? '.info' : '.warn'));
       if (st === 'waiting') b.append(h('p', SR.statusTag(st), ' Your GM is reviewing this sheet. You can keep editing until it is approved.'),
@@ -101,11 +102,39 @@ function mount(root, cfg) {
     const sub = [ch.metatype, ch.role, ch.magic_type !== 'Mundane' ? ch.magic_type : ''].filter(Boolean).join(' · ');
     const top = h('div.section-head',
       h('h2', ch.name || h('span.muted', 'Unnamed runner'), ' ', h('span.hint', sub)),
-      h('div.row.tight', SR.healthTag(d().status), SR.statusChips(d().statuses),
+      h('div.row.tight', SR.healthTag(d().status), SR.statusChips(d().statuses), fileMenu(),
         cfg.gm ? [h('span.chip', h('span.k', 'Karma'), h('b', ch.karma)), h('span.chip', h('span.k', 'Nuyen'), h('b', { class: ch.nuyen < 0 ? 'bad' : '' }, money(ch.nuyen))),
           h('span.chip', h('span.k', 'Edge'), SR.pips(ch.current_edge, d().edge_max), h('b', `${ch.current_edge}/${d().edge_max}`))] : null));
     wrap.append(top);
     return wrap;
+  }
+  /* print, PDF, character files */
+  function fileMenu() {
+    const pid = S.sheet.player.id;
+    const canImport = cfg.gm || !S.sheet.approved;
+    const sel = h('select.small', { title: 'Print, save as PDF, export or import', 'aria-label': 'Sheet file actions', onchange: async () => {
+      const v = sel.value; sel.value = '';
+      if (v === 'print') window.open(cfg.gm ? `/print/sheet/${pid}` : '/print/sheet', '_blank', 'noopener');
+      else if (v === 'blank') window.open('/print/blank', '_blank', 'noopener');
+      else if (v === 'export') location.href = cfg.gm ? `/api/players/${pid}/sheet/export` : '/api/me/sheet/export';
+      else if (v === 'import') importFile();
+    } },
+    option('', 'Sheet…'), option('print', 'Print or save as PDF'), option('blank', 'Blank sheet to print'),
+    option('export', 'Export character file'), canImport ? option('import', 'Import character file…') : null);
+    return sel;
+  }
+  function importFile() {
+    const inp = h('input', { type: 'file', accept: '.json,application/json' });
+    inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      const name = c().name || 'this character';
+      if (!await UI.confirm(`Replace ${name} with the character in ${f.name}? Everything on this sheet is overwritten.${cfg.gm ? '' : ' Your GM sees that it was imported.'}`, { danger: true, ok: 'Import' })) return;
+      try {
+        const sh = await api(cfg.gm ? `/api/players/${S.sheet.player.id}/sheet/import` : '/api/me/sheet/import', 'POST', await f.text());
+        set(sh); toast(sh.message);
+      } catch (e) { toast(e.message, 5000); }
+    };
+    inp.click();
   }
   async function submit(yes) {
     try { set(await api('/api/me/submit', 'POST', { submit: yes })); toast(yes ? 'Sent to your GM for approval.' : 'Back to draft.'); } catch (e) { toast(e.message); }
@@ -122,7 +151,7 @@ function mount(root, cfg) {
     const ig = h('input', { type: 'number', min: 0, max: 20, value: ch.initiation_grade }), sg = h('input', { type: 'number', min: 0, max: 20, value: ch.submersion_grade });
     const ok = await UI.modal('GM override', h('div', h('p.hint', 'Sets exact values. Changes to Karma and Nuyen are recorded in the history. For awards to several players use the game page.'),
       h('div.form-grid', h('label', 'Karma', k), h('label', 'Nuyen', n), h('label', 'Current Edge (0-7)', e), h('label', 'Initiation grade', ig), h('label', 'Submersion grade', sg))), { ok: 'Apply', narrow: true });
-    if (ok) act('admin_set', { karma: +k.value, nuyen: +n.value, current_edge: +e.value, initiation_grade: +ig.value, submersion_grade: +sg.value });
+    if (ok) act('gamemaster_set', { karma: +k.value, nuyen: +n.value, current_edge: +e.value, initiation_grade: +ig.value, submersion_grade: +sg.value });
   }
 
   // ------------------------------------------------------------ helpers
@@ -171,8 +200,8 @@ function mount(root, cfg) {
       field('Lifestyle', infoSelect('lifestyle', Object.keys(CAT.lifestyles), { labels: v => `${v} (${money(CAT.lifestyles[v])}/month)` }),
         `${money(dv.lifestyle_cost)} per month${dv.lifestyle_mult !== 1 ? ` (×${dv.lifestyle_mult})` : ''}, charged by your GM.`),
       field('Age', infoInput('age', { type: 'number', max: 999 })),
-      field('Reputation', infoInput('reputation', { type: 'number', max: 99, min: -99 })),
-      field('Heat', infoInput('heat', { type: 'number', max: 99 })));
+      field('Reputation', cfg.gm ? infoInput('reputation', { type: 'number', max: 99, min: -99 }) : h('b.readonly-num', ch.reputation), cfg.gm ? '' : 'Set by your GM.'),
+      field('Heat', cfg.gm ? infoInput('heat', { type: 'number', max: 99 }) : h('b.readonly-num', ch.heat), cfg.gm ? '' : 'Set by your GM.'));
     out.append(h('div.card', h('div.overview-top', pcol, h('div', form,
       locked() ? h('p.hint', '🔒 Approved: metatype, magic type, tradition and aspect are set by the GM.') : null))));
     const inf = infectedCard();
@@ -476,12 +505,27 @@ function mount(root, cfg) {
       dv.power_focus ? stat('Power focus', `+${dv.power_focus}`) : null),
       CASTERS.includes(ch.magic_type) && !ch.tradition ? h('p.warn', 'Pick a tradition on the Overview: it sets your drain attribute.') : null,
       ch.mentor_spirit ? h('p.hint', `${ch.mentor_spirit}: ${CAT.mentorSpirits[ch.mentor_spirit]}`) : null));
-    if (CASTERS.includes(ch.magic_type)) out.append(spellsCard());
+    if (CASTERS.includes(ch.magic_type)) out.append(sustainedCard(), spellsCard());
     if (ADEPTS.includes(ch.magic_type)) out.append(powersCard());
     out.append(fociCard());
     if (['Magician', 'Mystic Adept'].includes(ch.magic_type) || (ch.magic_type === 'Aspected Magician' && ch.aspect === 'Conjuring')) out.append(spiritsCard());
     out.append(initiationCard(false));
     return out;
+  }
+  /* spells the character is holding: −2 dice on every other test each (Focused Concentration makes some free) */
+  function sustainedCard() {
+    const ch = c(), list = ch.sustained || [];
+    const sustainable = (ch.spells || []).filter(sp => sp.duration === 'S');
+    const pick = h('select', option('', 'Sustain a spell…'), sustainable.map(sp => option(sp.name)));
+    pick.onchange = () => { if (pick.value) act('sustain', { name: pick.value }); };
+    const pen = -(d().sustain_penalty || 0);
+    const card = h('div.card' + (list.length ? '.sustaining' : ''), h('h3', 'Sustained spells',
+      pen ? h('span.tag.status-Wounded', `−${pen} dice on other tests`) : h('span.hint', list.length ? 'no penalty (Focused Concentration)' : '')));
+    if (!list.length) card.append(h('p.hint', 'Sustained spells you cast from the dice roller appear here. Each one costs 2 dice on every other test until you drop it.'));
+    else card.append(h('ul.plain', list.map((sp, i) => h('li.row.tight', h('b', sp.name), sp.hits ? h('span.hint', `${sp.hits} hits`) : null,
+      h('button.small', { type: 'button', onclick: () => act('drop_sustained', { index: i }) }, 'Drop')))));
+    if (sustainable.length) card.append(h('div.row.tight.mt', pick, h('span.hint', 'for spells cast before, or by the GM')));
+    return card;
   }
   function spellsCard() {
     const ch = c();
@@ -667,7 +711,7 @@ function mount(root, cfg) {
   // ------------------------------------------------------------ matrix
   function matrix() {
     const ch = c(), dv = d(), mx = dv.matrix;
-    const decks = ch.inventory.filter(it => it.sub === 'Cyberdecks'), links = ch.inventory.filter(it => it.sub === 'Commlinks' || it.ref === 'cyberware-commlink-headware');
+    const decks = ch.inventory.filter(it => it.sub === 'Cyberdecks'), links = ch.inventory.filter(it => it.sub === 'Commlinks' || it.sub === 'RCCs' || it.ref === 'cyberware-commlink-headware');
     const devOpts = [...decks, ...links].map(it => option(it.uid, `${it.name}${it.sub === 'Cyberdecks' ? ' (deck)' : ''}`, mx.device === it.uid));
     if (ch.magic_type === 'Technomancer') devOpts.unshift(option('persona', 'Living persona', mx.device === 'persona'));
     const card = h('div.card', h('h3', 'Matrix'));
@@ -678,7 +722,20 @@ function mount(root, cfg) {
       stat('Matrix AR', mx.ar, '', 'Attack + Sleaze'), stat('Matrix DR', mx.dr, '', 'Data Processing + Firewall'), stat('Initiative', `${mx.init_score} + ${mx.init_dice}D6`),
       stat('Device Rating', mx.device_rating)));
     const cm = { p: mx.damage, pm: mx.boxes, s: 0, sm: 0, ov: 0 };
-    card.append(h('div.mt', SR.monitor('physical', cm, { label: 'Matrix damage', onSet: (_t, v) => act('set_matrix', { damage: v }, { quiet: true }), showTools: false })));
+    card.append(h('div.mt', SR.monitor('physical', cm, { label: mx.stun ? 'Matrix damage (your Stun track)' : 'Matrix damage', onSet: (_t, v) => act('set_matrix', { damage: v }, { quiet: true }), showTools: false })),
+      mx.penalty ? h('p.warn', `${mx.penalty} dice on Matrix actions from damage on the device.`) : null);
+    // Overwatch Score: the GM sees and changes it; players only know what Check Overwatch Score told them
+    const os = mx.os, pct = Math.min(100, ((os || 0) / 40) * 100);
+    card.append(h('div.os-block.mt', h('h4', 'Overwatch Score'),
+      cfg.gm ? h('div.os-meter', h('b', `${os} / 40`), h('div.bar', h('span', { style: { width: pct + '%' } })),
+        h('button.small', { type: 'button', onclick: () => act('set_os', { delta: -1 }) }, '−1'), h('button.small', { type: 'button', onclick: () => act('set_os', { delta: 1 }) }, '+1'),
+        h('button.small', { type: 'button', onclick: async () => { const v = await UI.prompt('Overwatch Score', 'Set the score (0-40)', { type: 'number', value: os, min: 0 }); if (v !== null) act('set_os', { os: +v }); } }, 'Set…'),
+        h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm('Converge now? The device is bricked, the runner is dumped (dumpshock in VR) and their location is reported.', { danger: true, ok: 'Converge' })) act('set_os', { converge: true }); } }, 'Converge')) :
+        h('p.hint', os == null ? 'Unknown. Illegal actions raise it by the defender’s hits; at 40 the GOD converges on you. Use Check Overwatch Score to find out.' : `${os} when you last checked (at 40 the GOD converges).`)));
+    card.append(h('details.mt', h('summary', 'Matrix actions'), h('table.list', h('tbody', Object.values(CAT.matrixActions).map(a => h('tr',
+      h('td', h('b', a.name), h('div.hint', a.effect)), h('td', h('span.tag' + (a.legal ? '' : '.illegal'), a.legal ? 'Legal' : 'Illegal')),
+      h('td.hint', a.pool ? `${a.pool[0]} + ${a.pool[1]}` : '—'), h('td.hint', Array.isArray(a.defense) ? `vs ${a.defense.join(' + ')}` : a.defense === 'rating' ? 'vs rating × 2' : a.defense ? `vs ${a.defense}` : ''),
+      h('td.hint', `${a.action} · ${a.access}`)))))));
     if (mx.device !== 'persona') {
       const jack = ch.inventory.find(it => it.implant && it.data_processing);
       card.append(h('p.hint', jack ? `Data Processing and Firewall come from your ${jack.name}.` : 'A cyberdeck takes Data Processing and Firewall from a cyberjack (or your best commlink).'));
@@ -693,6 +750,13 @@ function mount(root, cfg) {
       pc.append(h('div.row.tight', h('select', { onchange: e => act('set_program', { uid: it.uid, choice: e.target.value }, { quiet: true }) }, option('', `${it.name}: choose…`), choices.map(x => option(x, x, x === it.choice))),
         h('label.check', h('input', { type: 'checkbox', checked: !!it.running, onchange: e => act('set_program', { uid: it.uid, running: e.target.checked }, { quiet: true }) }), 'Running'),
         h('span.hint', desc)));
+    }
+    const autos = ch.inventory.filter(it => it.ref === 'cyberdecks-software-autosoft');
+    if (autos.length) {
+      const ac = h('div.card', h('h3', 'Autosofts', h('span.hint', 'drones use them when acting on their own')));
+      for (const it of autos) ac.append(h('div.row.tight', h('select', { onchange: e => act('set_program', { uid: it.uid, choice: e.target.value }, { quiet: true }) },
+        option('', `Autosoft ${it.rating}: choose…`), Object.keys(CAT.autosofts).map(x => option(x, `${x} ${it.rating}`, x === it.choice))), h('span.hint', it.choice ? CAT.autosofts[it.choice] : '')));
+      return h('div', card, pc, ac);
     }
     return h('div', card, pc);
   }
@@ -838,6 +902,35 @@ function mount(root, cfg) {
   }
 
   // ------------------------------------------------------------ combat
+  /* toxins, drugs and diseases: drugs in effect, taking a dose (player), exposing the runner (GM) */
+  function substanceCard() {
+    const ch = c(), lib = S.sheet.substances || [], active = ch.toxins || [];
+    const card = h('div.card', h('h3', 'Drugs and toxins'));
+    if (active.length) card.append(h('ul.plain', active.map((t, i) => h('li.row.tight', h('b', t.name),
+      h('span.hint', [Object.entries(t.attrs || {}).map(([a, v]) => `${a} ${v > 0 ? '+' : ''}${v}`).join(', '), t.init_dice ? `+${t.init_dice}D6 Initiative` : '', t.duration ? `for ${t.duration}` : ''].filter(Boolean).join(' · ')),
+      h('button.small', { type: 'button', title: 'The effect ends and the crash applies', onclick: () => act('end_substance', { index: i }) }, 'Wears off')))));
+    else card.append(h('p.hint', 'Nothing in effect. Resisting a toxin: Body + Willpower, each hit lowers its Power by 1; what is left applies.'));
+    const resist = h('input', { type: 'checkbox', checked: true });
+    if (cfg.gm) {
+      const sel = h('select', option('', 'Expose to…'), ['toxin', 'drug', 'disease'].map(k => h('optgroup', { label: k[0].toUpperCase() + k.slice(1) + 's' }, lib.filter(x => x.kind === k).map(x => option(x.id, `${x.name} (Power ${x.power})`)))));
+      card.append(h('div.row.tight.mt', sel, h('label.check', resist, 'Resists'), h('button.small', { type: 'button', onclick: async () => {
+        if (!sel.value) return;
+        try { const sh = await api(`/api/players/${S.sheet.player.id}/expose`, 'POST', { id: sel.value, resist: resist.checked }); set(sh); toast(sh.message, 6000); } catch (e) { toast(e.message, 5000); }
+      } }, 'Expose')), lib.length ? null : h('p.hint', 'Add toxins and drugs on the game page (Runners › Toxins & drugs).'));
+    } else {
+      const drugs = lib.filter(x => x.kind === 'drug');
+      const carried = drugs.filter(x => ch.inventory.some(it => (it.name || '').toLowerCase().startsWith(x.name.toLowerCase())));
+      if (carried.length) {
+        const sel = h('select', carried.map(x => option(x.id, `${x.name} (Power ${x.power})`)));
+        card.append(h('div.row.tight.mt', sel, h('label.check', { title: 'Untick to take the full effect without resisting' }, resist, 'Resist'), h('button.small', { type: 'button', onclick: async () => {
+          const x = carried.find(y => y.id === sel.value);
+          if (!await UI.confirm(`Take a dose of ${x.name}? ${x.desc || ''}`, { ok: 'Take it' })) return;
+          try { const sh = await cfg.post('dose', { id: sel.value, resist: resist.checked }); set(sh); toast(sh.message, 6000); } catch (e) { toast(e.message, 5000); }
+        } }, 'Take a dose')));
+      }
+    }
+    return card;
+  }
   function combat() {
     const ch = c(), dv = d(), out = h('div');
     const cm = { p: dv.physical_damage, pm: dv.physical_boxes, s: dv.stun_damage, sm: dv.stun_boxes, ov: dv.overflow_boxes };
@@ -848,6 +941,7 @@ function mount(root, cfg) {
         (ch.drain_stun || ch.drain_phys ? ` ${ch.drain_stun + ch.drain_phys} box(es) are drain, which only rest heals.` : '')));
     out.append(mon);
     out.append(healCard());
+    out.append(substanceCard());
     const st = Object.keys(dv.statuses || {}).length || cfg.gm ? h('div.card', h('h3', 'Statuses'),
       SR.statusChips(dv.statuses, cfg.gm ? { onRemove: n => act('set_status', { status: n, on: false }, { quiet: true }) } : {}) || h('p.hint', 'None.'),
       cfg.gm ? h('div.row.tight.mt', (() => { const sel = h('select', Object.keys(CAT.statuses).map(s => option(s, `${CAT.statuses[s].icon} ${s}`))); const val = h('input', { type: 'number', min: 1, max: 20, value: 1, style: { width: '4rem' } });

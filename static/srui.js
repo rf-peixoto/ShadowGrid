@@ -106,6 +106,17 @@ function attackEntry(r, e, who) {
   return e;
 }
 /* one line for the dice dock header: who rolled what, and the outcome */
+/* actions left this round on a tracker entry: ◆ = Major, ● = Minor (dim when used) */
+function actionPips(e) {
+  if (!e || e.majorLeft == null) return null;
+  const minor = Math.max(1, Math.min(5, e.minor || 1));
+  const usedMinor = minor - Math.max(0, e.minorLeft);
+  const el = h('span.act-pips', { title: `${e.majorLeft > 0 ? '1 Major' : 'no Major'} and ${Math.max(0, e.minorLeft)} of ${minor} Minor actions left${e.fd ? ' · Full Defense' : ''}${e.dirt ? ' · Hit the Dirt (−2)' : ''}` },
+    h('i.maj' + (e.majorLeft > 0 ? '' : '.used')));
+  for (let k = 0; k < minor; k++) el.append(h('i.min' + (k < usedMinor ? '.used' : '')));
+  if (e.fd) el.append(h('b.fd', { title: 'Full Defense: +Willpower on every Defense test this round' }, 'FD'));
+  return el;
+}
 function rollSummary(r) {
   if (!r) return '';
   const d = r.data || {};
@@ -170,10 +181,10 @@ function itemStats(it) {
 /* opts: { getSheet: () => sheet, post: (path, body) => Promise, onRolled(res), compact } */
 function roller(opts) {
   const S = { key: null, mode: 'pool', wild: false, threshold: '', mod: 0, push: false, wound: true, free: 6, last: null, sel: new Set(), label: '',
-    fire: {}, range: 'Near', drain: 0, patient: '', assisted: false };
+    fire: {}, range: 'Near', drain: 0, patient: '', assisted: false, targetRating: 3 };
   try { Object.assign(S, JSON.parse(localStorage.getItem('sg.roller') || '{}'), { last: null, sel: new Set() }); } catch { /* ignore */ }
   const root = h('div.roller' + (opts.compact ? '.compact' : ''));
-  const save = () => { try { localStorage.setItem('sg.roller', JSON.stringify({ key: S.key, mode: S.mode, wild: S.wild, threshold: S.threshold, wound: S.wound, free: S.free, fire: S.fire, range: S.range })); } catch { /* ignore */ } };
+  const save = () => { try { localStorage.setItem('sg.roller', JSON.stringify({ key: S.key, mode: S.mode, wild: S.wild, threshold: S.threshold, wound: S.wound, free: S.free, fire: S.fire, range: S.range, targetRating: S.targetRating })); } catch { /* ignore */ } };
   function render() {
     const sh = opts.getSheet(); if (!sh) return;
     root.innerHTML = '';
@@ -233,6 +244,15 @@ function roller(opts) {
       if (pool.spell) root.append(h('div.weapon-line', h('span.hint', `Drain ${pool.drain}${+S.drain ? ' + ' + S.drain : ''} is rolled after casting.`),
         h('label', 'Extra drain', h('input', { type: 'number', min: 0, max: 20, value: S.drain, title: 'Amp Up (+2 per extra DV) or Increase Area (+1 per +2 m)', oninput: e => { S.drain = e.target.value; } }))));
       if (pool.form) root.append(h('p.hint', `Fading ${pool.fade} is rolled after threading.`));
+      if (pool.matrix) {
+        const opposed = pool.defense && pool.defense !== 4;
+        root.append(h('div.weapon-line',
+          h('span.tag' + (pool.legal ? '' : '.illegal'), pool.legal ? 'Legal' : 'Illegal'),
+          opposed ? h('label', { title: 'Device or host rating: it defends with rating × 2 dice. 0 = the GM rolls the defense.' }, 'Target rating',
+            h('input', { type: 'number', min: 0, max: 12, value: S.targetRating, style: { width: '4rem' }, oninput: e => { S.targetRating = e.target.value; save(); } })) : null,
+          h('span.hint', pool.legal ? (Array.isArray(pool.defense) ? `vs ${pool.defense.join(' + ')}` : '') :
+            `vs ${Array.isArray(pool.defense) ? pool.defense.join(' + ') : pool.defense === 'rating' ? 'rating × 2' : pool.defense || '—'} · the defender’s hits raise your Overwatch Score`)));
+      }
       if (pool.heal) {
         const natural = pool.heal.startsWith('natural');
         const line = h('div.weapon-line');
@@ -309,7 +329,7 @@ function roller(opts) {
       return;
     }
     const body = { wild: S.wild, threshold: +S.threshold || 0 };
-    if (S.mode === 'pool') Object.assign(body, { key: S.key, mod: +S.mod || 0, wound: S.wound, push: S.push, mode: S._fmode, range: S.range, drain: +S.drain || 0 });
+    if (S.mode === 'pool') Object.assign(body, { key: S.key, mod: +S.mod || 0, wound: S.wound, push: S.push, mode: S._fmode, range: S.range, drain: +S.drain || 0, targetRating: +S.targetRating || 0 });
     else Object.assign(body, { dice: +S.free || 0, label: S.label.trim() });
     try {
       const res = await opts.post('roll', body);
@@ -437,6 +457,6 @@ async function invite(cid, gameName) {
   return res;
 }
 
-return { invite, catalog, contactSupply, rollSummary, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
+return { actionPips, invite, catalog, contactSupply, rollSummary, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
   roller, edgeMenu, editItem, itemStats, availText, arText, breakdown, sum, RANGES };
 })();

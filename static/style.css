@@ -278,7 +278,7 @@ dialog.wide { width: min(1000px, 96vw); }
 .roll .total.min { color: #ff5d5d; }
 
 /* =====================================================================
-   ShadowGrid additions: GridMap's look carried into the character sheet
+   Character sheet, store and game pages
    ===================================================================== */
 :root { --good: #6dff9c; --warn: #ffd23f; --phys: #ff4053; --stun: #ffb02e; --magic: #b98cff; }
 .brand { letter-spacing: -.02em; }
@@ -888,3 +888,71 @@ button.strip-chip:hover { border-color: var(--muted); }
 @media (max-width: 900px) { .dock-body { height: 42vh; } }
 .wiki-tree details details { padding-left: .7rem; border-left: 1px solid var(--line); margin-left: .25rem; }
 .wiki-tree details details summary { font-weight: 500; }
+
+/* ================================================================ handouts, Markdown, sessions, backups */
+.md { line-height: 1.55; }
+.md > :last-child { margin-bottom: 0; }
+.md h3, .md h4, .md h5 { font-family: var(--font-ui); margin: .7rem 0 .35rem; }
+.md h3 { font-size: 1.15rem; } .md h4 { font-size: 1.02rem; } .md h5 { font-size: .95rem; color: var(--muted); }
+.md ul, .md ol { margin: 0 0 .6rem; padding-left: 1.3rem; }
+.md blockquote { margin: 0 0 .6rem; padding: .3rem .8rem; border-left: 3px solid var(--ar); background: rgba(45, 226, 230, .06); color: #cfe7e6; }
+.md code { font-family: var(--font-num); background: var(--panel-3); padding: 0 .3em; border-radius: 2px; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
+.md a { color: var(--ar); }
+.handout-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; }
+.handout-body:has(.handout-img) { grid-template-columns: minmax(180px, 320px) minmax(0, 1fr); align-items: start; }
+.handout-img img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #050909; border: 1px solid var(--line); }
+.run-card.handout.fresh { border-color: var(--ar); box-shadow: 0 0 0 1px rgba(45, 226, 230, .35); }
+.md-edit { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.md-edit textarea { min-height: 220px; font-family: var(--font-body); }
+.md-preview { border: 1px dashed var(--line); padding: .6rem .8rem; min-height: 220px; max-height: 320px; overflow: auto; background: var(--bg); }
+.handout-upload { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+.handout-upload img { max-height: 90px; max-width: 160px; border: 1px solid var(--line); }
+@media (max-width: 760px) { .handout-body:has(.handout-img), .md-edit { grid-template-columns: 1fr; } }
+
+.badge.live { background: transparent; color: var(--accent); animation: sg-pulse 1.6s ease-in-out infinite; }
+@keyframes sg-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .badge.live { animation: none; } }
+.run-card.session.live { border-color: var(--accent); }
+.session-stats .chip b { font-family: var(--font-num); }
+.highlights { color: var(--muted); }
+.highlights b { color: var(--text); font-weight: 500; }
+.timeline-wrap summary { cursor: pointer; color: var(--muted); font-family: var(--font-ui); font-weight: 600; }
+ol.timeline { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 420px; overflow: auto; border-left: 1px solid var(--line); }
+ol.timeline li { display: grid; grid-template-columns: 4.8rem 1.4rem 1fr; gap: .3rem; padding: .2rem .5rem; font-size: .92rem; }
+ol.timeline li .t { font-family: var(--font-num); color: var(--muted); font-size: .8rem; padding-top: .1rem; white-space: nowrap; }
+ol.timeline li .i { color: var(--muted); text-align: center; }
+ol.timeline li.attack .x { color: #ffd0de; }
+ol.timeline li.ledger .x, ol.timeline li.run .x { color: #c8f7d4; }
+ol.timeline li.handout .x { color: #bff6f7; }
+ol.timeline li.glitch .x, ol.timeline li.critical .x { color: #ffb3bf; }
+ol.timeline li.hidden { opacity: .6; }
+ol.timeline li:nth-child(odd) { background: rgba(255, 255, 255, .02); }
+.backup-list table td { vertical-align: middle; }
+
+/* ================================================================ combat: action pips, attack dialog */
+.act-pips { display: inline-flex; align-items: center; gap: 3px; margin-left: .35rem; }
+.act-pips i { display: inline-block; width: 7px; height: 7px; background: var(--ar); border-radius: 50%; }
+.act-pips i.maj { width: 8px; height: 8px; border-radius: 0; transform: rotate(45deg); background: var(--accent); margin-right: 2px; }
+.act-pips i.used { background: transparent; box-shadow: inset 0 0 0 1px var(--muted); opacity: .6; }
+.act-pips .fd { font: 600 .66rem var(--font-ui); color: #12060b; background: var(--ar); padding: 0 .25rem; border-radius: 2px; margin-left: 2px; }
+.chip-menu .cm-actions { display: flex; justify-content: space-between; align-items: center; gap: .6rem; padding: .3rem 0 .4rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; }
+.attack-targets { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .4rem; }
+.attack-target { display: grid; grid-template-columns: minmax(10rem, 1.2fr) minmax(9rem, 1fr) minmax(12rem, 1.4fr) minmax(7rem, .8fr) auto; gap: .5rem; align-items: center;
+  background: var(--panel-2); border: 1px solid var(--line); padding: .4rem .6rem; }
+.attack-target .at-name { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.attack-info { font-family: var(--font-num); font-size: .85rem; color: #bfe9ea; background: rgba(45, 226, 230, .06); border-left: 2px solid var(--ar); padding: .35rem .6rem; }
+.good { color: #6dff9c; } .warn { color: #ffb02e; } .bad { color: var(--danger); }
+button.warn { border-color: #ffb02e; color: #ffb02e; }
+@media (max-width: 900px) { .attack-target { grid-template-columns: 1fr 1fr; } }
+.tag.illegal { border-color: var(--danger); color: var(--danger); }
+.os-meter { display: flex; align-items: center; gap: .6rem; }
+.os-meter .bar { flex: 1; height: 8px; background: var(--panel-3); position: relative; min-width: 120px; }
+.os-meter .bar span { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #ffb02e, var(--danger)); }
+.os-chip b { color: #ffb02e; }
+.os-chip.hot b { color: var(--danger); }
+.strip-chip.current .act-pips i { background: #12060b; }
+.strip-chip.current .act-pips i.used { background: transparent; box-shadow: inset 0 0 0 1px #12060b; }
+.chip-menu .cm-actions { flex-wrap: wrap; }
+
+table.compact th { text-align: left; }

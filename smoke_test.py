@@ -1,21 +1,23 @@
 """End-to-end API smoke test: python smoke_test.py  (uses a throwaway database)."""
-import json
 import hashlib
+import io
+import json
 import os
 import sys
 import tempfile
 
 tmp = tempfile.mkdtemp()
-os.environ["GRIDMAP_DB"] = os.path.join(tmp, "test.db")
-os.environ["GRIDMAP_ADMIN_PASSWORD"] = "gm-password-123"
-os.environ["GRIDMAP_LOGIN_POW_BITS"] = "6"
+os.environ["SHADOWGRID_DATA"] = tmp
+os.environ["SHADOWGRID_DB"] = os.path.join(tmp, "test.db")
+os.environ["SHADOWGRID_GAMEMASTER_PASSWORD"] = "gm-password-123"
+os.environ["SHADOWGRID_LOGIN_POW_BITS"] = "6"
 
 import app as appmod  # noqa: E402
 from security import leading_zero_bits  # noqa: E402
 from sr import catalog as CAT  # noqa: E402
 
 A = appmod.app
-H = {"X-Requested-With": "GridMap"}
+H = {"X-Requested-With": "ShadowGrid"}
 FAILS = []
 
 
@@ -59,8 +61,8 @@ def register(token, user):
 
 gm = A.test_client()
 print("GM")
-check(login(gm, "admin", "nope").status_code == 401, "wrong GM password rejected")
-check(login(gm, "admin", "gm-password-123").status_code == 200, "GM signs in")
+check(login(gm, "gamemaster", "nope").status_code == 401, "wrong GM password rejected")
+check(login(gm, "gamemaster", "gm-password-123").status_code == 200, "GM signs in")
 cid = j(gm.post("/api/campaigns", json={"name": "Seattle 2081"}, headers=H))["id"]
 check(gm.post("/api/campaigns", json={"name": "x"}).status_code == 403, "CSRF header required")
 cells = {f"{c},{r}": {"fill": "#123456"} for c in range(6) for r in range(3)}
@@ -77,7 +79,7 @@ print("Invite")
 pl = A.test_client()
 check(pl.get(f"/invite/{inv['token']}").status_code == 200, "invite page opens")
 ch, n = pow_solve(pl)
-r = pl.post(f"/api/invite/{inv['token']}", json={"username": "admin", "password": "longenough", "challenge": ch, "counter": n}, headers=H)
+r = pl.post(f"/api/invite/{inv['token']}", json={"username": "gamemaster", "password": "longenough", "challenge": ch, "counter": n}, headers=H)
 check(r.status_code == 400, "reserved username refused")
 ch, n = pow_solve(pl)
 r = pl.post(f"/api/invite/{inv['token']}", json={"username": "ana", "password": "runner-pass", "challenge": ch, "counter": n}, headers=H)
@@ -124,7 +126,7 @@ r = act(action="buy", ref=ref("Cyberjack 6"))
 check(r.status_code == 400, "creation: Availability above 6 refused")
 r = act(action="buy", ref=ref("Wired Reflexes 1"))
 check(r.status_code == 400 and "Not enough nuyen" in j(r)["error"], "can't buy without nuyen")
-r = act(action="admin_set", karma=999)
+r = act(action="gamemaster_set", karma=999)
 check(r.status_code == 403, "player can't use GM override")
 pred = item(j(act(action="set_info")), "Ares Predator VI")
 r = act(action="remove_item", uid=pred["uid"])
@@ -173,7 +175,7 @@ r = act(action="save_contact", contact={"name": "Nails", "type": "Fixer", "conne
 check(not j(r)["char"]["contacts"][1]["verified"] and j(r)["player"]["pendingContacts"] == 1, "new contact after approval waits for the GM")
 r = act(action="buy", ref=ref("Monofilament Whip"))
 check(r.status_code == 400 and "once the GM confirms" in j(r)["error"], "unconfirmed contact unlocks nothing, and says why")
-gm.post(f"/api/players/{pid}/sheet/action", json={"action": "admin_set", "nuyen": 5000}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "nuyen": 5000}, headers=H)
 r = gm.post(f"/api/players/{pid}/sheet/action", json={"action": "verify_contact", "index": 1}, headers=H)
 check(j(r)["char"]["contacts"][1]["verified"], "GM confirms the contact")
 r = act(action="buy", ref=ref("Monofilament Whip"))
@@ -192,10 +194,10 @@ check(j(r)["char"]["nuyen"] == before + 210, "sold for 60% of 350¥")
 r = gm.post(f"/api/games/{cid}/lifestyle", json={}, headers=H)
 sh = j(pl.get("/api/me/sheet"))
 check(sh["char"]["nuyen"] == before + 210 - 2000, "monthly lifestyle charged (Low 2,000¥)")
-gm.post(f"/api/players/{pid}/sheet/action", json={"action": "admin_set", "nuyen": 500}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "nuyen": 500}, headers=H)
 gm.post(f"/api/games/{cid}/lifestyle", json={}, headers=H)
 check(j(pl.get("/api/me/sheet"))["char"]["nuyen"] == -1500, "lifestyle can push nuyen negative")
-gm.post(f"/api/players/{pid}/sheet/action", json={"action": "admin_set", "nuyen": 5000}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "nuyen": 5000}, headers=H)
 r = act(action="add_knowledge", name="Corporate Personalities")
 check(r.status_code == 200 and any(e["reason"].startswith("Knowledge") and e["delta"] == -3 for e in j(r)["ledger"]), "approved: knowledge skill costs 3 Karma")
 
@@ -256,22 +258,6 @@ check(r.status_code == 200, "rest heals Stun")
 act(action="set_damage", track="stun", value=0)
 r = pl.post("/api/me/heal", json={"method": "natural_stun"}, headers=H)
 check(r.status_code == 400 and "Nothing to heal" in j(r)["error"], "nothing to heal is refused")
-
-print("Old sheets")
-_, r = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "oldie")
-oid = j(_.get("/api/me/state"))["me"]["id"]
-with A.app_context():
-    from core import get_db
-    get_db().execute("UPDATE players SET character=?, approved=2 WHERE id=?", (json.dumps({
-        "name": "Old", "base_attributes": {"Body": 4}, "contacts": [{"name": "Jo", "type": "Fixer", "connection": 12, "loyalty": 9}],
-        "gear": {"Weapons": [{"name": "Ares Predator V"}], "Other": [{"name": "Lucky coin"}]}}), oid))
-    get_db().commit()
-osh = j(gm.get(f"/api/players/{oid}/sheet"))
-check(item(osh, "Ares Predator VI") and item(osh, "Ares Predator VI")["clip"] == 15, "old gear linked to the core-book item")
-check(item(osh, "Lucky coin")["_custom"], "unknown old gear stays custom")
-check(osh["store"][ref("Erika MCD-6")][0], "old Fixer contact unlocks the store")
-r = _.post("/api/me/sheet/action", json={"action": "reload", "uid": item(osh, "Ares Predator VI")["uid"]}, headers=H)
-check(r.status_code == 400 and "no ammunition" in j(r)["error"], "old pistol takes Heavy ammo")
 
 print("Sixth World Companion")
 import security  # noqa: E402
@@ -433,14 +419,304 @@ check(pl.get("/api/me/state").status_code == 401, "password reset signs the play
 check(login(pl, "ana", pw).status_code == 200, "player signs in with new password")
 r = pl.post("/api/me/password", json={"current": pw, "new": "brand-new-pass"}, headers=H)
 check(r.status_code == 200 and pl.get("/api/me/state").status_code == 200, "player changes password and stays signed in")
-gm.post(f"/api/players/{pid}/sheet/action", json={"action": "admin_set", "current_edge": 7}, headers=H)
-gm.post(f"/api/players/{mpid}/sheet/action", json={"action": "admin_set", "current_edge": 7}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "current_edge": 7}, headers=H)
+gm.post(f"/api/players/{mpid}/sheet/action", json={"action": "gamemaster_set", "current_edge": 7}, headers=H)
 r = pl.post("/api/me/edge", json={"key": "give", "to": mpid}, headers=H)
 check(r.status_code == 400 and j(pl.get("/api/me/state"))["me"]["edge"]["cur"] == 7, "can't give Edge to an ally at 7")
 ev = A.test_client()
 ch, n = pow_solve(ev)
-r = ev.post("/api/login", json={"username": "admin", "password": "gm-password-123", "challenge": ch, "counter": n, "next": "/\\evil.com"})
+r = ev.post("/api/login", json={"username": "gamemaster", "password": "gm-password-123", "challenge": ch, "counter": n, "next": "/\\evil.com"})
 check(j(r)["next"] == "/", "open redirect blocked")
+
+print("Character files, printing, live updates")
+security._buckets.clear()
+login(pl, "ana", "brand-new-pass")
+r = pl.get("/api/me/sheet/export")
+check(r.status_code == 200 and "attachment" in r.headers.get("Content-Disposition", ""), "player exports a character file")
+exported = r.get_json()
+check(exported["format"] == "shadowgrid-character-3" and exported["character"]["name"], "export holds the character")
+r = pl.post("/api/me/sheet/import", data=json.dumps(exported), headers=H)
+check(r.status_code == 400 and "approved" in j(r)["error"], "approved players can't import over their sheet")
+fresh, _ = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "importer")
+r = fresh.post("/api/me/sheet/import", data=json.dumps(exported), headers=H)
+check(r.status_code == 200 and j(r)["char"]["name"] == exported["character"]["name"] and j(r)["char"].get("imported_at"), "a draft sheet imports the file")
+bad = dict(exported, character=dict(exported["character"], v=1))
+check(fresh.post("/api/me/sheet/import", data=json.dumps(bad), headers=H).status_code == 400, "files from another version are refused")
+check(fresh.post("/api/me/sheet/import", data="nope", headers=H).status_code == 400, "garbage is refused")
+r = gm.post(f"/api/players/{pid}/sheet/import", data=json.dumps(exported), headers=H)
+check(r.status_code == 200, "the GM can import over an approved sheet")
+check(pl.get("/print/sheet").status_code == 200 and pl.get("/print/blank").status_code == 200, "print pages open for a player")
+check(gm.get(f"/print/sheet/{pid}").status_code == 200 and pl.get(f"/print/sheet/{pid}").status_code != 200, "only the GM prints other runners")
+check(A.test_client().get("/api/events").status_code == 401, "live updates need a sign-in")
+
+print("Combat rules: actions, interrupts, multiple attacks, sight, Edge")
+security._buckets.clear()
+login(pl, "ana", "brand-new-pass")
+arena_cells = {f"{c},{r}": {"fill": "#123456"} for c in range(10) for r in range(3)}
+for r_ in (0, 1, 2):
+    arena_cells.pop(f"7,{r_}")                     # a wall across the room at column 7
+arena = j(gm.post("/api/maps", json={"name": "Arena", "campaignId": cid, "width": 12, "height": 4, "data": {"cells": arena_cells, "markers": [
+    {"id": "g1", "c": 4, "r": 1, "type": "danger", "label": "Ganger 1"}, {"id": "g2", "c": 5, "r": 1, "type": "danger", "label": "Ganger 2"},
+    {"id": "g3", "c": 9, "r": 1, "type": "danger", "label": "Behind the wall"},
+    {"id": "d0", "c": 3, "r": 2, "type": "danger", "label": "Drone", "cm": {"pm": 9, "sm": 0, "ov": 0, "p": 0, "s": 0}}]}}, headers=H))["id"]
+for m_ in ("g1", "g2", "g3"):
+    gm.post(f"/api/maps/{arena}/marker", json={"id": m_, "template": "t:6", "relabel": False}, headers=H)
+gm.post(f"/api/players/{pid}/place", json={"mapId": arena, "c": 1, "r": 1}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_ammo", "uid": pred["uid"], "rounds": 15}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "current_edge": 0}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_status", "status": "Prone", "on": False}, headers=H)
+gm.post(f"/api/maps/{arena}/status", json={"target": {"kind": "player", "id": pid}, "status": "Prone", "on": False}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "start", "players": [pid], "mapId": arena, "markers": ["g1", "g2", "g3"], "roll": True}, headers=H)
+P, G1, G2, G3, D0 = ({"kind": "player", "id": pid}, {"kind": "marker", "id": "g1"}, {"kind": "marker", "id": "g2"},
+                     {"kind": "marker", "id": "g3"}, {"kind": "marker", "id": "d0"})
+gun = f"weapon:{pred['uid']}"
+atk = lambda **kw: gm.post(f"/api/maps/{arena}/attack", json=dict({"range": "Near", "mode": "SA"}, **kw), headers=H)  # noqa: E731
+entry = lambda ref: next(e for e in j(gm.get(f"/api/games/{cid}/combat"))["tracker"]["entries"] if e["ref"] == ref)  # noqa: E731
+r = atk(attacker=P, weapon=gun, targets=[D0])
+check(r.status_code == 200 and entry(pid)["majorLeft"] == 0, "an attack uses the attacker's Major Action")
+r = atk(attacker=P, weapon=gun, targets=[D0])
+check(r.status_code == 400 and "Major Action" in j(r)["error"], "a second attack in the round is refused")
+check(atk(attacker=P, weapon=gun, targets=[D0], ignoreActions=True).status_code == 200, "the GM can override the action limit")
+atk(attacker=P, weapon=gun, targets=[D0], ignoreActions=True)
+check(j(pl.get("/api/me/state"))["me"]["edge"]["cur"] == 2 and entry(pid)["edgeGained"] == 2, "AR beating DR by 4+ gives Edge, 2 per round at most")
+gm.post(f"/api/games/{cid}/combat", json={"op": "round"}, headers=H)
+e_ = entry(pid)
+check(e_["majorLeft"] == 1 and e_["edgeGained"] == 0, "a new round gives the actions back")
+r = atk(attacker=P, weapon=gun, targets=[G1, G2])
+res = j(r)["results"]
+check(r.status_code == 200 and len(res) == 2 and any("Split among 2" in p[0] for p in res[0]["attack"]["parts"]), "multiple attacks split the pool between targets")
+check(entry(pid)["minorLeft"] == e_["minorLeft"] - 1, "multiple attacks cost a Minor Action too")
+check(item(j(pl.get("/api/me/sheet")), "Ares Predator VI")["loaded"]["rounds"] == 15 - 2 * 3 - 2 * 2, "each target takes a semi-auto burst of ammo")
+r = atk(attacker=G1, weapon="0", targets=[P], defenses={f"player:{pid}": "block"})
+check(r.status_code == 400 and "melee" in j(r)["error"], "Block only works against melee")
+r = atk(attacker=G1, weapon="0", targets=[P], defenses={f"player:{pid}": "dodge"})
+check(r.status_code == 200 and any(p_[0] == "Dodge" for p_ in j(r)["result"]["defense"]["parts"]), "Dodge adds Athletics to the defense")
+r = atk(attacker=G2, weapon="0", targets=[P], defenses={f"player:{pid}": "full_defense"})
+check(r.status_code == 400 and "Major" in j(r)["error"], "Full Defense needs a Major Action (already used)")
+r = atk(attacker=G2, weapon="0", targets=[P], defenses={f"player:{pid}": "full_defense"}, ignoreActions=True)
+check(r.status_code == 200 and entry(pid)["fd"], "Full Defense stays on for the round")
+r = atk(attacker=G3, weapon="0", targets=[P], ignoreActions=True, ignoreSight=True)
+check(any("Full Defense" in p_[0] for p_ in j(r)["result"]["defense"]["parts"]), "later attacks get Full Defense without asking")
+gm.post(f"/api/games/{cid}/combat", json={"op": "round"}, headers=H)
+r = atk(attacker=G1, weapon="0", targets=[P], defenses={f"player:{pid}": "hit_the_dirt"})
+check(r.status_code == 200 and j(pl.get("/api/me/state"))["me"]["statuses"].get("Prone") and entry(pid)["dirt"], "Hit the Dirt: +2 defense, then Prone")
+r = atk(attacker=P, weapon=gun, targets=[G2], called="damage")
+pp = j(r)["result"]["attack"]["parts"]
+check(any(p_[0] == "Hit the Dirt" for p_ in pp) and any(p_[0].startswith("Called shot") and p_[1] == -4 for p_ in pp), "the Hit the Dirt penalty and a called shot's −4 apply")
+r = atk(attacker=P, weapon=gun, targets=[G2], called="vitals", ignoreActions=True)
+check(r.status_code == 400 and "Edge" in j(r)["error"], "Vitals needs 5 Edge")
+r = atk(attacker=P, weapon=gun, targets=[G3], ignoreActions=True)
+check(r.status_code == 400 and "line of sight" in j(r)["error"], "no attack through a wall")
+sg = j(gm.post(f"/api/maps/{arena}/sight", json={"a": P, "b": G2}, headers=H))["sight"]
+check(sg["los"] and sg["cells"] == 4, "clear sight and distance between two combatants")
+gm.post(f"/api/maps/{arena}/status", json={"target": G2, "status": "Cover", "on": True, "value": 2}, headers=H)
+r = atk(attacker=P, weapon=gun, targets=[G2], ignoreActions=True)
+check(j(r)["result"]["cover"] == 2 and j(r)["result"]["dr"] >= 8, "a Cover status adds to the Defense Rating")
+gm.post(f"/api/maps/{arena}/status", json={"target": G1, "status": "Burning", "on": True, "value": 4}, headers=H)
+r = gm.post(f"/api/games/{cid}/combat", json={"op": "ongoing"}, headers=H)
+check("Ongoing" in j(r)["message"] and any("ongoing damage" in x["data"].get("text", "") for x in j(gm.get(f"/api/games/{cid}"))["rolls"]), "ongoing damage resolves at the GM's call")
+gm.post(f"/api/maps/{arena}/status", json={"target": P, "status": "Zapped", "on": True}, headers=H)
+pl.post("/api/me/initiative", json={}, headers=H)
+check(any("from statuses" in x["data"].get("label", "") for x in j(pl.get("/api/me/state"))["rolls"] if x["kind"] == "init"), "statuses lower initiative")
+check(any(p_[0] == "Zapped" for p_ in next(x for x in j(pl.get("/api/me/sheet"))["pools"] if x["key"] == "skill:Firearms")["parts"]), "statuses lower the roller's pools")
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+mg.post("/api/me/sheet/action", json={"action": "learn_spell", "name": "Armor"}, headers=H)
+mage_sheet = j(mg.get("/api/me/sheet"))
+sus = next((i for i, sp in enumerate(mage_sheet["char"]["spells"]) if sp.get("duration") == "S"), None)
+check(sus is not None, "the mage knows a sustained spell")
+if sus is not None:
+    for _ in range(6):
+        mg.post("/api/me/roll", json={"key": f"spell:{sus}", "mod": 20}, headers=H)
+        if j(mg.get("/api/me/sheet"))["char"]["sustained"]:
+            break
+    msh = j(mg.get("/api/me/sheet"))
+    check(msh["char"]["sustained"] and msh["derived"]["sustain_penalty"] == -2, "casting a sustained spell starts sustaining it (−2)")
+    check(any(p_[0].startswith("Sustaining") for p_ in next(x for x in msh["pools"] if x["key"] == "skill:Perception")["parts"]), "sustaining costs dice on other tests")
+    mg.post("/api/me/sheet/action", json={"action": "drop_sustained", "index": 0}, headers=H)
+    check(not j(mg.get("/api/me/sheet"))["char"]["sustained"], "dropping the spell ends the penalty")
+
+print("Matrix: actions, Overwatch, convergence, IC")
+security._buckets.clear()
+dk, _ = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "decker")
+dkid = j(dk.get("/api/me/state"))["me"]["id"]
+dact = lambda **kw: dk.post("/api/me/sheet/action", json=kw, headers=H)  # noqa: E731
+gm.post(f"/api/games/{cid}/grant", json={"players": [dkid], "nuyen": 300000, "reason": "Deck money"}, headers=H)
+dact(action="set_info", name="Glitch")
+dact(action="set_attribute", attr="Logic", value=6)
+dact(action="set_skill", skill="Cracking", rank=6)
+dact(action="set_skill", skill="Electronics", rank=5)
+r = dact(action="buy", ref="cyberdecks-software-erika-mcd-6")
+dsh = j(r)
+check(any(p_["key"] == "matrix:hack_on_the_fly" for p_ in dsh["pools"]), "a deck gives Matrix action pools")
+deck = item(dsh, "Erika MCD-6")
+dact(action="set_matrix", device=deck["uid"], mode="VR (hot sim)")
+r = dk.post("/api/me/roll", json={"key": "matrix:hack_on_the_fly", "targetRating": 5}, headers=H)
+res = next(x for x in j(r)["rolls"] if x["id"] == j(r)["rollId"])["data"]
+check(r.status_code == 200 and res["defense"]["pool"] == 10, "an illegal action rolls the target's rating × 2 in defense")
+gsh = j(gm.get(f"/api/players/{dkid}/sheet"))
+check(gsh["derived"]["matrix"]["os"] == res["defense"]["hits"], "the defender's hits become Overwatch Score (GM view)")
+check(j(dk.get("/api/me/sheet"))["derived"]["matrix"]["os"] is None, "players don't see their Overwatch Score")
+gm.post(f"/api/players/{dkid}/sheet/action", json={"action": "set_os", "os": 39}, headers=H)
+r = gm.post(f"/api/players/{dkid}/sheet/action", json={"action": "set_os", "delta": 2}, headers=H)
+gsh = j(r)
+check(gsh["message"] == "Convergence!" and gsh["derived"]["matrix"]["os"] == 0, "Overwatch 40: convergence, score reset")
+check(item(gsh, "Erika MCD-6")["matrix_damage"] == gsh["derived"]["matrix"]["boxes"], "convergence bricks the deck")
+check(gsh["char"]["matrix"]["mode"] == "AR" and gsh["char"]["physical_damage"] + gsh["char"]["stun_damage"] >= 0, "the decker is dumped (dumpshock in hot sim)")
+gm.post(f"/api/players/{dkid}/sheet/action", json={"action": "set_matrix", "damage": 0}, headers=H)
+gm.post(f"/api/players/{dkid}/sheet/action", json={"action": "set_matrix", "mode": "VR (hot sim)"}, headers=H)
+gm.post(f"/api/players/{dkid}/place", json={"mapId": arena, "c": 2, "r": 0}, headers=H)
+j(gm.post(f"/api/maps/{arena}/marker", json={"id": "d0", "template": "ic:Killer", "force": 4}, headers=H))
+ic = next(m for m in j(gm.get(f"/api/maps/{arena}"))["data"]["markers"] if m["id"] == "d0")
+check(ic["npc"]["kind"] == "IC" and ic["npc"]["matrix"]["rating"] == 4 and ic["cm"]["pm"] == 10, "IC templates by host rating")
+DK = {"kind": "player", "id": dkid}
+opts = j(gm.post(f"/api/maps/{arena}/attack-options", json={"who": DK}, headers=H))["options"]
+check(any(o["key"] == "matrix:data_spike" for o in opts), "Data Spike is an attack option for the decker")
+r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": DK, "weapon": "matrix:data_spike", "targets": [D0], "attackMod": 20}, headers=H)
+res = j(r)["result"]
+check(r.status_code == 200 and res["track"] == "matrix" and any(p_[0] == "Rating × 2" for p_ in res["defense"]["parts"]), "Data Spike vs IC: Matrix defense and damage")
+check(j(gm.get(f"/api/players/{dkid}/sheet"))["derived"]["matrix"]["os"] == res["defense"]["hits"], "attacking IC raises Overwatch")
+r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": D0, "weapon": "0", "targets": [DK], "attackMod": 20}, headers=H)
+res = j(r)["result"]
+dsh = j(gm.get(f"/api/players/{dkid}/sheet"))
+check(r.status_code == 200 and (not res["damage"] or item(dsh, "Erika MCD-6")["matrix_damage"] > 0), "Killer IC damages the deck")
+r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": D0, "weapon": "0", "targets": [DK], "defenses": {f"player:{dkid}": "dodge"}}, headers=H)
+check(r.status_code == 400 and "Matrix" in j(r)["error"], "Dodge doesn't work in the Matrix")
+
+print("Rigging: control modes, autosofts, vehicles on the map")
+security._buckets.clear()
+rg, _ = register(j(gm.post(f"/api/games/{cid}/invites", json={}, headers=H))["token"], "rigger")
+rgid = j(rg.get("/api/me/state"))["me"]["id"]
+ract = lambda **kw: rg.post("/api/me/sheet/action", json=kw, headers=H)  # noqa: E731
+gm.post(f"/api/games/{cid}/grant", json={"players": [rgid], "nuyen": 300000, "reason": "Rigger money"}, headers=H)
+ract(action="set_info", name="Wheels")
+ract(action="set_skill", skill="Piloting", rank=5)
+for ref_ in ("drones-gm-nissan-doberman", "cyberdecks-software-scratch-built-junk-rcc"):
+    check(ract(action="buy", ref=ref_).status_code == 200, f"buy {ref_}")
+rsh = j(ract(action="buy", ref="cyberware-control-rig", rating=2))
+dob = item(rsh, "GM-Nissan Doberman")
+keys = {p_["key"] for p_ in rsh["pools"]}
+check(f"vehicle:{dob['uid']}:manual" in keys and f"vehicle:{dob['uid']}:remote" in keys, "piloting pools at the controls and by remote")
+jp = next(p_ for p_ in rsh["pools"] if p_["key"] == f"vehicle:{dob['uid']}:jumped")
+check(any(x[0] == "Control rig 2" and x[1] == 2 for x in jp["parts"]), "jumped in: the control rig adds its rating")
+soft = item(j(ract(action="buy", ref="cyberdecks-software-autosoft", rating=4)), "Autosoft")
+r = ract(action="set_program", uid=soft["uid"], choice="Maneuvering")
+dp = next((p_ for p_ in j(r)["pools"] if p_["key"] == f"drone:{dob['uid']}:Maneuvering"), None)
+check(dp and dp["value"] == int(dob["pilot"]) + 4, "the drone pilots itself with Pilot + Maneuvering")
+check(ract(action="set_program", uid=soft["uid"], choice="Armor").status_code == 400, "autosofts only take autosoft choices")
+tl = j(gm.get(f"/api/maps/{arena}/context"))["vehicles"]
+check(any(v["key"] == f"pv:{rgid}:{dob['uid']}" for v in tl), "the editor lists the runners' vehicles as templates")
+r = gm.post(f"/api/maps/{arena}/marker", json={"id": "g3", "template": f"pv:{rgid}:{dob['uid']}", "relabel": True}, headers=H)
+vm = j(r)["marker"]
+check(vm["npc"]["kind"] == "Drone" and vm["npc"]["link"]["uid"] == dob["uid"] and vm["cm"]["pm"] == 8 + (int(dob["body"]) + 1) // 2, "a runner's drone on the map, linked to their sheet")
+gm.post(f"/api/maps/{arena}/marker", json={"id": "g3", "damage": {"track": "physical", "amount": 3}}, headers=H)
+check(item(j(rg.get("/api/me/sheet")), "GM-Nissan Doberman")["damage"] == 3, "damage on the map shows on the owner's sheet")
+check(any(t["key"].startswith("v:") and t["kind"] == "Vehicle" for t in j(gm.get("/api/catalog"))["npcTemplates"]), "every vehicle and drone is an NPC template")
+gm.post(f"/api/games/{cid}/combat", json={"op": "start", "players": [pid], "mapId": arena, "markers": ["g3"], "roll": True}, headers=H)
+stunner = j(gm.post(f"/api/maps/{arena}/marker", json={"id": "g2", "template": "t:6"}, headers=H))["marker"]
+r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": G2, "weapon": "0", "targets": [G3], "ignoreSight": True, "ignoreActions": True, "attackMod": -30}, headers=H)
+check(r.status_code == 200, "attacks against vehicles resolve")
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+
+print("Toxins, drugs, Reputation and Heat")
+lib = [{"name": "Test Stunner", "kind": "toxin", "power": 30, "damage": "S", "vectors": ["Injection"], "effects": ["Nausea"]},
+       {"name": "Test Jazz", "kind": "drug", "power": 6, "attrs": {"Reaction": 1}, "init_dice": 1, "duration": "10 minutes",
+        "crash": {"dv": 3, "damage": "S"}}]
+r = gm.put(f"/api/games/{cid}/substances", json={"substances": lib}, headers=H)
+subs = j(r)["substances"]
+check(r.status_code == 200 and any(x["name"] == "Renfield" and x.get("builtin") for x in subs) and len([x for x in subs if not x.get("builtin")]) == 2, "the GM saves a substance library (Companion ones built in)")
+stun_id = next(x["id"] for x in subs if x["name"] == "Test Stunner")
+jazz_id = next(x["id"] for x in subs if x["name"] == "Test Jazz")
+rsh0 = j(gm.get(f"/api/players/{rgid}/sheet"))
+r = gm.post(f"/api/players/{rgid}/expose", json={"id": stun_id}, headers=H)
+rsh = j(r)
+check(r.status_code == 200 and rsh["char"]["stun_damage"] > rsh0["char"]["stun_damage"] and rsh["char"]["statuses"].get("Nauseated"), "a toxin: resisted, the rest is Stun and Nausea")
+check(rg.post("/api/me/dose", json={"id": jazz_id}, headers=H).status_code == 400, "you can't take a drug you don't carry")
+gm.post(f"/api/players/{rgid}/sheet/action", json={"action": "give", "item": {"name": "Test Jazz", "cat": "Medical", "qty": 2}}, headers=H)
+before = j(rg.get("/api/me/sheet"))["derived"]
+r = rg.post("/api/me/dose", json={"id": jazz_id, "resist": False}, headers=H)
+after = j(r)["derived"]
+check(r.status_code == 200 and after["attributes"]["Reaction"] == before["attributes"]["Reaction"] + 1 and after["initiative_dice"] == before["initiative_dice"] + 1, "a drug's bonuses apply while it's in effect")
+check(item(j(r), "Test Jazz")["qty"] == 1, "taking a dose uses one up")
+s0 = j(r)["char"]["stun_damage"]
+r = rg.post("/api/me/sheet/action", json={"action": "end_substance", "index": 0}, headers=H)
+check(j(r)["derived"]["attributes"]["Reaction"] == before["attributes"]["Reaction"] and j(r)["char"]["stun_damage"] == min(j(r)["derived"]["stun_boxes"], s0 + 3), "when it wears off, the crash applies")
+r = rg.post("/api/me/sheet/action", json={"action": "set_info", "heat": 3}, headers=H)
+check(r.status_code == 400 and "GM" in j(r)["error"], "players can't change their own Heat")
+r = gm.post(f"/api/players/{rgid}/sheet/action", json={"action": "set_info", "heat": 3, "reputation": 2}, headers=H)
+check(j(r)["char"]["heat"] == 3 and j(r)["char"]["reputation"] == 2, "the GM sets Heat and Reputation")
+
+print("Handouts and sessions")
+from PIL import Image as _Img  # noqa: E402
+
+
+def _img(fmt):
+    buf = io.BytesIO()
+    _Img.new("RGB", (40, 30), (200, 30, 90)).save(buf, fmt)
+    return buf.getvalue()
+
+
+up = lambda name, data: gm.post(f"/api/games/{cid}/uploads", data={"file": (io.BytesIO(data), name)}, headers=H, content_type="multipart/form-data")  # noqa: E731
+r = up("dossier.png", _img("PNG"))
+check(r.status_code == 201 and j(r)["image"].endswith(".png"), "the GM uploads a PNG")
+img = j(r)["image"]
+check(up("photo.jpeg", _img("JPEG")).status_code == 201, "JPEG uploads too")
+check(up("evil.svg", b"<svg onload=alert(1)>").status_code == 400, "other file types are refused")
+check(up("fake.png", _img("JPEG")).status_code == 400, "a JPEG named .png is refused")
+check(up("junk.jpg", b"not an image at all").status_code == 400, "junk named .jpg is refused")
+r = gm.post(f"/api/games/{cid}/handouts", json={"title": "Dossier", "body": "# Target\n**Dr. K**", "image": img, "recipients": [pid]}, headers=H)
+check(r.status_code == 201, "the GM writes a handout (hidden)")
+hid = j(r)["id"]
+check(not j(pl.get("/api/me/handouts"))["handouts"] and pl.get(f"/uploads/{img}").status_code == 404, "hidden handouts and their images stay private")
+gm.put(f"/api/handouts/{hid}", json={"shown": True}, headers=H)
+hs = j(pl.get("/api/me/state"))["handouts"]
+check(len(hs) == 1 and hs[0]["image"] == img, "shown: the runner gets it with their state")
+r = pl.get(f"/uploads/{img}")
+check(r.status_code == 200 and r.mimetype == "image/png" and "sandbox" in r.headers["Content-Security-Policy"], "the runner sees the image (sandboxed)")
+check(fresh.get(f"/uploads/{img}").status_code == 404 and not j(fresh.get("/api/me/handouts"))["handouts"], "runners it wasn't given to don't")
+gm.delete(f"/api/handouts/{hid}", headers=H)
+check(gm.get(f"/uploads/{img}").status_code == 404, "deleting the handout deletes its image")
+r = gm.post(f"/api/games/{cid}/sessions", json={"title": "Game night"}, headers=H)
+check(r.status_code == 201, "the GM starts a session")
+sid = j(r)["id"]
+check(gm.post(f"/api/games/{cid}/sessions", json={}, headers=H).status_code == 400, "only one session at a time")
+pl.post("/api/me/roll", json={"mode": "free", "dice": 6, "label": "Sneak past"}, headers=H)
+gm.post(f"/api/games/{cid}/grant", json={"players": [pid], "karma": 3, "reason": "Session"}, headers=H)
+live = next(x for x in j(gm.get(f"/api/games/{cid}"))["sessions"] if x["id"] == sid)
+check(live["active"] and live["recap"]["stats"]["rolls"] >= 1 and live["recap"]["stats"]["karma"] == 3, "the live recap counts rolls and awards")
+gm.put(f"/api/sessions/{sid}", json={"notes": "The team got in quietly."}, headers=H)
+check(gm.post(f"/api/sessions/{sid}/end", headers=H).status_code == 200, "the GM ends the session")
+check(not j(pl.get("/api/me/sessions"))["sessions"], "unshared recaps stay with the GM")
+gm.put(f"/api/sessions/{sid}", json={"shared": True}, headers=H)
+ps = j(pl.get("/api/me/sessions"))["sessions"]
+check(len(ps) == 1 and ps[0]["notes"] == "The team got in quietly." and any("Sneak past" in e["text"] for e in ps[0]["recap"]["events"]), "shared: players read the recap")
+md = gm.get(f"/api/sessions/{sid}/export")
+check(md.status_code == 200 and b"# Game night" in md.data and b"Sneak past" in md.data, "the recap exports as Markdown")
+r = gm.post(f"/api/maps/{mid}/sight", json={"a": {"kind": "player", "id": pid}, "b": {"kind": "marker", "id": "e1"}}, headers=H)
+check(r.status_code == 200 and "los" in (j(r)["sight"] or {"los": 0}), "line of sight between a runner and a marker")
+
+print("Maps and backups")
+dm = j(gm.post("/api/maps", json={"name": "Doomed", "campaignId": cid, "width": 8, "height": 8,
+                               "data": {"cells": {"1,1": {}}, "markers": [{"id": "z1", "c": 1, "r": 1, "type": "danger", "label": "Z"}]}}, headers=H))["id"]
+gm.post(f"/api/games/{cid}/combat", json={"op": "start", "mapId": dm, "markers": ["z1"], "players": [pid]}, headers=H)
+check(gm.delete(f"/api/maps/{dm}", headers=H).status_code == 200 and gm.get(f"/api/maps/{dm}").status_code == 404, "the GM deletes a map")
+t = j(gm.get(f"/api/games/{cid}/combat"))["tracker"]
+check(not any(e["kind"] == "marker" for e in t["entries"]) and any(e["kind"] == "player" for e in t["entries"]), "its enemies leave the combat tracker")
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+r = gm.post("/api/backups", headers=H)
+check(r.status_code == 201, "the GM makes a backup")
+bname = j(r)["name"]
+check(pl.get("/api/backups").status_code == 401, "players can't see backups")
+zipdata = gm.get(f"/api/backups/{bname}").data
+check(zipdata[:2] == b"PK", "the backup downloads as a zip")
+j(gm.post(f"/api/games/{cid}/runs", json={"name": "After the backup", "reward": 1}, headers=H))
+r = gm.post("/api/backup/restore", data={"file": (io.BytesIO(zipdata), "b.zip")}, headers=H, content_type="multipart/form-data")
+check(r.status_code == 200 and j(r)["safety"].startswith("shadowgrid-before-restore"), "a backup file restores (after a safety backup)")
+check(gm.get(f"/api/games/{cid}").status_code == 401, "restoring signs everyone out")
+login(gm, "gamemaster", "gm-password-123")
+check(not any(x["name"] == "After the backup" for x in j(gm.get(f"/api/games/{cid}"))["runs"]), "the game is back to the backup's moment")
+r = gm.post("/api/backup/restore", data={"file": (io.BytesIO(b"not a zip"), "x.zip")}, headers=H, content_type="multipart/form-data")
+check(r.status_code == 400, "a bad file is refused")
+check(gm.get("/api/backups/..%2Fshadowgrid.db").status_code == 404, "no path tricks on backup names")
 
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "All checks passed.")

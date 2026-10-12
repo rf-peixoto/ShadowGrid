@@ -4,7 +4,9 @@ from . import catalog as CAT
 from . import core6e as K
 from . import gear6e as G
 from . import magic6e as M
+from . import matrix6e as MX
 from . import npc6e as N
+from . import rigging6e as RIG
 
 RULES = {
     "Tests and dice": """**Tests and dice**
@@ -17,7 +19,7 @@ Roll a pool of six-sided dice; every 5 or 6 is a hit.
 - Wound modifiers apply to almost every test.""",
     "Edge": """**Edge**
 Edge is a pool (maximum 7) that refreshes only when the GM says so.
-- Gain Edge from the situation: Attack Rating beating Defense Rating by 4 or more, better vision, cover, and so on. At most 2 per combat round. In ShadowGrid the GM awards it by hand.
+- Gain Edge from the situation: Attack Rating beating Defense Rating by 4 or more, better vision, cover, and so on. At most 2 per combat round. In ShadowGrid the attack dialog awards the AR vs DR Edge for you (and keeps the 2-per-round limit); the GM awards the rest by hand.
 - Before a roll, 4 Edge: add your Edge rating to the pool and 6s explode.
 - After a roll, one boost per roll: 1 Edge rerolls one die, 2 Edge adds +1 to a die, 3 Edge buys an automatic hit, 4 Edge rerolls all failures.
 - Outside rolls: +3 Initiative (1), heal 1 Stun (3) or 1 Physical (4), give an ally 1 Edge (2), negate 1 of an opponent's Edge (2), count 2s as glitches for a target (5), special effect (5).""",
@@ -34,7 +36,13 @@ An attack is an opposed test:
 - Damage left over goes to the Physical (P) or Stun (S) monitor.
 - If damage after soaking exceeds the target's Body, they are knocked Prone.
 - Elemental damage adds a status: electricity Zapped, fire Burning, cold Chilled, chemical Corrosive.
-- Ranges: Close 0-3 m, Near 4-50 m, Medium 51-250 m, Far 251-500 m, Extreme 500+ m. A weapon without an Attack Rating at a range can't be used there.""",
+- Ranges: Close 0-3 m, Near 4-50 m, Medium 51-250 m, Far 251-500 m, Extreme 500+ m. A weapon without an Attack Rating at a range can't be used there.
+- Defending (interrupts, out of turn): Block (Minor, melee: +Close Combat), Dodge (Minor: +Athletics), Hit the Dirt (Minor, ranged: +2, then Prone and −2 on your next turn), Full Defense (Major: +Willpower on every Defense test this round).
+- Cover I-IV adds its level to the Defense Rating and to the Defense test. ShadowGrid works out line of sight and cover from the map's walls and closed doors.
+- Called shot (Minor, with the attack): −4 dice, +2 DV. Shank (melee, 1 Edge): only −2 dice. Vitals (5 Edge): +3 DV. Disarm (5 Edge): the target drops their weapon.
+- Multiple Attacks (Minor): split the pool evenly among the targets; Anticipation (4 Edge) rolls the full pool for each.
+- Statuses change the numbers: Zapped −1, Fatigued −2 per level, Confused −its value, Chilled −1 (and −4 Initiative), Immobilized −3 dice and AR (no Reaction on defense), Prone +2 defense against Medium+ ranged attacks and −2 against the rest, Wet −6 to resist cold and electricity.
+- Burning, Corrosive and Poisoned: resist the value as Physical at the start of each round (the GM's 🔥 button).""",
     "Firing modes and ammo": """**Firing modes and ammo**
 - SS, single shot: 1 round.
 - SA, semi-automatic: 2 rounds, -2 Attack Rating, +1 DV.
@@ -69,16 +77,22 @@ Overflow heals first. Each method works once per set of injuries.
 - Drain: resist the spell's Drain Value with Willpower + tradition attribute (Hermetic: Logic; Shamanic: Charisma). Drain is Stun unless the Drain Value is higher than your Magic, then Physical.
 - Amp Up (combat spells): +1 DV for +2 drain. Increase Area: +2 m radius for +1 drain.
 - Indirect combat spells do Magic/2 + net hits and are soaked with Body; direct spells do net hits and can't be soaked.
-- Sustaining a spell: -2 dice on other tests.
+- Sustaining a spell: -2 dice on every other test for each spell (Focused Concentration makes some free). Sustained spells cast from the dice roller are tracked on the Magic tab until you drop them.
+- Counterspelling: a magician protecting the target adds their Sorcery to the Defense test against a spell (pick the protector in the attack dialog).
+- Astral combat: Astral + Willpower against Intuition + Logic; DV is half the attacker's Charisma (a spirit's Force), Stun, resisted with Willpower.
 - Summoning: Conjuring + Magic vs Force x 2 dice; services = net hits; drain = the spirit's hits. Your spirits' total Force can't exceed Magic x 3.
 - Essence loss lowers Magic: -1 for each full point of Essence lost (rounded up).
 - Initiation: 10 + new grade Karma; each grade raises the Magic maximum by 1 and gives a metamagic.""",
     "Matrix": """**Matrix**
-- A cyberdeck gives Attack and Sleaze; Data Processing and Firewall come from your cyberjack (or commlink).
-- Matrix Attack Rating = Attack + Sleaze; Matrix Defense Rating = Data Processing + Firewall.
-- A device's Matrix condition monitor is 8 + Device Rating/2.
-- Programs run in the deck's program slots.
-- In ShadowGrid, the Matrix itself is played on a GridMap map.""",
+- A cyberdeck gives Attack and Sleaze; Data Processing and Firewall come from your cyberjack (or commlink, or RCC).
+- Matrix Attack Rating = Attack + Sleaze; Matrix Defense Rating = Data Processing + Firewall. The side 4+ ahead gains Edge (2 per round at most).
+- Legal actions use Electronics; illegal ones (hacking) use Cracking. Every action and its test is in the Matrix actions list.
+- Devices and hosts defend with their rating x 2. In the dice roller, give the target's rating and ShadowGrid rolls its defense.
+- Overwatch Score: on every illegal action the defender's hits are added (+1 when a hacking program helps). At 40 the GOD converges: the device is bricked, you are dumped (dumpshock in VR: 3 Stun cold-sim, 3 Physical hot-sim, resisted with Willpower) and your location is reported. The GM sees the score; you only know it after Check Overwatch Score.
+- A device's Matrix condition monitor is 8 + Device Rating/2; every 3 boxes is −1 die on Matrix actions; full, it's bricked. A technomancer's living persona takes Matrix damage on the Stun track.
+- Data Spike: half your Attack (round up) + net hits Matrix damage, resisted with Firewall. Tarpit: 1 + net hits.
+- IC uses the host rating x 2 for its tests and Defense. See the IC topics.
+- Noise: −1 per point (distance, walls, jamming).""",
     "Technomancers": """**Technomancers**
 - Living persona: Attack = Charisma, Sleaze = Intuition, Data Processing = Logic, Firewall = Willpower.
 - Threading a complex form: Electronics + Resonance (Resonance Spike uses Cracking). Fading: resist the form's Fade Value with Willpower + Logic; Physical if it exceeds Resonance.
@@ -86,9 +100,22 @@ Overflow heals first. Each method works once per set of injuries.
 - Submersion: 10 + new grade Karma; each grade raises the Resonance maximum and gives an echo.""",
     "Rigging and vehicles": """**Rigging and vehicles**
 - Vehicles and drones have Handling, Acceleration, Speed Interval, Top Speed, Body, Armor, Pilot and Sensor.
-- A vehicle's condition monitor is 8 + Body/2; Handling worsens by 1 every 3 boxes; it breaks down when full.
-- A control rig adds its rating to vehicle tests while jumped in.
-- Drones run autosofts in slots equal to half their Pilot (round up).""",
+- Control: at the controls Piloting + Reaction; by remote (commlink or RCC) Piloting + Logic; jumped in (control rig) Piloting + Intuition + the rig's rating, which also lowers every vehicle test's threshold by its rating.
+- A drone on its own rolls Pilot + the matching autosoft (Maneuvering, Targeting, Clearsight, Evasion, Stealth, Electronic Warfare).
+- Mounted weapons use Engineering (Gunnery): + Agility by hand, + Logic by remote or jumped in.
+- A vehicle's condition monitor is 8 + Body/2 (one track); every 3 boxes is −1 on its tests.
+- Defense Rating: the driver's Piloting (a drone's Pilot) + Armor. Damage is resisted with Body. Stun with a DV up to the Body does nothing; stronger Stun counts as Physical.
+- Ramming uses the vehicle as a weapon: Piloting test, DV = its Body + net hits.
+- On the map: every vehicle and drone is an NPC template, and a runner's own vehicle can be placed as a marker that shares its damage with their sheet.""",
+    "Toxins, drugs and diseases": """**Toxins, drugs and diseases**
+- Exposure: resist with Body + Willpower; each hit lowers the Power by 1. Whatever Power is left applies.
+- Damage (Stun or Physical) equals the Power left; effects add statuses: Nausea (Nauseated), Disorientation (Dazed), Paralysis (Immobilized), ongoing damage (Poisoned).
+- Drugs: their bonuses last for the duration, then the crash applies. Taking a dose uses one up from your gear.
+- Some substances call for an addiction test (Body + Willpower against a threshold). Failing gives the Addiction quality, or raises its level.
+- The GM keeps the game's list of substances (the Companion's are built in) and exposes runners from their sheet.""",
+    "Reputation and Heat": """**Reputation and Heat**
+- Reputation is what the street thinks of you; Heat is how much attention the authorities pay you.
+- Both are set by the GM; every change is noted in the table log.""",
     "Availability and contacts": """**Availability and contacts**
 - Every item has an Availability (usually 1-6, up to 9). (L) needs a license; (I) is illegal.
 - During character creation the limit is Availability 6.
@@ -111,9 +138,9 @@ Overflow heals first. Each method works once per set of injuries.
 
 ACTIONS = {
     "Minor": ["Activate/Deactivate Focus", "Avoid Incoming", "Block", "Call a Shot", "Change Device Mode", "Command Drone",
-              "Command Spirit", "Dismiss Spirit", "Dodge", "Drop Object", "Drop Prone", "Hit the Dirt", "Intercept", "Move",
+              "Command Spirit", "Dismiss Spirit", "Dodge", "Drop Object", "Drop Prone", "Hit the Dirt", "Move",
               "Multiple Attacks", "Quick Draw", "Reload Smartgun", "Shift Perception", "Stand Up", "Take Aim", "Take Cover", "Trip"],
-    "Major": ["Assist", "Astral Projection", "Attack", "Banish Spirit", "Cast Spell", "Cleanse", "Counterspell", "Full Defense",
+    "Major": ["Assist", "Astral Projection", "Attack", "Banish Spirit", "Cast Spell", "Cleanse", "Counterspell", "Full Defense", "Intercept",
               "Manifest", "Observe in Detail", "Pick Up/Put Down Object", "Ready Weapon", "Reload Weapon", "Rigger Jump In",
               "Sprint", "Summon Spirit", "Use Simple Device", "Use Skill"],
 }
@@ -124,6 +151,7 @@ ACTION_NOTES = {
     "Hit the Dirt": "+2 dice on the defense test, then you're Prone (-2 on active skills until you stand up).",
     "Take Aim": "+1 die on your next attack; once per round, carries over while you keep aiming.",
     "Call a Shot": "With an attack: -4 dice for +2 DV.", "Multiple Attacks": "Split your pool between several targets.",
+    "Intercept": "Interrupt: a melee attack on an enemy moving through your reach. Counts as your Attack Major Action.",
     "Reload Weapon": "Reload a weapon (Major). Reload Smartgun does it as a Minor.",
     "Drop Prone": "You gain the Prone status.", "Take Cover": "You gain Cover I-IV from what is around you.",
     "Attack": "Make one attack with a weapon or unarmed.", "Cast Spell": "Cast one spell.", "Summon Spirit": "Call a spirit.",
@@ -186,6 +214,29 @@ def build():
             kids.append({"title": t, "children": []})
         act.append({"title": f"{kind} actions", "children": kids})
     tree.append({"title": "Actions", "children": act})
+    # the Matrix: actions, IC, Edge actions
+    mx_kids = []
+    for a in MX.MATRIX_ACTIONS.values():
+        t = f"{a['name']} (Matrix)"
+        test = f"{a['pool'][0]} + {a['pool'][1]}" if a.get("pool") else "no test"
+        dfn = (" vs " + " + ".join(a["defense"])) if isinstance(a.get("defense"), list) else (" vs rating x 2" if a.get("defense") == "rating" else (f" vs {a['defense']} dice" if a.get("defense") else ""))
+        topics[t] = (f"**{a['name']}**\n{'Legal' if a['legal'] else 'Illegal'} · {a['action']} action · access: {a['access']}\n"
+                     f"- Test: {test}{dfn}\n- {a['effect']}" + ("" if a["legal"] else "\n- Illegal: the defender's hits raise your Overwatch Score."))
+        mx_kids.append({"title": t, "children": []})
+    ic_kids = []
+    for name, eff in MX.IC.items():
+        t = f"{name} (IC)"
+        topics[t] = f"**{name}**\nIC. Uses the host rating x 2 for its tests and Defense.\n- {eff}"
+        ic_kids.append({"title": t, "children": []})
+    topics["Matrix Edge actions"] = "**Matrix Edge actions**\nNeed a cyberjack or Resonance.\n" + "\n".join(f"- {n} ({k} Edge): {d}" for k, n, d in MX.MATRIX_EDGE)
+    tree.append({"title": "Matrix", "children": [{"title": "Matrix actions", "children": mx_kids}, {"title": "IC", "children": ic_kids},
+                                                  {"title": "Matrix Edge actions", "children": []}]})
+    soft_kids = []
+    for name, d in RIG.AUTOSOFTS.items():
+        t = f"{name} (autosoft)"
+        topics[t] = f"**{name} autosoft**\nRating 1-{RIG.AUTOSOFT_RATING[1]}.\n- {d}"
+        soft_kids.append({"title": t, "children": []})
+    tree.append({"title": "Rigging", "children": [{"title": "Autosofts", "children": soft_kids}]})
     # characters
     mt = []
     groups_mt = {}
