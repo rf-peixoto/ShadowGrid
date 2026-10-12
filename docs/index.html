@@ -127,8 +127,8 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       </div>
     </div>
     <figure>
-      <a class="shot" href="img/gm-play-isometric.png"><img src="img/gm-play-isometric.png" width="1611" height="804" alt="An isometric map of a generated office complex with numbered rooms and a runner's token"></a>
-      <figcaption>A generated map in the isometric view, in the style of the SNES Shadowrun.</figcaption>
+      <a class="shot" href="img/gm-play-isometric.png"><img src="img/gm-play-isometric.png" width="1440" height="900" alt="Play mode in the isometric view with the side panel and dice panel tucked away: the map and the initiative strip above it"></a>
+      <figcaption>Play mode with the side panel and the dice tucked away: just the map and the initiative strip.</figcaption>
     </figure>
   </div>
 </header>
@@ -141,9 +141,11 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <li><a href="#players">For players</a></li>
       <li class="sub"><a href="#join">Join a game</a></li>
       <li class="sub"><a href="#build">Build your runner</a></li>
+      <li class="sub"><a href="#variants">Metavariants and Infected</a></li>
       <li class="sub"><a href="#skills">Skills and knowledge</a></li>
       <li class="sub"><a href="#contacts">Contacts</a></li>
       <li class="sub"><a href="#gear">Store, gear and ammo</a></li>
+      <li class="sub"><a href="#packs">PACKs</a></li>
       <li class="sub"><a href="#magic">Magic and resonance</a></li>
       <li class="sub"><a href="#matrix">Matrix</a></li>
       <li class="sub"><a href="#map">On the map</a></li>
@@ -154,6 +156,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <li class="sub"><a href="#maps">Build maps</a></li>
       <li class="sub"><a href="#invite">Invite players</a></li>
       <li class="sub"><a href="#review">Approve sheets</a></li>
+      <li class="sub"><a href="#screen">The map screen</a></li>
       <li class="sub"><a href="#play">Run the session</a></li>
       <li class="sub"><a href="#combat">Combat</a></li>
       <li class="sub"><a href="#contracts">Give out runs</a></li>
@@ -170,6 +173,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <p>There are two kinds of accounts. The <strong>game master</strong> runs the server and signs in as <code>admin</code>. <strong>Players</strong> join through an invite link, and their account only opens the game they were invited to.</p>
       <p>A game holds its maps, its runners and the runs (contracts) the GM hands out. Everything updates live: when the GM opens a door, resolves an attack or pays out a run, players see it within a second or two without reloading.</p>
       <p>The rules follow the <strong>Shadowrun Sixth World core rulebook</strong>: metatype limits and abilities, skills with specializations and expertise, every weapon, armor, implant, vehicle, spell, power, spirit and complex form from the book, dice pools with the Wild Die and Edge, Attack Rating against Defense Rating, ammo, drain and fading, healing, and NPCs by Professional Rating. The app does the arithmetic; the table keeps the judgment calls.</p>
+      <p>It also includes the <strong>Sixth World Companion</strong> content that works with the core rules: metavariants, metasapients and the Infected as playable characters, the new qualities with their effects worked out on the sheet, contact archetypes, and every gear PACK in the store. The Companion's optional rules (alternate creation systems, changed initiative and so on) are not used.</p>
     </section>
 
     <!-- ================================================================ PLAYERS -->
@@ -200,7 +204,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <figcaption>The Overview: identity, lifestyle, quick stats (including your actions per round), Karma and nuyen, and the history of every change.</figcaption>
       </figure>
       <ul>
-        <li><strong>Metatype</strong> sets your attribute maximums and gives its abilities for free: elves and orks see in low light, dwarfs and trolls see heat, dwarfs resist toxins, orks and trolls are Built Tough, trolls have dermal deposits.</li>
+        <li><strong>Metatype</strong> sets your attribute maximums and gives its abilities for free: elves and orks see in low light, dwarfs and trolls see heat, dwarfs resist toxins, orks and trolls are Built Tough, trolls have dermal deposits. The list also has every metavariant and metasapient, grouped under its base metatype (see <a href="#variants">below</a>).</li>
         <li><strong>Magic / Resonance</strong>: Mundane, Magician, Aspected Magician, Adept, Mystic Adept or Technomancer. Magicians pick a tradition (Hermetic drains with Logic, Shamanic with Charisma) and may follow a mentor spirit.</li>
         <li><strong>Role</strong> is just a label, such as Street Samurai or Decker. It gives no bonuses in Sixth World.</li>
       </ul>
@@ -211,13 +215,39 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         </figure>
         <figure>
           <a class="shot" href="img/player-qualities.png"><img src="img/player-qualities.png" width="1440" height="812" alt="Qualities with the elf's racial Low-Light Vision and chosen qualities" loading="lazy"></a>
-          <figcaption>Qualities. Racial abilities are listed first; leveled qualities have − and + buttons.</figcaption>
+          <figcaption>Qualities. Racial abilities are listed first; leveled qualities have − and + buttons. Each quality is tagged with its source (core book, Companion, metagenic, quality path).</figcaption>
         </figure>
       </div>
+      <p>Qualities that change numbers are applied for you, Companion ones included: Augmentation Acclimation and Cyborg (more Essence room), Cyber Psychosis, Cyberjack Maximization, Favored Weapon, Injury Prone, Polyglot, Twitchy, All Business and Trust Issues (Loyalty capped at 3), and the metagenic qualities: Bark, Granite and Rhino (armor), Shiva Arms (extra arms and Minor actions), Celerity and Satyr Legs (movement), Neoteny, and claws, horns, fangs, quills and tails as natural weapons. Racial-only traits can't be picked by other metatypes.</p>
       <p>Derived values are calculated for you: Composure, Judge Intentions, Memory, Lift/Carry, movement, Initiative (plus Matrix and astral initiative), condition monitors, wound modifiers and Defense Rating.</p>
       <div class="note warn">
         <p><strong>After approval</strong> you improve with Karma: an attribute or skill costs the new rating × 5, a specialization or expertise 5, a knowledge skill 3, a spell or complex form 5, and a positive quality twice its cost. Purchases are final. Metatype, magic type, tradition and aspect can only be changed by the GM.</p>
       </div>
+
+
+      <h3 id="variants">Metavariants, metasapients and the Infected</h3>
+      <p>The <strong>Metatype</strong> menu on the Overview lists each base metatype with its variants, then the metasapients. A variant or metasapient costs Karma at character creation, the amount shown in the menu, and you confirm before it's taken. It brings its own attribute maximums and racial qualities.</p>
+      <ul>
+        <li><strong>Metavariants</strong> (20): dwarf (Duende, Gnome, Hanuman, Koborokuru, Menehune), elf (Dalakitnon, Dryad, Nocturna, Wakyambi, Xapiri Thëpë), human (Nartaki, Valkyrie), ork (Hobgoblin, Ogre, Oni, Satyr) and troll (Cyclops, Fomorian, Giant, Minotaur). A Minotaur's horns become a natural weapon in the dice roller and in attacks, and a Nartaki's extra arms add Minor actions.</li>
+        <li><strong>Metasapients</strong>: Centaur, Merrow, Naga, Pixie and Sasquatch, with their movement, size, natural weapons and armor.</li>
+      </ul>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/player-infected.png"><img src="img/player-infected.png" width="942" height="279" alt="HMHVV card of a ghoul: Strain III, powers, weaknesses and the optional powers list" loading="lazy"></a>
+          <figcaption>The HMHVV card: pick an Infected expression, then buy optional powers.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/wiki-metavariant.png"><img src="img/wiki-metavariant.png" width="1440" height="900" alt="Wiki topic for the Minotaur: Karma cost, attribute maximums and racial qualities" loading="lazy"></a>
+          <figcaption>Every variant has a wiki topic with its maximums and qualities.</figcaption>
+        </figure>
+      </div>
+      <p><strong>Infected (HMHVV)</strong>: the HMHVV card on the Overview turns a character into one of 18 Infected (ghoul, vampire, banshee, wendigo and the rest), if their base metatype allows it. The Karma cost is charged, attribute maximums change, and the character becomes Awakened and dual-natured. Technomancers can't be Infected.</p>
+      <ul>
+        <li><strong>Strain II and III</strong> set Essence to 5 and Magic maximum to 5 + initiate grade. <strong>Strain I</strong> Essence goes up and down with feeding, so the GM sets it with <span class="ui">Set…</span>.</li>
+        <li>Powers and weaknesses are listed on the card. Optional powers are bought with Karma; one is free at creation when the expression allows it.</li>
+        <li>The Infected pay 30% more for their lifestyle. The two free physical and two free mental attribute points are added by hand (or by the GM).</li>
+      </ul>
+      <p><strong>Changelings</strong> use the metagenic qualities in the Qualities section (positive and negative), since SURGE only changes your qualities.</p>
 
       <h3 id="skills">Skills and knowledge</h3>
       <p>Each skill shows its rank, a <strong>specialization</strong> (+2 dice when it applies) and an <strong>expertise</strong> (+3). Expertise grows out of a specialization once the skill is at rank 5: <span class="ui">Make expertise</span> turns your specialization into expertise and frees the slot for a new specialization. The pool on the right is what you roll. Some skills, like Astral or Cracking, can't be used untrained.</p>
@@ -232,7 +262,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
 
       <h3 id="contacts">Contacts</h3>
       <p>Contacts are how you get gear. Each contact has a <strong>Connection</strong> and a <strong>Loyalty</strong> (1-12) and a list of what they can <strong>source</strong>: weapons, armor, cyberware, magic, vehicles, and so on. A contact can get an item whose Availability is <em>lower</em> than their Connection.</p>
-      <p>The contact's <strong>type</strong> already sets what they source: a fixer finds anything, an arms dealer weapons, ammo and armor, a street doc medical gear, cyberware and bioware, a talismonger magic, a decker Matrix gear, electronics and IDs, a mechanic vehicles, drones and tools, and so on. Tick extra boxes for anything else they can get you.</p>
+      <p>The contact's <strong>type</strong> already sets what they source: a fixer finds anything, an arms dealer weapons, ammo and armor, a street doc medical gear, cyberware and bioware, a talismonger magic, a decker Matrix gear, electronics and IDs, a mechanic vehicles, drones and tools, and so on. Tick extra boxes for anything else they can get you. The Companion's contact archetypes (Arms Dealer, Bartender, Deckmeister, Fence, Mr. Johnson, Street Doc, Talismonger and the rest) are in the type list too, with what each one sources. All Business and Trust Issues cap a runner's Loyalty at 3.</p>
       <div class="pair">
         <figure>
           <a class="shot" href="img/player-contact-form.png"><img src="img/player-contact-form.png" width="720" height="660" alt="New contact form: a street doc already sources Medical, Cyberware and Bioware, with Drones ticked as an extra" loading="lazy"></a>
@@ -247,13 +277,13 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h3 id="gear">Store, gear and ammo</h3>
       <p>The <span class="ui">Store</span> tab has every item from the core book, by category: weapons, ammunition and explosives, accessories, armor, electronics, cyberdecks and software, IDs, tools, security gear, medical supplies, cyberware, bioware, magic items, vehicles and drones. Each card shows the game stats, the Availability (L means a license is needed, I means illegal) and the price. Rated items have a rating box, implants a grade (used, alphaware, betaware, deltaware), and ammo is sold in boxes of 10.</p>
       <figure>
-        <a class="shot" href="img/player-store.png"><img src="img/player-store.png" width="1440" height="900" alt="Store with blades: stats, availability, quantity and Buy buttons" loading="lazy"></a>
-        <figcaption><span class="ui">Only what I can get</span> hides what your contacts can't find.</figcaption>
+        <a class="shot" href="img/player-store.png"><img src="img/player-store.png" width="1440" height="900" alt="Store showing ranged weapons as compact cards with stats, availability, quantity and Buy buttons" loading="lazy"></a>
+        <figcaption><span class="ui">Only what I can get</span> hides what your contacts can't find. The search box and categories stay at the top while you scroll.</figcaption>
       </figure>
       <p>After approval, legal items up to Availability 2 are always on sale; everything else needs a contact. Untick the filter to see what a new contact would unlock: locked cards say exactly what kind of contact you'd need.</p>
       <figure>
         <a class="shot" href="img/player-store-locked.png"><img src="img/player-store-locked.png" width="1440" height="900" alt="Cyberware cards locked with the reason: needs a contact for Cyberware with a higher Connection" loading="lazy"></a>
-        <figcaption>Locked items name the contact they need. Trolls pay 10% more for everything, dwarfs for armor.</figcaption>
+        <figcaption>Locked items name the contact they need. Trolls pay 10% more for everything, dwarfs for armor. Bark and Fitted Gear change these markups.</figcaption>
       </figure>
       <p>Your items appear in the <strong>Gear</strong> section of your sheet, grouped by category:</p>
       <ul>
@@ -267,6 +297,19 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/player-gear.png"><img src="img/player-gear.png" width="1440" height="900" alt="Gear section with an equipped katana, a pistol with 3 of 15 rounds loaded and ammo stacks" loading="lazy"></a>
         <figcaption>A pistol with 3 of its 15 rounds left, two ammo stacks and grenades.</figcaption>
       </figure>
+
+
+      <h3 id="packs">PACKs</h3>
+      <p>The <span class="ui">PACKs</span> category has every gear PACK from the Sixth World Companion: character PACKs (Shadowrunner Starter, Dirt Poor, Street Samurai and so on), weapon PACKs, armor, Matrix, magic, vehicle and drone PACKs, and augmentation PACKs. Open <span class="ui">Contents</span> to see what's inside, then <span class="ui">Buy PACK</span> adds every item for the PACK's price.</p>
+      <figure>
+        <a class="shot" href="img/player-store-packs.png"><img src="img/player-store-packs.png" width="1440" height="900" alt="Store with the PACKs category open: character PACKs with descriptions, contents lists, prices and Buy PACK buttons" loading="lazy"></a>
+      </figure>
+      <ul>
+        <li>Each item in a PACK has to be reachable on its own: after approval, a PACK with a cyberdeck still needs a contact who sources cyberdecks.</li>
+        <li>Augmentation PACKs can be bought in the grades the book lists, at the grade's price and Essence.</li>
+        <li>Ammo goes with the weapon it was bought for, and items in the gear list say which PACK they came from. Their sell value is the PACK's price split over the items.</li>
+        <li>A few book items that aren't in the core store (drugs, some vehicle mods, the disguise kit) are added as custom items.</li>
+      </ul>
 
       <h3 id="magic">Magic and resonance</h3>
       <p>Awakened characters get a <strong>Magic</strong> section: Magic and its maximum, spell Attack Rating, drain pool and astral initiative; spells and rituals from the book (with drain values); adept powers with levels and a Power Point counter; foci to bond; spirits; and initiation with metamagics.</p>
@@ -296,9 +339,20 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
 
       <h3 id="map">On the map</h3>
       <p>Once the GM places your token, the <span class="ui">Map</span> tab shows only what your runner has seen. The fog lifts as you explore, and closed doors block your sight. Icons above tokens and enemies show their statuses, such as Prone or Burning.</p>
+      <p>The map takes most of the screen. Around it:</p>
+      <ul>
+        <li><strong>Side panel</strong> (left): your condition monitors, Edge and what's around you (doors, people nearby, travel). Hide it with <span class="ui">‹</span> or <kbd>[</kbd>.</li>
+        <li><strong>Initiative strip</strong> (top): appears when the GM shares the order. Whoever is acting glows, your own chip is outlined, and a short note tells you when it's your turn.</li>
+        <li><strong>Dice panel</strong> (bottom): the roller on the left, the table log on the right. Collapse it with <span class="ui">▾</span> or <kbd>]</kbd>; the header still shows the last roll.</li>
+        <li><span class="ui">View</span> (top right of the map): isometric view and legend.</li>
+      </ul>
       <figure>
-        <a class="shot" href="img/player-map.png"><img src="img/player-map.png" width="1440" height="900" alt="Player map in the isometric view with the initiative order, condition monitors and the dice roller with a pistol selected" loading="lazy"></a>
-        <figcaption>During combat the sidebar shows the initiative order when the GM shares it. Enemies the GM keeps hidden aren't listed.</figcaption>
+        <a class="shot" href="img/player-map.png"><img src="img/player-map.png" width="1440" height="900" alt="Player map screen: side panel with condition monitors, the initiative strip with the current combatant highlighted, the isometric map and the dice panel with a pistol selected" loading="lazy"></a>
+        <figcaption>The player's map screen during a fight. The app remembers what you collapsed.</figcaption>
+      </figure>
+      <figure>
+        <a class="shot" href="img/player-strip.png"><img src="img/player-strip.png" width="1140" height="55" alt="Initiative strip: round 1, Ganger acting, Lieutenant, Ana (you) and Cass Wandering Horse" loading="lazy"></a>
+        <figcaption>The strip. Enemies the GM keeps hidden aren't listed.</figcaption>
       </figure>
       <ul>
         <li><strong>Move</strong>: drag your token, click any room you can reach (a dotted line shows the path), or use the arrow keys.</li>
@@ -309,10 +363,10 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       </ul>
 
       <h3 id="dice">Dice, combat and healing</h3>
-      <p>The roller is in the map sidebar and in the <strong>Combat</strong> section of your sheet. Pick a pool from your sheet: a skill (with specialization or expertise), a weapon, a spell, Defense, Damage resistance and more. Your wound modifier is applied automatically.</p>
+      <p>The roller is in the dice panel under the map and in the <strong>Combat</strong> section of your sheet. Pick a pool from your sheet: a skill (with specialization or expertise), a weapon, a spell, Defense, Damage resistance and more. Your wound modifier is applied automatically. Natural weapons (claws, horns, bite) from your metatype or Infected powers are in the list too.</p>
       <figure>
-        <a class="shot" href="img/player-roller.png"><img src="img/player-roller.png" width="942" height="586" alt="Dice roller with a pistol in semi-automatic mode at Near range, AR 8, DV 4P and 1 of 15 rounds loaded, a 6-hit result and Edge Boost buttons, next to the table log" loading="lazy"></a>
-        <figcaption>Attacking with a pistol: pick the firing mode and range to see the Attack Rating and damage. The rounds are spent when you roll.</figcaption>
+        <a class="shot" href="img/player-roller.png"><img src="img/player-roller.png" width="1140" height="343" alt="Dice panel: a pistol in semi-automatic mode at Near range, AR 8, DV 4P, 11 of 15 rounds loaded, the Attack button, and the table log with the 8-hit result" loading="lazy"></a>
+        <figcaption>Attacking with a pistol: pick the firing mode and range to see the Attack Rating and damage. The rounds are spent when you roll, and the Attack button stays in view.</figcaption>
       </figure>
       <ul>
         <li><strong>Firing modes</strong>: single shot uses 1 round; semi-auto 2 (−2 AR, +1 DV); burst 4 (−4 AR, +2 DV); full auto 10 (−6 AR).</li>
@@ -337,7 +391,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/player-runs.png"><img src="img/player-runs.png" width="1458" height="387" alt="An active run with a progress bar, three tasks and a reward" loading="lazy"></a>
       </figure>
       <p>Your <strong>lifestyle</strong> is charged by the GM at the start of each month (Street is free, Squatter 500¥, Low 2,000¥, Middle 5,000¥, High 10,000¥, Luxury 100,000¥). If you can't pay, your nuyen goes negative: you're in debt.</p>
-      <p>The <span class="ui">Wiki</span> tab has rules summaries, statuses, actions, and every item, spell, power, spirit, complex form, quality and NPC in the game, with a search box.</p>
+      <p>The <span class="ui">Wiki</span> tab has rules summaries, statuses, actions, and every item, PACK, spell, power, spirit, complex form, quality, metatype, metavariant, Infected expression and NPC in the game, with a search box.</p>
       <figure>
         <a class="shot" href="img/wiki.png"><img src="img/wiki.png" width="1606" height="601" alt="Wiki with a search box and rules topics" loading="lazy"></a>
       </figure>
@@ -374,7 +428,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <figcaption>The generator.</figcaption>
         </figure>
         <figure>
-          <a class="shot" href="img/gm-map-editor.png"><img src="img/gm-map-editor.png" width="1912" height="902" alt="Map editor in Edit mode with paint tools and a generated map" loading="lazy"></a>
+          <a class="shot" href="img/gm-map-editor.png"><img src="img/gm-map-editor.png" width="1440" height="900" alt="Map editor in Edit mode with the Build panel of drawing tools and the map" loading="lazy"></a>
           <figcaption>The editor in Edit mode.</figcaption>
         </figure>
       </div>
@@ -394,8 +448,8 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h3 id="review">Approve character sheets</h3>
       <p>A submitted sheet shows a <span style="color:var(--warn)">Waiting for approval</span> tag on the home page, the game page and in the map editor. A runner with new or changed contacts shows how many are waiting for you to confirm.</p>
       <figure>
-        <a class="shot" href="img/gm-runners.png"><img src="img/gm-runners.png" width="1440" height="576" alt="Runners table with a sheet waiting for approval, a contact to confirm, condition bars, Edge, Karma and nuyen, and the buttons to award, refresh Edge, charge lifestyle and set the store's buy-back rate" loading="lazy"></a>
-        <figcaption>The Runners tab. The buttons at the top award Karma and nuyen, refresh Edge, charge the monthly lifestyle and set how much the store pays for sold gear.</figcaption>
+        <a class="shot" href="img/gm-runners.png"><img src="img/gm-runners.png" width="1440" height="620" alt="Runners page: a Between runs toolbar with Award Karma / Nuyen, Refresh everyone's Edge, Charge monthly lifestyle and the store's buy-back rate, a sheet waiting for approval, and the runners table" loading="lazy"></a>
+        <figcaption>The Runners tab. The <em>Between runs</em> bar awards Karma and nuyen, refreshes Edge, charges the monthly lifestyle and sets how much the store pays for sold gear.</figcaption>
       </figure>
       <div class="pair">
         <figure>
@@ -411,10 +465,25 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><span class="ui">Approve sheet</span> locks the character into normal play, fills their Edge and confirms their contacts.</li>
         <li><span class="ui">Send back…</span> returns it to draft with a note the player sees.</li>
         <li>As GM you can change anything on any sheet for free. <span class="ui">Set Karma / Nuyen / Edge…</span> sets exact values, including initiation and submersion grades.</li>
-        <li><span class="ui">Give an item…</span> (in Gear) adds anything from the store, at any rating, grade and quantity, or a custom item. No nuyen and no contact needed.</li>
+        <li><span class="ui">Give an item…</span> (in Gear) adds anything from the store, at any rating, grade and quantity, a whole PACK (in any of its grades), or a custom item. No nuyen and no contact needed.</li>
+        <li>On the Overview you can also make a runner Infected, add their optional powers and set a Strain I character's Essence.</li>
       </ul>
       <figure>
-        <a class="shot" href="img/gm-give.png"><img src="img/gm-give.png" width="1440" height="1000" alt="Give an item dialog with the Cyberware category open and Wired Reflexes 2 selected, with a grade option" loading="lazy"></a>
+        <a class="shot" href="img/gm-give.png"><img src="img/gm-give.png" width="1440" height="900" alt="Give an item dialog with the PACKs category, Cybereyes PACK B selected and the Alphaware grade" loading="lazy"></a>
+        <figcaption>Giving an augmentation PACK in alphaware.</figcaption>
+      </figure>
+
+      <h3 id="screen">The map screen</h3>
+      <p>The map editor is built around the map. Everything else sits at the edges and can be tucked away:</p>
+      <ul>
+        <li><strong>Side panel</strong> (left). In Edit mode it holds the drawing tools. In Play mode it has three tabs: <span class="ui">Map</span> (viewing as, tools, fog, snapshots), <span class="ui">Runners</span> (each runner's condition, Edge, statuses and attack buttons) and <span class="ui">Selected</span> (the inspector of whatever you clicked; a dot marks it when something is selected). <span class="ui">‹</span> or <kbd>[</kbd> hides it.</li>
+        <li><strong>Combat strip</strong> (top of the map): the initiative order and the combat buttons, always in view during a fight.</li>
+        <li><strong>Dice panel</strong> (bottom): your roller and the table log. <span class="ui">▾</span> or <kbd>]</kbd> collapses it to one line with the last roll.</li>
+        <li><span class="ui">View</span> (top right of the map): isometric view, legend and room names.</li>
+      </ul>
+      <figure>
+        <a class="shot" href="img/gm-combat.png"><img src="img/gm-combat.png" width="1440" height="900" alt="GM Play mode: Runners tab in the side panel, the combat strip with Ganger acting, the isometric map and the dice panel with the table log" loading="lazy"></a>
+        <figcaption>Play mode during combat, with the Runners tab open.</figcaption>
       </figure>
 
       <h3 id="play">Run the session</h3>
@@ -424,28 +493,32 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Reveal</strong> and <strong>Hide</strong>: paint a runner's fog with a brush, or reveal a whole room. The same buttons exist under <em>Everyone</em> for the whole party.</li>
         <li><strong>Doors</strong>: click to open or close, and <kbd>Shift</kbd>+click to lock.</li>
         <li><strong>Token</strong>: place or move the selected runner's token.</li>
-        <li><strong>Markers</strong> and <strong>Select</strong>: click an enemy to open its inspector: its NPC stat block, its condition monitor, its statuses and attack buttons.</li>
-        <li><strong>Statuses</strong>: under each runner in the sidebar and in a marker's inspector, add Prone, Burning, Zapped, Cover and the rest. Their icons appear on the map for everyone. Only you can set and clear them.</li>
+        <li><strong>Markers</strong> and <strong>Select</strong>: click an enemy to open its inspector in the <span class="ui">Selected</span> tab: its NPC stat block, its condition monitor, its statuses and attack buttons.</li>
+        <li><strong>Statuses</strong>: under each runner in the Runners tab and in a marker's inspector, add Prone, Burning, Zapped, Cover and the rest. Their icons appear on the map for everyone. Only you can set and clear them.</li>
         <li><strong>Snapshots</strong>: save and restore the whole game state (positions, exploration and doors).</li>
       </ul>
       <figure>
-        <a class="shot" href="img/gm-npc-marker.png"><img src="img/gm-npc-marker.png" width="1440" height="1000" alt="Marker inspector of a Sons of Sauron Brute grunt with 9 of 10 boxes filled, a May flee warning, Burning and Prone statuses and attack buttons" loading="lazy"></a>
-        <figcaption>An NPC from the core-book templates. Grunts have a single monitor, take −1 die per 2 boxes and may flee once their damage exceeds their Professional Rating.</figcaption>
+        <a class="shot" href="img/gm-npc-marker.png"><img src="img/gm-npc-marker.png" width="1440" height="900" alt="Selected tab with an Eye-Fiver Go-ganger marker: stat block, weapons, a condition monitor with 5 of 9 boxes, a May flee warning, Prone status and attack buttons" loading="lazy"></a>
+        <figcaption>An NPC from the templates in the Selected tab. Grunts have a single monitor, take −1 die per 2 boxes and may flee once their damage exceeds their Professional Rating.</figcaption>
       </figure>
-      <p><strong>NPC templates</strong> cover every grunt in the core book from Professional Rating 0 to 10, the critters, and spirits of any Force. <span class="ui">Apply NPC template…</span> in the inspector turns any marker into one.</p>
+      <p><strong>NPC templates</strong> cover every grunt in the core book from Professional Rating 0 to 10, the critters, spirits of any Force, the Companion's contact archetypes (for when a contact has to fight or be rolled for) and the Infected. <span class="ui">Apply NPC template…</span> in the inspector turns any marker into one.</p>
 
       <h3 id="combat">Combat</h3>
-      <p>The <strong>Combat</strong> panel in Play mode runs the initiative tracker. <span class="ui">Start combat…</span> picks the runners and enemies on this map and rolls the NPCs' initiative. Players' own initiative rolls land in the order automatically.</p>
+      <p>The <strong>combat strip</strong> above the map runs the initiative tracker. <span class="ui">Start combat…</span> picks the runners and enemies on this map and rolls the NPCs' initiative. Players' own initiative rolls land in the order automatically.</p>
       <figure>
-        <a class="shot" href="img/gm-combat.png"><img src="img/gm-combat.png" width="1440" height="1000" alt="Combat panel with round 1, four combatants with initiative scores and actions, Show to players ticked, and Next turn, Roll NPCs, New round, Add, Attack and End buttons" loading="lazy"></a>
-        <figcaption>The tracker: the current combatant is highlighted. Initiative isn't rerolled between rounds in Sixth World.</figcaption>
+        <a class="shot" href="img/gm-strip.png"><img src="img/gm-strip.png" width="1140" height="55" alt="Combat strip: round 1, the acting Ganger highlighted, three more combatants, Players see it ticked, and Roll NPCs, Add, New round, Attack, Next turn and End" loading="lazy"></a>
+        <figcaption>The strip: the combatant whose turn it is glows. Initiative isn't rerolled between rounds in Sixth World.</figcaption>
       </figure>
       <ul>
-        <li><strong>Show to players</strong> shares the order on their map. Enemies you mark <span class="ui">Hide</span> stay off their list until you click <span class="ui">Reveal</span>.</li>
-        <li>Each entry shows its actions (1 Major plus its Minor actions). Click a name to make it their turn and find them on the map; type a score to override it.</li>
-        <li><span class="ui">Next turn</span>, <span class="ui">New round</span>, <span class="ui">Roll NPCs</span>, <span class="ui">+ Add</span> (including custom combatants) and <span class="ui">End</span>.</li>
+        <li>Click a chip for its menu: set the initiative score, make it their turn, show them on the map, roll initiative, attack with them or attack them, hide or reveal an enemy, or remove them from combat.</li>
+        <li><span class="ui">Players see it</span> shares the order on their map. Hidden enemies stay off their strip until you reveal them.</li>
+        <li><span class="ui">Next turn ›</span> moves on; <span class="ui">Roll NPCs</span>, <span class="ui">+ Add</span> (including custom combatants), <span class="ui">New round</span> and <span class="ui">End</span> (with a confirmation) are next to it.</li>
       </ul>
-      <p><strong>Attacks</strong> are resolved by you, with every roll made by the server. Open <span class="ui">⚔ Attack…</span> from the tracker, a runner or a marker:</p>
+      <figure>
+        <a class="shot" href="img/gm-chip-menu.png"><img src="img/gm-chip-menu.png" width="1440" height="520" alt="Menu of the Ganger chip: initiative score 9, Make it their turn, Show on the map, Roll initiative, Attack with them, Attack them, Hide from players and Remove from combat" loading="lazy"></a>
+        <figcaption>A combatant's menu.</figcaption>
+      </figure>
+      <p><strong>Attacks</strong> are resolved by you, with every roll made by the server. Open <span class="ui">⚔ Attack…</span> from the strip (it starts with whoever is acting), a chip, a runner or a marker:</p>
       <div class="pair">
         <figure>
           <a class="shot" href="img/gm-attack.png"><img src="img/gm-attack.png" width="1440" height="1000" alt="Attack dialog: attacker, target, weapon, firing mode, range 11 cells about 22 meters Near, AR 8 versus DR 4 with a note that the attacker may gain 1 Edge" loading="lazy"></a>
@@ -473,10 +546,11 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
 
       <h3 id="rewards">Money, Karma and Edge</h3>
       <figure>
-        <a class="shot" href="img/gm-dice-log.png"><img src="img/gm-dice-log.png" width="1905" height="450" alt="GM roller with a label, threshold and hidden roll option, next to the table log" loading="lazy"></a>
-        <figcaption>The GM roller. The roll marked with a lock is hidden from players.</figcaption>
+        <a class="shot" href="img/gm-dice-log.png"><img src="img/gm-dice-log.png" width="1140" height="343" alt="GM dice panel with a label, threshold, Wild Die and hidden roll options, next to the table log" loading="lazy"></a>
+        <figcaption>The GM dice panel. Hidden rolls are marked with a lock and players don't see them.</figcaption>
       </figure>
       <ul>
+        <li>These are in the <em>Between runs</em> bar of the Runners tab.</li>
         <li><strong>Award Karma / Nuyen</strong>: give to one runner, several or everyone. Negative amounts take it away. Each award has a reason the runner sees in their history.</li>
         <li><strong>Charge monthly lifestyle</strong>: each runner pays their lifestyle (SINner and a suprathyroid gland cost more). Nuyen can go negative.</li>
         <li><strong>Store buys at …%</strong>: what players get when they sell gear.</li>
@@ -529,6 +603,13 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li>After approval: legal items up to 2 are always available; otherwise you need a confirmed contact who covers the goods with a Connection higher than the Availability.</li>
         <li>Implant grades: used (Essence ×1.1, price ×0.5, Availability −1), alphaware (×0.8, ×1.2, +1), betaware (×0.7, ×1.5, +2), deltaware (×0.5, ×2.5, +3).</li>
       </ul>
+      <h4>Sixth World Companion</h4>
+      <ul>
+        <li>Metavariants and metasapients cost Karma at creation (shown in the metatype menu). Changing back refunds it.</li>
+        <li>Infected cost Karma by expression; non-human bases may pay more and Awakened characters less, as the book says. Lifestyle costs ×1.3.</li>
+        <li>A PACK costs its listed price (or its grade price), and every item still has to be available to you.</li>
+        <li>Optional rules from the Companion are not used: creation stays on the core-book priority system, and initiative, Edge and contacts work as in the core book.</li>
+      </ul>
       <h4>Advancement after approval</h4>
       <table>
         <thead><tr><th>Karma</th><th>For</th></tr></thead>
@@ -555,6 +636,8 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <tr><td>Right-drag, or <kbd>Space</kbd> + drag</td><td>Pan</td></tr>
           <tr><td><kbd>F</kbd></td><td>Fit the whole map</td></tr>
           <tr><td><kbd>I</kbd></td><td>Toggle the isometric view</td></tr>
+          <tr><td><kbd>[</kbd></td><td>Hide or show the side panel</td></tr>
+          <tr><td><kbd>]</kbd></td><td>Collapse or open the dice panel</td></tr>
         </tbody>
       </table>
       <h4>Players</h4>
