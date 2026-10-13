@@ -139,6 +139,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
     <ol>
       <li><a href="#how">How it works</a></li>
       <li><a href="#players">For players</a></li>
+      <li class="sub"><a href="#connect">The connection check</a></li>
       <li class="sub"><a href="#join">Join a game</a></li>
       <li class="sub"><a href="#build">Build your runner</a></li>
       <li class="sub"><a href="#variants">Metavariants and Infected</a></li>
@@ -153,6 +154,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <li class="sub"><a href="#dice">Dice, combat, healing</a></li>
       <li class="sub"><a href="#runs">Runs and lifestyle</a></li>
       <li class="sub"><a href="#handouts">Handouts and recaps</a></li>
+      <li class="sub"><a href="#listen">Music</a></li>
       <li class="sub"><a href="#print">Print and files</a></li>
       <li><a href="#gm">For the game master</a></li>
       <li class="sub"><a href="#install">Install</a></li>
@@ -166,6 +168,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <li class="sub"><a href="#contracts">Give out runs</a></li>
       <li class="sub"><a href="#stock">Store stock</a></li>
       <li class="sub"><a href="#gm-handouts">Handouts</a></li>
+      <li class="sub"><a href="#music">Music</a></li>
       <li class="sub"><a href="#sessions">Sessions</a></li>
       <li class="sub"><a href="#substances">Toxins and drugs</a></li>
       <li class="sub"><a href="#rewards">Money, Karma, Edge</a></li>
@@ -191,13 +194,28 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h2>For players</h2>
       <p>The top bar has everything you need during a session. Use the tabs to switch between <span class="ui">Map</span>, <span class="ui">Character</span>, <span class="ui">Store</span>, <span class="ui">Runs</span>, <span class="ui">Handouts</span> and <span class="ui">Wiki</span>. On the right you always see your health, Edge, Karma and nuyen.</p>
 
+      <h3 id="connect">The connection check</h3>
+      <div class="pair">
+        <div>
+          <p>Before the sign-in page opens, your browser <strong>connects to the Matrix</strong>: it solves a hard puzzle that keeps bots from hammering the server with password guesses. The squares are the puzzle's 64 sectors, lighting up as your device cracks them, with its speed and the time left below.</p>
+          <ul>
+            <li>It takes about 15 to 30 seconds on a laptop, up to a minute or so on a phone. Keep the tab open; it uses every core your device has.</li>
+            <li>It runs once per sign-in. While you're signed in you never see it, and a sign-in lasts 12 hours after you last used the app (24 at most), so a long session won't log you out.</li>
+            <li>After 5 wrong passwords, or 30 minutes without signing in, the check runs again.</li>
+          </ul>
+        </div>
+        <figure>
+          <a class="shot narrow" href="img/gate.png"><img src="img/gate.png" width="560" height="472" alt="Connection check: the ShadowGrid logo, the line Masking your commlink ID, a grid of 64 sectors with 19 solved and 2 in progress, a progress bar at 29%, 4.2M hashes per second on 2 cores, about 45 s left, and a log of decrypted sectors" loading="lazy"></a>
+        </figure>
+      </div>
+
       <h3 id="join">Join a game</h3>
       <div class="pair">
         <div>
           <ol class="steps">
             <li>Open the invite link your GM sent you. Each link works once and expires after a week.</li>
             <li>Pick a username and a password of at least 8 characters, then click <span class="ui">Create account &amp; join</span>.</li>
-            <li>You land on your character sheet. Next time, sign in on the main page with the same username and password.</li>
+            <li>You land on your character sheet. Next time, sign in on the main page with the same username and password (after the connection check).</li>
           </ol>
           <p>You can change your password any time from the menu with your name in the top right corner.</p>
         </div>
@@ -352,22 +370,30 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/player-matrix.png"><img src="img/player-matrix.png" width="942" height="488" alt="Matrix section of a decker: active device, Attack, Sleaze, Data Processing, Firewall, Matrix AR and DR, initiative, Matrix damage, an unknown Overwatch Score and the Matrix actions list" loading="lazy"></a>
       </figure>
       <ul>
-        <li><strong>Matrix actions</strong> are in the dice roller's <em>Matrix</em> group: Hack on the Fly, Brute Force, Data Spike, Matrix Perception and the rest, each with the right skill and attribute. Illegal actions are marked; put the target's rating in <span class="ui">Target rating</span> and the defender's hits raise your Overwatch Score.</li>
+        <li><strong>Matrix actions</strong> are in the dice roller's <em>Matrix</em> group: Brute Force, Data Spike, Probe, Matrix Perception and the rest, each with the right skill and attribute. Illegal actions are marked; put the target's rating in <span class="ui">Target rating</span> and the defender's hits raise your Overwatch Score.</li>
         <li>The <strong>Overwatch Score</strong> is kept by the GM, and you don't see it. <em>Check Overwatch Score</em> tells you its value at that moment. At 40 the GOD converges: your device is bricked, you're dumped (dumpshock if you were in VR) and your location is reported.</li>
-        <li>Damage on your device costs dice on Matrix actions (−1 per 3 boxes). A technomancer's persona takes Matrix damage on the Stun track.</li>
+        <li>Damage on your device costs dice on Matrix actions (−1 per 3 boxes). Matrix damage isn't soaked unless you run Biofeedback Filter. A technomancer's persona takes Matrix damage on the Stun track.</li>
+        <li>Programs do what their description says, as long as they run: Toolbox +1 Data Processing, Armor +2 Matrix Defense Rating, Overclock +2 dice with one of them the Wild Die, Encryption and Decryption +2 dice on their actions, Signal Scrubber −2 noise, Virtual Machine 2 more program slots (and 1 extra box when you're hit), Baby Monitor shows your Overwatch Score. Browse, Edit, Stealth and Trace give 1 Edge on Matrix Search, Edit File, Hide and Trace Icon: the roll card shows it, and it pays for a boost on that roll only. IC that lowers your attributes (Acid, Binder, Jammer, Marker) shows on your sheet, with a <span class="ui">Leave host</span> button that clears it.</li>
+        <li><strong>Reconfigure</strong> swaps two of your persona's ratings (a Minor Action); with Configurator running you can save a setup and switch to it at once. <strong>Noise</strong> (distance, walls, jamming) costs −1 per point on Matrix tests: set it on the sheet when the GM tells you.</li>
       </ul>
       <figure>
-        <a class="shot" href="img/player-roller-matrix.png"><img src="img/player-roller-matrix.png" width="1140" height="343" alt="Dice roller with Hack on the Fly selected: Logic 6 + Cracking 6, an Illegal tag, a target rating of 3 and the note that the defender's hits raise the Overwatch Score" loading="lazy"></a>
+        <a class="shot" href="img/player-matrix-config.png"><img src="img/player-matrix-config.png" width="942" height="551" alt="Matrix section of a technomancer: Attack, Sleaze, Data Processing, Firewall, Matrix AR and DR, the Reconfigure controls with Attack and Sleaze picked and a Swap button, Noise 3 costing −3 on Matrix tests, and the Matrix damage track" loading="lazy"></a>
+      </figure>
+      <figure>
+        <a class="shot" href="img/player-roller-matrix.png"><img src="img/player-roller-matrix.png" width="1140" height="343" alt="Dice roller with Brute Force selected: Logic + Cracking, an Illegal tag, a target rating and the note that the defender's hits raise the Overwatch Score" loading="lazy"></a>
       </figure>
 
       <h3 id="rigging">Vehicles and drones</h3>
       <p>Vehicles and drones you buy appear in <strong>Gear</strong> with their stats and a damage monitor. The dice roller's <em>Vehicles</em> group has a pool for each of them in every way you can control it:</p>
       <ul>
         <li><strong>At the controls</strong>: Piloting + Reaction.</li>
-        <li><strong>Remote control</strong> (needs a commlink, cyberdeck or RCC): Piloting + Logic.</li>
         <li><strong>Jumped in</strong> (needs a control rig): Piloting + Intuition, plus the control rig's rating.</li>
       </ul>
-      <p>Drones acting on their own roll Pilot + an <strong>autosoft</strong>. Pick what each autosoft program does (Maneuvering, Targeting, Clearsight, Evasion…) in the Matrix section. The GM can put your vehicle on the map as a marker; damage it takes there shows on your sheet.</p>
+      <p>Drones acting on their own roll an <strong>autosoft</strong> with their Sensor (Clearsight, Electronic Warfare, Targeting) or Pilot (Maneuvering, Evasion, Stealth). Pick what each autosoft program does in the Matrix section. The GM can put your vehicle on the map as a marker; damage it takes there shows on your sheet.</p>
+      <p>The <strong>Vehicles and drones</strong> card at the top of Gear tracks each one's <strong>speed</strong>: <span class="ui">+</span> and <span class="ui">−</span> change it by its Acceleration (once per combat round), and every Speed Interval you pass costs a die on Handling tests and on attacks from the vehicle. Vehicles take a <strong>weapon mount</strong> per 3 points of Body: buy a Standard or Heavy Weapon Mount in the store, install it from this card and put a gun in it. You fire it with Engineering + Logic (Vehicles group in the roller); when the drone fires on its own, the GM rolls its Targeting autosoft + Sensor.</p>
+      <figure>
+        <a class="shot" href="img/player-vehicles.png"><img src="img/player-vehicles.png" width="942" height="164" alt="Vehicles and drones card: a GM-Nissan Doberman at 20 m per round, −1 die on Handling tests and attacks past its Speed Interval of 15, moved 15 m this round, −10 and +10 buttons, and a Standard Weapon Mount holding an HK-227" loading="lazy"></a>
+      </figure>
 
       <h3 id="map">On the map</h3>
       <p>Once the GM places your token, the <span class="ui">Map</span> tab shows only what your runner has seen. The fog lifts as you explore, and closed doors block your sight. Icons above tokens and enemies show their statuses, such as Prone or Burning.</p>
@@ -443,6 +469,17 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       </figure>
       <p>When the GM shares a session recap, it appears at the end of the <span class="ui">Runs</span> tab: what happened, the fights, the awards and the GM's notes.</p>
 
+      <h3 id="listen">Music</h3>
+      <p>When the GM plays music, a small player appears in the top bar with the track's name. Everyone in the game hears the same moment of the same track; if you join late, you drop in mid-song. It keeps playing while you move around ShadowGrid; only the note icon mutes it.</p>
+      <figure>
+        <a class="shot" href="img/music-player.png"><img src="img/music-player.png" width="1440" height="52" alt="Top bar of a player: the music control with moving equaliser bars, the track name Club Penumbra and a volume slider, next to health, Edge, Karma and nuyen" loading="lazy"></a>
+        <figcaption>Club Penumbra is playing. After you open or reload ShadowGrid, browsers wait for one click or tap before they play sound: a <span class="ui">Tap to listen</span> button appears here, and a click or tap anywhere works too.</figcaption>
+      </figure>
+      <ul>
+        <li>The slider sets the volume on this device only; the note icon mutes it here (crossed out when muted). Both are remembered.</li>
+        <li>With ShadowGrid open in several tabs, only one plays. <span class="ui">Play here</span> moves it to the tab you're looking at.</li>
+      </ul>
+
       <h3 id="print">Print your sheet and character files</h3>
       <p>The <span class="ui">Sheet…</span> menu at the top of your character sheet has:</p>
       <ul>
@@ -467,7 +504,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h2>For the game master</h2>
 
       <h3 id="install">Install</h3>
-      <p>ShadowGrid runs on Linux. In its folder, run <code>./install.sh</code>. It sets up Python and the dependencies, asks for the gamemaster password and asks whether to install and configure nginx for internet play (with HTTPS, a firewall rule and a service that starts on boot). Run it again any time to update.</p>
+      <p>ShadowGrid runs on Linux. In its folder, run <code>./install.sh</code>. It sets up Python and the dependencies (ffmpeg for music included), asks for the gamemaster password and asks whether to install and configure nginx for internet play (with HTTPS, a firewall rule and a service that starts on boot). Run it again any time to update.</p>
       <ul>
         <li><code>./local.sh</code> starts a game for your home network. It prints the address for your players' computers and phones.</li>
         <li><code>./serve.sh</code> starts a game for players on the internet, behind the nginx set up by the installer. If you installed the service, it's already running: use <code>sudo systemctl restart shadowgrid</code> instead.</li>
@@ -513,6 +550,14 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Marker</strong> places enemies, loot, NPCs, objectives and portals to other maps. Pick an <strong>NPC template</strong> and new markers get that NPC's stats, weapons and condition monitor. For a quick enemy, a Body and Willpower are enough for a monitor.</li>
         <li><strong>Room</strong> names a group of cells.</li>
       </ul>
+      <div class="pair">
+        <div>
+          <p>A <strong>vehicle or drone</strong> marker (any vehicle template, or a runner's own) adds its <strong>speed</strong> to the Selected tab: <span class="ui">+</span> and <span class="ui">−</span> change it by its Acceleration, and the Speed Interval penalty and extra ram DV follow. An NPC vehicle also takes <strong>weapon mounts</strong>: <span class="ui">Mount a weapon…</span> picks a gun from the store and the rating of its Targeting autosoft. A runner's own vehicle keeps its speed and mounts on their sheet.</p>
+        </div>
+        <figure>
+          <a class="shot narrow" href="img/gm-drone-marker.png"><img src="img/gm-drone-marker.png" width="275" height="706" alt="Selected tab for a GM-Nissan Doberman marker: stats, Speed 10 m per round with −10, +10 and Stop, the Speed Interval note, Weapon mounts 1 of 1 used with an HK-227 rolling 6 dice (Sensor + Targeting 3), and its condition monitor" loading="lazy"></a>
+        </figure>
+      </div>
       <p>Delete a map from its card on the <span class="ui">Maps</span> tab or from <span class="ui">Colors &amp; settings</span> in the editor.</p>
       <p>Changes save automatically, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes them. Autosave never undoes what happened live meanwhile: doors players opened and damage or statuses from combat are kept.</p>
 
@@ -587,13 +632,17 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <p><strong>NPC templates</strong> cover every grunt in the core book from Professional Rating 0 to 10, the critters, spirits of any Force, IC by type and host rating, every vehicle and drone in the book, the runners' own vehicles and drones (their damage stays in sync with the sheet), the Companion's contact archetypes (for when a contact has to fight or be rolled for) and the Infected. <span class="ui">Apply NPC template…</span> in the inspector turns any marker into one.</p>
 
       <h3 id="combat">Combat</h3>
-      <p>The <strong>combat strip</strong> above the map runs the initiative tracker. <span class="ui">Start combat…</span> picks the runners and enemies on this map and rolls the NPCs' initiative. Players' own initiative rolls land in the order automatically.</p>
+      <p>The <strong>combat strip</strong> above the map runs the initiative tracker. <span class="ui">Start combat…</span> picks the runners and enemies on this map and rolls the NPCs' initiative. Players' own initiative rolls land in the order automatically. Tick <span class="ui">Surprise</span> and pick the ambushers: everyone else tests Reaction + Intuition (3), and whoever fails is marked <strong>!</strong> and can't act in the first round.</p>
       <figure>
         <a class="shot" href="img/gm-strip.png"><img src="img/gm-strip.png" width="1140" height="55" alt="Combat strip: round 1, the acting Ganger highlighted with its action marks, the Lieutenant, Ana and Cass, the Ongoing damage button, Players see it ticked, and Roll NPCs, Add, New round, Attack, Next turn and End" loading="lazy"></a>
       </figure>
       <ul>
         <li>Each chip shows the actions left this round: a diamond for the Major Action and dots for the Minor ones (1 + Initiative Dice, 5 at most). Attacks and defenses spend them for you; a new round gives them back. Initiative isn't rerolled between rounds.</li>
-        <li>Click a chip for its menu: set the initiative score, spend a Major or Minor Action by hand (<span class="ui">Use Major</span>, <span class="ui">Use Minor</span>, <span class="ui">Reset</span>), make it their turn, show them on the map, roll initiative, attack with them or attack them, hide or reveal an enemy, or remove them from combat.</li>
+        <li>Click a chip for its menu: set the initiative score, spend a Major or Minor Action by hand (<span class="ui">Use Major</span>, <span class="ui">Use Minor</span>, <span class="ui">Reset</span>), make it their turn, show them on the map, roll initiative, attack with them or attack them, <span class="ui">✦ Counterspell…</span> for a magician (a Major action: Sorcery + Magic, the hits protect the allies you pick against spells for Magic rounds, marked ✦ on their chips), hide or reveal an enemy, or remove them from combat.</li>
+        <li>At the start of each round, everyone Nauseated tests Body + Willpower (2). When the fight ends, Edge above each runner's rating is lost.</li>
+        <li><span class="ui">🎯 Take Aim</span> spends a Minor Action for +1 die on their next ranged attack (once per round, up to their Willpower; marked 🎯 on the chip). The bonus waits across rounds and is lost on a turn where they neither aim nor attack.</li>
+        <li><span class="ui">✦ Dispel a spell…</span> targets a sustained spell: pick one of the runners' (with its hits and Drain Value) or describe an enemy's. Sorcery + Magic against the Drain Value × 2; each net hit cancels one of the spell's hits.</li>
+        <li>Someone in a grapple shows ✊ (holding) or 🤼 (held). Their menu has the follow-ups: <span class="ui">Restrain</span>, <span class="ui">Squeeze</span> and <span class="ui">Tackle</span> for the grappler, <span class="ui">Break free</span> for the one held.</li>
         <li><span class="ui">Players see it</span> shares the order on their map. Hidden enemies stay off their strip until you reveal them.</li>
         <li><span class="ui">🔥 Ongoing damage</span> appears when someone is Burning, Corrosive or Poisoned: at the start of a round, everyone affected resists the damage at once.</li>
         <li><span class="ui">Next turn ›</span> moves on; <span class="ui">Roll NPCs</span>, <span class="ui">+ Add</span> (including custom combatants), <span class="ui">New round</span> and <span class="ui">End</span> (with a confirmation) are next to it.</li>
@@ -602,19 +651,35 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/gm-chip-menu.png"><img src="img/gm-chip-menu.png" width="1440" height="560" alt="Menu of the Ganger chip: initiative score, Use Major, Use Minor and Reset buttons, Make it their turn, Show on the map, Roll initiative, Attack with them, Attack them, Hide from players and Remove from combat" loading="lazy"></a>
         <figcaption>A combatant's menu.</figcaption>
       </figure>
+      <figure>
+        <a class="shot" href="img/gm-grapple-menu.png"><img src="img/gm-grapple-menu.png" width="1440" height="600" alt="Strip with Zed holding the Ganger (✊ on Zed's chip, 🎯1 for his aim, 🤼 on the Ganger) and Zed's menu: Take Aim, Counterspell, Dispel a spell, and Restrain, Squeeze and Tackle under Grappling" loading="lazy"></a>
+        <figcaption>Zed is grappling the Ganger.</figcaption>
+      </figure>
+      <figure>
+        <a class="shot" href="img/gm-dispel.png"><img src="img/gm-dispel.png" width="1440" height="950" alt="Dispel dialog for Merlin: Armor (Merlin) with 3 hits and Drain Value 4, or another spell with a name, Drain Value and hits, and Ignore action limits" loading="lazy"></a>
+      </figure>
       <p><strong>Attacks</strong> are resolved by you, with every roll made by the server. Open <span class="ui">⚔ Attack…</span> from the strip (it starts with whoever is acting), a chip, a runner or a marker.</p>
       <figure>
-        <a class="shot" href="img/gm-attack.png"><img src="img/gm-attack.png" width="1440" height="900" alt="Attack dialog: the Ganger with a Streetline Special against two targets, Ana with a clear line of sight and Bobby with Cover II from the map, each with a defense choice and cover, the dice split 2 per target, the actions it uses, called shot and counterspelling menus, and options" loading="lazy"></a>
+        <a class="shot" href="img/gm-attack.png"><img src="img/gm-attack.png" width="1440" height="900" alt="Attack dialog: the Ganger with a Streetline Special against two targets, Ana with a clear line of sight and Bobby with Cover II from the map, each with a defense choice and cover, the dice split 2 per target, the actions it uses, the Called shot and Edge action menus, and options" loading="lazy"></a>
         <figcaption>Two targets: the pool is split between them (Multiple Attacks). Line of sight and cover come from the walls and doors on the map.</figcaption>
       </figure>
+      <figure>
+        <a class="shot" href="img/gm-attack-defense.png"><img src="img/gm-attack-defense.png" width="1440" height="950" alt="Attack dialog: the Ganger's unarmed attack on Zed, who is grappling; Zed hits the dirt with Tactical Roll ticked (1 Edge, has 5), and the Take Aim first, Trip and Grapple options" loading="lazy"></a>
+        <figcaption>Hit the Dirt with a Tactical Roll.</figcaption>
+      </figure>
       <ul>
-        <li><strong>Targets</strong>: add more with <span class="ui">+ Add a target</span>. Several targets split the dice pool evenly and cost a Minor Action; <span class="ui">Anticipation</span> (4 Edge) rolls the full pool against each.</li>
+        <li><strong>Targets</strong>: add more with <span class="ui">+ Add a target</span>. Several targets split the dice pool evenly and cost a Minor Action (not with full-auto fire); <span class="ui">Anticipation</span> (4 Edge, ranged only) rolls the full pool against each.</li>
         <li><strong>Line of sight and cover</strong> are worked out from the map for each target: walls and closed doors between attacker and target give Cover I to IV, and with no line of sight at all the attack is refused. Change the cover per target, or tick <span class="ui">Ignore line of sight</span> for indirect fire.</li>
-        <li><strong>Defense</strong>: per target, pick an interrupt the defender takes: Block (+Close Combat, melee only), Dodge (+Athletics), Hit the Dirt (+2 dice against ranged attacks, then Prone) or Full Defense (+Willpower for the rest of the round). They cost the defender's actions; the menu says when they can't afford one.</li>
-        <li><strong>Called shots</strong>: +2 DV for −4 dice, or the Edge actions Shank (melee), Vitals and Disarm. <strong>Intercept</strong> is a melee attack out of turn on someone moving past.</li>
-        <li><strong>Counterspelling</strong>: a magician protecting the target adds their Sorcery to the Defense test against a spell.</li>
-        <li><strong>Astral and Matrix attacks</strong> use the right pools: Astral + Willpower in astral combat, and Cracking with the deck's Attack in the Matrix, including IC. Matrix damage hits the device, and Black IC, Blaster and Sparky add biofeedback.</li>
-        <li><strong>Edge</strong>: <span class="ui">Award Edge</span> gives 1 Edge to whoever's Attack or Defense Rating is 4 or more ahead, at most 2 per round. Edge costs (called shots, Anticipation) are taken from the attacker.</li>
+        <li><strong>Defense</strong>: per target, pick an interrupt the defender takes: Block (+Close Combat, melee only), Dodge (+Athletics), Hit the Dirt (+2 dice, then Prone) or Full Defense (+Willpower for the rest of the round). They cost the defender's actions; the menu says when they can't afford one.</li>
+        <li><strong>Called shots</strong>: +2 DV for −4 dice (a Minor Action), or Shank (melee), Vitals and Disarm, which cost Edge. <strong>Edge actions</strong>: Knockout Blow, Tumble (melee) and Fire from Cover (ranged, from Cover IV). <strong>Intercept</strong> is a melee attack out of turn on someone moving past.</li>
+        <li><strong>Attacking from cover</strong> costs an extra Minor Action and earns the attacker no Edge; from Cover IV it's −2 dice unless they use Fire from Cover.</li>
+        <li><span class="ui">Take Aim first</span> adds the Minor Action and +1 die before a ranged attack; the aim built up from the strip is counted too. <span class="ui">Trip</span> (melee, a Minor Action) lowers the DV by 2, and on a hit the target tests Athletics + Agility against the DV or falls. <span class="ui">Grapple</span> (unarmed) holds the target instead of hurting them: Strength + net hits against their Strength.</li>
+        <li>A <strong>Restrained</strong> target defends at −4 and gives every attacker 1 Edge; an attack that misses them goes at whoever holds them, with the same roll.</li>
+        <li>Choosing <strong>Block</strong> offers <span class="ui">Wrest</span> (2 Edge: after a successful Block, Close Combat + Agility against the attacker's Strength to knock their weapon away or take it); <strong>Hit the Dirt</strong> offers <span class="ui">Tactical Roll</span> (1 Edge: no Prone penalties for them this round and the next).</li>
+        <li><strong>Vehicles</strong>: a drone fires its mounted weapons (Targeting autosoft + Sensor, Sensor − 1 without one) and a runner in the gunner's seat fires them with Engineering + Logic. Speed Interval penalties apply, and a ram gets +1 DV per interval.</li>
+        <li><strong>Counterspelling</strong> comes from the strip (see above): the dialog shows ✦ on protected targets, and their hits are added to the Defense test against a spell.</li>
+        <li><strong>Astral and Matrix attacks</strong> use the right pools: in astral combat, Astral + Willpower against a Defense Rating of Intuition (+ Force for spirits), with mana or physical damage; in the Matrix, Cracking with the deck's Attack, IC included. Each IC defends and hits as the core book says: Black IC and Sparky add biofeedback, Acid, Binder, Jammer and Marker lower the decker's attributes, Blaster and Tar Baby lock the link.</li>
+        <li><strong>Edge</strong>: <span class="ui">Award Edge</span> gives 1 Edge to whoever's Attack or Defense Rating is 4 or more ahead, at most 2 per round. Edge costs (called shots, Edge actions, Anticipation) are taken from the attacker, and each combatant spends Edge once per round: the dialog warns when they already have.</li>
       </ul>
       <ol class="steps">
         <li>The attacker rolls their weapon pool (runners use their sheet, NPCs their template), with statuses such as Blinded or Fatigued applied. The runner's ammo is spent.</li>
@@ -648,6 +713,19 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/gm-handout-edit.png"><img src="img/gm-handout-edit.png" width="1440" height="900" alt="New handout dialog: title, Markdown text with its preview, an uploaded floor plan image, the runners who get it and Show it to them now" loading="lazy"></a>
         <figcaption>Images must be PNG or JPEG, up to 8 MB. They're checked and re-encoded, and only players of this game can open them.</figcaption>
       </figure>
+
+      <h3 id="music">Music</h3>
+      <p>The <span class="ui">Music</span> tab is your soundboard. Drop audio files on it (MP3, OGG, Opus, WAV, FLAC, M4A or WebM, up to 100 MB each): each one is compressed once on the server to Opus at 48 kbps, about 20 MB an hour, so streaming it to the table costs little. Volumes are evened out, so a quiet ambience and a loud combat track play at a similar level.</p>
+      <figure>
+        <a class="shot" href="img/gm-music.png"><img src="img/gm-music.png" width="1440" height="560" alt="Music tab: Club Penumbra playing at 0:08 of 3:12 with Loop ticked and Stop for everyone, the Add music drop area, and three tracks with their lengths and sizes before and after compressing (7.3 MB to 1.1 MB, 3.8 to 1.4, 17.1 to 1.5), with Play, Restart, Stop, Rename and Delete buttons" loading="lazy"></a>
+        <figcaption>One track plays at a time. Starting another replaces it.</figcaption>
+      </figure>
+      <ul>
+        <li><span class="ui">Play</span> starts the track for everyone in this game, from the same moment. <span class="ui">Loop</span> repeats it; untick it to let it end.</li>
+        <li><span class="ui">Stop for everyone</span> stops it. Deleting the track that's playing stops it too.</li>
+        <li>On the map screen, the music control in the top bar has the same list: click the track name to play, loop or stop without leaving the map.</li>
+        <li>You hear it too, on one tab at a time; the note icon mutes it on your device only.</li>
+      </ul>
 
       <h3 id="sessions">Sessions</h3>
       <p>On the <span class="ui">Sessions</span> tab, <span class="ui">Start session</span> when the table sits down and end it afterwards. Everything in between (fights, attacks, notable rolls, Karma and nuyen, runs and handouts) becomes a recap with a timeline. Add your own notes in Markdown, tick <span class="ui">Share with players</span> to show it on their Runs tab, or <span class="ui">Export (.md)</span> it.</p>
@@ -685,6 +763,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
     
       <h3 id="backups">Backups</h3>
       <p>ShadowGrid backs everything up once a day, keeping the last 10. <span class="ui">Backups</span> on the home page lists them: <span class="ui">Back up now</span>, download one, restore one, or restore from a file you downloaded. Restoring puts every game, map, runner and image back to that moment and signs everyone out. The current state is saved first, so a restore can be undone.</p>
+      <p>Daily backups leave the music out to stay small; the ones you make include it unless you untick <span class="ui">Include music</span>. Restoring a backup without music keeps the music already on the server.</p>
       <figure>
         <a class="shot" href="img/gm-backups.png"><img src="img/gm-backups.png" width="1000" height="320" alt="Backups dialog: Back up now, Restore from a file, and a list of a manual and a daily backup with Download, Restore and Delete buttons" loading="lazy"></a>
       </figure>
@@ -714,14 +793,21 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <tr><td class="cost">5</td><td>2s count as glitches on a target's test · special effect</td><td>Spend Edge…</td></tr>
         </tbody>
       </table>
-      <p>You can hold at most 7 Edge. The GM refreshes and awards it; in combat you can also gain up to 2 per round from Attack Rating against Defense Rating.</p>
+      <p>You can hold at most 7 Edge. The GM refreshes and awards it; in combat you can also gain up to 2 per round from Attack Rating against Defense Rating. In combat you spend Edge once per round, and never while Dazed; Edge above your rating is lost when the fight ends.</p>
       <h4>Combat</h4>
       <ul>
         <li>Ranges: Close 0-3 m, Near 4-50 m, Medium 51-250 m, Far 251-500 m, Extreme 500+ m. No Attack Rating at a range means the weapon can't reach.</li>
         <li>Defense Rating = Body + armor (best body armor, plus helmet, shield, implants and qualities).</li>
         <li>Damage after soaking higher than Body knocks the target Prone. Electricity adds Zapped, fire Burning, cold Chilled, chemicals Corrosive.</li>
         <li>Actions per round: 1 Major, 1 Minor + 1 per Initiative Die (max 5). 4 Minor make a Major.</li>
-        <li>Cover I to IV adds its level to the Defense Rating and the Defense test.</li>
+        <li>Cover I to IV adds its level to the Defense Rating and the Defense test. Attacking from cover costs a Minor Action and earns no Edge; from Cover IV it's −2 dice.</li>
+        <li>A Prone attacker: −4 dice with melee weapons and bows, +2 Attack Rating with firearms.</li>
+        <li>Surprise: Reaction + Intuition (3); failing means no actions in the first round.</li>
+        <li>Burning removes Wet and Chilled, and Wet or Chilled puts out Burning.</li>
+        <li>Take Aim (Minor): +1 die on the next ranged attack, once per round, up to Willpower; it builds up, and is lost on a turn with no aim and no attack.</li>
+        <li>Trip (Minor, melee): −2 base DV; on a hit, Athletics + Agility against the DV or Prone.</li>
+        <li>Grapple: unarmed attack; on a hit, Strength + net hits vs Strength restrains. Restrained: −4 on Defense tests, attackers gain 1 Edge, a miss may hit the grappler. Follow-ups (Major): Restrain, Squeeze (Strength ÷ 2 + net hits Stun), Tackle (Prone, Body + net hits Stun), Break free.</li>
+        <li>Dispelling: Sorcery + Magic vs the spell's Drain Value × 2; net hits cancel its hits.</li>
         <li>Each spell you sustain: −2 dice on other tests.</li>
       </ul>
       <h4>Defensive interrupts</h4>
@@ -730,31 +816,53 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <tbody>
           <tr><td class="cost">Minor</td><td>Block</td><td>+Close Combat on the Defense test against a melee attack</td></tr>
           <tr><td class="cost">Minor</td><td>Dodge</td><td>+Athletics on the Defense test</td></tr>
-          <tr><td class="cost">Minor</td><td>Hit the Dirt</td><td>+2 dice against a ranged attack, then Prone</td></tr>
+          <tr><td class="cost">Minor</td><td>Hit the Dirt</td><td>+2 dice on the Defense test, then Prone</td></tr>
           <tr><td class="cost">Major</td><td>Full Defense</td><td>+Willpower on every Defense test until the end of the round</td></tr>
-          <tr><td class="cost">Major</td><td>Intercept</td><td>A melee attack on someone moving through your reach</td></tr>
+          <tr><td class="cost">Minor + Major</td><td>Intercept</td><td>A melee attack on someone moving through your reach</td></tr>
         </tbody>
       </table>
       <h4>Called shots</h4>
       <table>
         <thead><tr><th>Edge</th><th>Called shot</th><th>Effect</th></tr></thead>
         <tbody>
-          <tr><td class="cost">0</td><td>Extra damage</td><td>−4 dice, +2 DV</td></tr>
-          <tr><td class="cost">1</td><td>Shank (melee)</td><td>−2 dice, +2 DV</td></tr>
-          <tr><td class="cost">5</td><td>Vitals</td><td>−4 dice, +3 DV</td></tr>
-          <tr><td class="cost">5</td><td>Disarm</td><td>−4 dice; on a hit the target drops their weapon</td></tr>
+          <tr><td class="cost">0</td><td>Extra damage</td><td>−4 dice, +2 DV (a Minor Action)</td></tr>
+          <tr><td class="cost">1</td><td>Shank (blade)</td><td>−2 dice, +2 DV (a Minor Action)</td></tr>
+          <tr><td class="cost">5</td><td>Vitals</td><td>+3 DV</td></tr>
+          <tr><td class="cost">5</td><td>Disarm</td><td>No damage; on a hit the target drops their weapon</td></tr>
+        </tbody>
+      </table>
+      <h4>Edge actions in combat</h4>
+      <table>
+        <thead><tr><th>Edge</th><th>Action</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td class="cost">1</td><td>Tumble (melee)</td><td>Damage above the target's Body knocks them Prone</td></tr>
+          <tr><td class="cost">2</td><td>Knockout Blow (melee)</td><td>Damage above the target's Willpower fills their Stun track</td></tr>
+          <tr><td class="cost">2</td><td>Fire from Cover (ranged)</td><td>Attack from Cover IV without the −2 dice</td></tr>
+          <tr><td class="cost">1</td><td>Tactical Roll (with Hit the Dirt)</td><td>No Prone penalty on your melee attacks this round, nor −2 against Close or Near attacks until the end of the next</td></tr>
+          <tr><td class="cost">2</td><td>Wrest (with a successful Block)</td><td>Close Combat + Agility vs the attacker's Strength: equal knocks the weapon away, more takes it</td></tr>
+          <tr><td class="cost">4</td><td>Anticipation (ranged)</td><td>The full pool against every target</td></tr>
         </tbody>
       </table>
       <h4>Matrix</h4>
       <ul>
         <li>Legal actions use Electronics, illegal ones Cracking. Attack Rating = Attack + Sleaze; Defense Rating = Data Processing + Firewall.</li>
         <li>Overwatch Score: +1 per hit the defender rolls against an illegal action. Convergence at 40.</li>
-        <li>Matrix damage: −1 die on Matrix actions per 3 boxes on the device.</li>
+        <li>Matrix damage: −1 die on Matrix actions per 3 boxes on the device. It isn't soaked unless Biofeedback Filter runs. Data Spike: DV = Attack Rating ÷ 2, rounded up.</li>
+        <li>IC: condition monitor 2 × host rating, 3D6 initiative; each type has its own defense and effect.</li>
+        <li>Noise: −1 per point on Matrix tests; above the Device Rating, no access.</li>
+      </ul>
+      <h4>Rigging</h4>
+      <ul>
+        <li>At the controls: Piloting + Reaction. Jumped in: Piloting + Intuition + control rig rating. Gunnery: Engineering + Logic.</li>
+        <li>A drone on its own: Sensor + autosoft (Clearsight, Electronic Warfare, Targeting) or Pilot + autosoft (the others); 4D6 initiative.</li>
+        <li>Every 3 boxes of damage on a vehicle add 1 to its Handling threshold. Ramming: DV = Body ÷ 2 + 1 per Speed Interval.</li>
+        <li>Speed: change it by at most the Acceleration per round; distance = speed at the start ± half the change; −1 die per Speed Interval passed on Handling tests and attacks from the vehicle.</li>
+        <li>Weapon mounts: Body ÷ 3; a heavy mount counts two. Fired with Engineering + Logic, or by the drone with Targeting + Sensor.</li>
       </ul>
       <h4>Toxins and drugs</h4>
       <ul>
         <li>Resist with Body + Willpower: each hit lowers the Power by 1, and what's left applies.</li>
-        <li>Damage equals the Power left. Statuses last until the effect wears off.</li>
+        <li>Damage equals the Power left. Statuses last until the effect wears off. Each extra dose adds 1 to the Power; protective gear adds dice.</li>
         <li>A drug's crash applies when it wears off: unresisted damage, statuses, or penalties for a while.</li>
         <li>After approval, a negative quality gives no Karma.</li>
       </ul>
