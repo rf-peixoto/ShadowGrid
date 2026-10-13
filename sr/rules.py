@@ -404,6 +404,10 @@ def derive(c):
         if a in CORE_ATTRS:
             total = min(total, K.AUGMENTED_BONUS_MAX)
         aug[a] = max(0, A[a] + total)
+    for t in c.get("toxins") or []:                 # a crash can drop attributes to 0 (Novacoke)
+        for a in t.get("zero") or []:
+            if a in aug:
+                aug[a] = 0
     if inf:
         init_dice += _int(inf.get("init_dice"))
     init_dice = max(1, min(MAX_INIT_DICE, init_dice))
@@ -436,6 +440,9 @@ def derive(c):
     wound = wp + ws
     if wound and _has_q(qs, "High Pain Tolerance"):
         wound = max(0, wound - 1)
+    drug_hpt = max([_int(t.get("hpt")) for t in c.get("toxins") or []] or [0])
+    if wound and drug_hpt:
+        wound = max(0, wound - drug_hpt)
     if _has_q(qs, "Low Pain Tolerance"):
         wound *= 2
     wound = -wound
@@ -528,7 +535,7 @@ def derive(c):
                      "free_optional": inf.get("free_optional", ""), "notes": inf.get("notes", ""),
                      "strain_text": SWC.STRAINS[inf["strain"]], "essence_base": essence_base} if inf else None,
         "essence_hole": hole, "awakened": awakened,
-        "sustained": len(c.get("sustained") or []), "sustain_penalty": sustain_count(c) * ACT.SUSTAIN_PENALTY,
+        "sustained": len(c.get("sustained") or []), "sustain_penalty": sustain_count(c) * sustain_step(c),
         "edge_max": min(EDGE_CAP, aug["Edge"]), "current_edge": _int(c.get("current_edge")),
         "tradition_attr": trad_attr, "spell_ar": aug["Magic"] + aug.get(trad_attr, 0),
         "drain_pool": aug["Willpower"] + (aug.get(trad_attr, 0) if mtype in CASTERS else aug["Body"]),
@@ -915,10 +922,11 @@ def pool_by_key(c, key, d=None):
 
 # --------------------------------------------------------------------------- context, money, karma
 class Ctx:
-    def __init__(self, approved, gamemaster, sell_pct=50):
+    def __init__(self, approved, gamemaster, sell_pct=50, out_of_stock=()):
         self.approved = approved      # sheet approved by the GM
         self.gamemaster = gamemaster            # GM is the one acting
         self.sell_pct = sell_pct      # % of the price the store pays for sold items
+        self.out_of_stock = frozenset(out_of_stock)   # store item / PACK ids the GM marked out of stock
         self.ledger = []              # [(kind, delta, reason)]
         self.log = []                 # table-log notes
         self.rolls = []               # extra roll records [(kind, data)] for the table log
@@ -1373,8 +1381,11 @@ def a_add_quality(c, p, ctx):
     karma = quality_karma(name, level)
     if ctx.locked:
         if karma < 0:
-            raise RuleError("New negative qualities can't be taken after approval (the GM can assign them).")
-        spend(c, ctx, "karma", karma * K.KARMA["quality_mult"], f"Quality: {name}")
+            # taken in play: no Karma for it, and the table (the GM) is told
+            label = f"{name} {level}" if q.get("levels") else name
+            ctx.log.append(f"took the negative quality {label}{f' ({choice})' if choice else ''}. No Karma is given for it after approval.")
+        else:
+            spend(c, ctx, "karma", karma * K.KARMA["quality_mult"], f"Quality: {name}")
     elif not ctx.gamemaster:
         if karma > 0:
             spend(c, ctx, "karma", karma, f"Quality: {name}")
@@ -1439,6 +1450,9 @@ def _merge_stack(c, it):
     return None
 
 
+OUT_OF_STOCK = "out of stock right now. The GM will say when it's back."
+
+
 def _store_access(c, ctx, it):
     ok, why = CAT.access(c, it.get("avail"), it.get("legal", ""), G.CATEGORY_SUPPLY.get(it.get("cat"), "General"), ctx.approved)
     return ok, why
@@ -1455,6 +1469,8 @@ def a_buy(c, p, ctx):
         grade = "Standard"
     it = CAT.make_item(e, p.get("rating"), grade, price_markup(c), uid=_uid(c))
     if not ctx.gamemaster:
+        if e["id"] in ctx.out_of_stock:
+            raise RuleError(f"{e['name']}: {OUT_OF_STOCK}")
         ok, why = _store_access(c, ctx, it)
         if not ok:
             raise RuleError(why)
@@ -1499,6 +1515,8 @@ def a_buy_pack(c, p, ctx):
     if not hit:
         raise RuleError("Unknown PACK.")
     entry, pack = hit
+    if not ctx.gamemaster and entry["id"] in ctx.out_of_stock:
+        raise RuleError(f"{pack['name']}: {OUT_OF_STOCK}")
     grade = p.get("grade") if p.get("grade") in G.IMPLANT_GRADES else "Standard"
     price = pack["cost"]
     if grade != "Standard":
@@ -1514,6 +1532,8 @@ def a_buy_pack(c, p, ctx):
             g = x.get("grade") or (grade if CAT.is_implant(e) else "Standard")
             it = CAT.make_item(e, x.get("rating"), g, markup, uid="")
             if not ctx.gamemaster:
+                if x["ref"] in ctx.out_of_stock:
+                    raise RuleError(f"{it['name']}: {OUT_OF_STOCK}")
                 ok, why = _store_access(c, ctx, it)
                 if not ok:
                     raise RuleError(f"{it['name']}: {why}")
@@ -2203,23 +2223,74 @@ def resist_drain(c, d, dv, kind="drain"):
 
 
 # ---- toxins, drugs and diseases
+_ROMAN = {"I": 1, "II": 2, "III": 3, "IV": 4}
+
+
+def effect_status(e):
+    """An effect word -> (status, value) or None: "Nausea" -> Nauseated, "Blinded I" -> (Blinded, 1)."""
+    e = str(e or "").strip()
+    if e in TOX.EFFECT_STATUSES:
+        return TOX.EFFECT_STATUSES[e], True
+    name, _, lvl = e.partition(" ")
+    if name in K.STATUSES:
+        return name, _ROMAN.get(lvl.strip(), True) if lvl else True
+    return None
+
+
+def _clean_effect_fields(raw):
+    """The lasting parts of a substance or of its crash."""
+    out = {"attrs": {a: max(-6, min(6, _int(v))) for a, v in (raw.get("attrs") or {}).items() if a in CORE_ATTRS and _int(v)}}
+    for k, lo, hi in (("pool", -6, 6), ("pool_physical", -6, 6), ("hpt", 0, 3), ("sustain", -2, 0)):
+        if _int(raw.get(k)):
+            out[k] = max(lo, min(hi, _int(raw.get(k))))
+    sk = {k: max(-6, min(6, _int(v))) for k, v in (raw.get("skills") or {}).items() if k in K.SKILLS and _int(v)}
+    if sk:
+        out["skills"] = sk
+    zero = [a for a in (raw.get("zero") or []) if a in CORE_ATTRS][:4]
+    if zero:
+        out["zero"] = zero
+    return out
+
+
+LASTING = ("attrs", "init_dice", "pool", "pool_physical", "hpt", "sustain", "skills", "zero")
+
+
 def clean_substance(raw):
     """A substance from the GM's library editor -> safe dict (or None)."""
     if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
         return None
-    attrs = {a: max(-6, min(6, _int(v))) for a, v in (raw.get("attrs") or {}).items() if a in CORE_ATTRS and _int(v)}
     crash = raw.get("crash") if isinstance(raw.get("crash"), dict) else None
     if crash:
-        crash = {"dv": max(0, min(30, _int(crash.get("dv")))), "damage": crash.get("damage") if crash.get("damage") in ("S", "P") else "S",
-                 "effects": [e for e in (crash.get("effects") or []) if e in TOX.EFFECT_STATUSES][:4]}
-    return {"id": re.sub(r"[^a-z0-9-]", "", str(raw.get("id") or "").lower())[:40] or None,
-            "name": _clip(raw.get("name"), 60).strip(), "kind": raw.get("kind") if raw.get("kind") in ("toxin", "drug", "disease") else "toxin",
-            "source": _clip(raw.get("source") or "Custom", 40), "vectors": [v for v in (raw.get("vectors") or []) if v in TOX.VECTORS][:4],
-            "speed": _clip(raw.get("speed"), 30), "power": max(0, min(30, _int(raw.get("power")))), "duration": _clip(raw.get("duration"), 30),
-            "damage": raw.get("damage") if raw.get("damage") in ("S", "P") else "",
-            "effects": [_clip(e, 30) for e in (raw.get("effects") or [])][:6], "attrs": attrs,
-            "init_dice": max(0, min(4, _int(raw.get("init_dice")))), "addiction": max(0, min(10, _int(raw.get("addiction")))),
-            "crash": crash, "desc": _clip(raw.get("desc"), 600)}
+        crash = dict(_clean_effect_fields(crash), dv=max(0, min(30, _int(crash.get("dv")))),
+                     damage=crash.get("damage") if crash.get("damage") in ("S", "P") else "S",
+                     effects=[_clip(e, 30) for e in (crash.get("effects") or [])][:4], duration=_clip(crash.get("duration"), 40))
+    out = {"id": re.sub(r"[^a-z0-9-]", "", str(raw.get("id") or "").lower())[:40] or None,
+           "name": _clip(raw.get("name"), 60).strip(), "kind": raw.get("kind") if raw.get("kind") in ("toxin", "drug", "disease") else "toxin",
+           "source": _clip(raw.get("source") or "Custom", 40), "vectors": [v for v in (raw.get("vectors") or []) if v in TOX.VECTORS][:4],
+           "speed": _clip(raw.get("speed"), 30), "power": max(0, min(30, _int(raw.get("power")))), "duration": _clip(raw.get("duration"), 40),
+           "damage": raw.get("damage") if raw.get("damage") in ("S", "P") else "",
+           "effects": [_clip(e, 30) for e in (raw.get("effects") or [])][:6],
+           "init_dice": max(0, min(4, _int(raw.get("init_dice")))), "addiction": max(0, min(10, _int(raw.get("addiction")))),
+           "crash": crash, "desc": _clip(raw.get("desc"), 600)}
+    out.update(_clean_effect_fields(raw))
+    return out
+
+
+def _apply_statuses(c, effects, left=None):
+    """Set the statuses an effect list calls for; returns the names set."""
+    st, names = c.setdefault("statuses", {}), []
+    for e in effects or []:
+        hit = effect_status(e)
+        if not hit:
+            continue
+        status, value = hit
+        st[status] = (left or 1) if status == "Poisoned" else value
+        names.append(status)
+    return names
+
+
+def _lasting(src):
+    return {k: src[k] for k in LASTING if src.get(k)}
 
 
 def expose(c, sub, ctx, resist=True, label="Exposed to"):
@@ -2238,18 +2309,17 @@ def expose(c, sub, ctx, resist=True, label="Exposed to"):
         if sub.get("damage") in ("S", "P"):
             take_damage(c, "physical" if sub["damage"] == "P" else "stun", left)
             lines.append(f"{left} {'Physical' if sub['damage'] == 'P' else 'Stun'}")
-        st = c.setdefault("statuses", {})
-        for e in sub.get("effects") or []:
-            status = TOX.EFFECT_STATUSES.get(e)
-            if status:
-                st[status] = left if status == "Poisoned" else True
-                lines.append(status)
-        if sub.get("kind") == "drug" and (sub.get("attrs") or sub.get("init_dice")):
+        applied = _apply_statuses(c, sub.get("effects"), left)
+        lines += applied
+        lasting = _lasting(sub)
+        if lasting or applied or sub.get("crash"):
             lst = c.setdefault("toxins", [])
-            lst[:] = [t for t in lst if t.get("id") != sub.get("id")] if sub.get("id") else lst
-            lst.append({"id": sub.get("id"), "name": sub["name"], "attrs": dict(sub.get("attrs") or {}), "init_dice": _int(sub.get("init_dice")),
-                        "duration": sub.get("duration") or "", "crash": sub.get("crash"), "since": round(__import__("time").time())})
-            lines.append("in effect" + (f" for {sub['duration']}" if sub.get("duration") else ""))
+            if sub.get("id"):
+                lst[:] = [t for t in lst if t.get("id") != sub.get("id")]
+            lst.append(dict(lasting, id=sub.get("id"), name=sub["name"], kind=sub.get("kind"), duration=sub.get("duration") or "",
+                            crash=sub.get("crash"), statuses=applied, since=round(__import__("time").time())))
+            if lasting:
+                lines.append("in effect" + (f" for {sub['duration']}" if sub.get("duration") else ""))
         if sub.get("addiction"):
             ad = roll(sum(p[1] for p in parts))
             ad["label"] = f"Addiction resistance ({sub['addiction']}): {sub['name']}"
@@ -2275,20 +2345,29 @@ def addict(c, substance):
 
 
 def a_end_substance(c, p, ctx):
-    """A drug wears off: its bonuses end and its crash applies."""
+    """An effect wears off: its bonuses and the statuses it caused end, then its crash applies
+    (unresisted damage, statuses, and penalties that last on their own)."""
     lst = c.get("toxins") or []
     i = _list_index(lst, p.get("index"))
     t = lst.pop(i)
+    st = c.setdefault("statuses", {})
+    still = {s2 for o in lst for s2 in o.get("statuses") or []}
+    for name in t.get("statuses") or []:
+        if name not in still:
+            st.pop(name, None)
     crash = t.get("crash") or {}
     lines = [f"{t['name']} wears off"]
     if _int(crash.get("dv")):
         take_damage(c, "physical" if crash.get("damage") == "P" else "stun", crash["dv"])
         lines.append(f"crash: {crash['dv']} {'Physical' if crash.get('damage') == 'P' else 'Stun'}")
-    for e in crash.get("effects") or []:
-        status = TOX.EFFECT_STATUSES.get(e)
-        if status:
-            c.setdefault("statuses", {})[status] = True
-            lines.append(status)
+    applied = _apply_statuses(c, crash.get("effects"))
+    lines += applied
+    lasting = _lasting(crash)
+    if lasting or applied:
+        lst.append(dict(lasting, id=None, name=f"{t['name']} crash", kind="crash", duration=crash.get("duration") or "",
+                        crash=None, statuses=applied, since=round(__import__("time").time())))
+        if lasting:
+            lines.append("crash in effect" + (f" for {crash['duration']}" if crash.get("duration") else ""))
     ctx.log.append("; ".join(lines) + ".")
     return "; ".join(lines) + "."
 
@@ -2476,7 +2555,7 @@ def start_sustaining(c, sp, ctx, hits=0):
         raise RuleError("That's a lot of spells to hold at once. Drop one first.")
     lst.append({"name": sp["name"], "hits": max(0, _int(hits)), "since": round(__import__("time").time())})
     pen = sustain_count(c)
-    ctx.log.append(f"is sustaining {sp['name']}" + (f" (−{-pen * ACT.SUSTAIN_PENALTY} dice on other tests)." if pen else "."))
+    ctx.log.append(f"is sustaining {sp['name']}" + (f" (−{-pen * sustain_step(c)} dice on other tests)." if pen else "."))
 
 
 def a_drop_sustained(c, p, ctx):
@@ -2502,7 +2581,8 @@ def condition_parts(c, d, kind="action", ranged=False):
     out = []
     n = sustain_count(c)
     if n:
-        out.append([f"Sustaining {n} spell{'s' if n > 1 else ''}", n * ACT.SUSTAIN_PENALTY])
+        out.append([f"Sustaining {n} spell{'s' if n > 1 else ''}", n * sustain_step(c)])
+    out += substance_parts(c)
     key = "defense" if kind == "defense" else "attack"
     st = c.get("statuses") or {}
     for name, mod in ACT.STATUS_MODS.items():
@@ -2519,16 +2599,52 @@ def condition_parts(c, d, kind="action", ranged=False):
     return out
 
 
+def sustain_step(c):
+    """Dice lost per sustained spell: −2, or less while a drug such as Psyche is in effect."""
+    step = ACT.SUSTAIN_PENALTY
+    for t in c.get("toxins") or []:
+        if _int(t.get("sustain")):
+            step = max(step, _int(t["sustain"]))
+    return step
+
+
+def substance_parts(c, physical=False, only_physical=False):
+    """Dice modifiers from drugs and crashes in effect: on every test, and on tests with a Physical attribute."""
+    out = []
+    for t in c.get("toxins") or []:
+        if not only_physical and _int(t.get("pool")):
+            out.append([t.get("name") or "Drug", _int(t["pool"])])
+        if physical and _int(t.get("pool_physical")):
+            out.append([t.get("name") or "Drug", _int(t["pool_physical"])])
+    return out
+
+
+def substance_skills(c):
+    """{skill: [[drug, ±n], ...]} from drugs in effect (Nitro: +2 Perception)."""
+    out = {}
+    for t in c.get("toxins") or []:
+        for sk, n in (t.get("skills") or {}).items():
+            if _int(n):
+                out.setdefault(sk, []).append([t.get("name") or "Drug", _int(n)])
+    return out
+
+
 RESIST_POOLS = {"drain", "fading", "soak", "toxin", "natural_stun", "natural_physical"}
 
 
 def _apply_conditions(c, d, out):
     act, dfn = condition_parts(c, d, "action"), condition_parts(c, d, "defense")
     rng = condition_parts(c, d, "action", ranged=True)
+    phys, skill_bonus = substance_parts(c, physical=True, only_physical=True), substance_skills(c)
     for p in out:
         if p["key"] in RESIST_POOLS:
             continue
         extra = dfn if p["key"] in ("defense", "astral_defense") else (rng if p.get("weapon") and p.get("modes") is not None and p["key"] not in ("weapon:unarmed",) and not p.get("natural") and p.get("ar") and any(a is not None for a in (p.get("ar") or [])[1:]) else act)
+        if phys and any(x[0] in K.PHYSICAL for x in p["parts"]):
+            extra = list(extra) + phys
+        for sk, parts in skill_bonus.items():
+            if p["key"] == f"skill:{sk}" or p["key"].startswith(f"skill:{sk}:"):
+                extra = list(extra) + parts
         if extra:
             p["parts"] = p["parts"] + [list(x) for x in extra]
             p["value"] = max(0, sum(x[1] for x in p["parts"]))

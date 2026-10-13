@@ -18,7 +18,7 @@ for arg in "$@"; do
     case "$arg" in
         --only-me) HOST=127.0.0.1 ;;
         -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
-        *) [[ "$arg" =~ ^[0-9]+$ ]] && PORT="$arg" || { echo "Unknown option: $arg" >&2; exit 1; } ;;
+        *) if [[ "$arg" =~ ^[0-9]+$ ]]; then PORT="$arg"; else echo "Unknown option: $arg" >&2; exit 1; fi ;;
     esac
 done
 

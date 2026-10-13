@@ -415,6 +415,35 @@ function renderSprites(g, map, view, vp, opts = {}) {
   }
   for (const it of items) it.draw();
 }
+/* Which marker or token is drawn under a screen point? In the isometric view sprites stand above
+   their cell, so a click on the drawn icon lands on another cell; this finds the sprite itself.
+   Front-most (lowest on screen) first. Returns {kind: 'marker', m} | {kind: 'token', t} | null. */
+function pickSprite(map, view, vp, sx, sy) {
+  if (!vp.iso || !map) return null;
+  const G = geom(map), cells = map.data.cells, size = G.cs * vp.zoom, hits = [];
+  const test = (c, r, d, liftK) => {
+    const ctr = G.cellCenter(c, r), p = vp.toScreen(ctr.x, ctr.y), lift = d * liftK, rad = d * 0.62;
+    const dx = sx - p.x, dy = sy - (p.y - lift);
+    // the icon disc, or the stand down to its cell
+    if (dx * dx + dy * dy <= rad * rad || (Math.abs(dx) <= d * 0.25 && sy <= p.y + d * 0.2 && sy >= p.y - lift)) return p.y;
+    return null;
+  };
+  for (const m of map.data.markers || []) {
+    if (!G.inBounds(m.c, m.r)) continue;
+    if (visibility(view, key(m.c, m.r), cells[key(m.c, m.r)]) !== 'full') continue;
+    if (m.hidden && view.mode === 'player') continue;
+    const y = test(m.c, m.r, size * 0.62, 0.55);
+    if (y !== null) hits.push({ y, hit: { kind: 'marker', m } });
+  }
+  for (const t of view.tokens || []) {
+    if (!G.inBounds(t.c, t.r)) continue;
+    if (view.mode === 'player' && visibility(view, key(t.c, t.r), cells[key(t.c, t.r)]) !== 'full') continue;
+    const y = test(t.c, t.r, size * 0.7, 0.62);
+    if (y !== null) hits.push({ y: y + 0.1, hit: { kind: 'token', t } });
+  }
+  hits.sort((a, b) => b.y - a.y);
+  return hits.length ? hits[0].hit : null;
+}
 function drawTokenSprite(g, x, y, d, tok, col) {
   const lift = d * 0.62;
   shadow(g, x, y, d);
@@ -600,5 +629,5 @@ function drawIsoLayers(ctx, L, vp, dpr, cs) {
   ctx.setTransform(...M); ctx.drawImage(L.floor, 0, 0, wq, hq);
 }
 
-return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT };
+return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT };
 })();

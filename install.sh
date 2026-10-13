@@ -222,7 +222,9 @@ if [ -n "$SHADOWGRID_DOMAIN" ] && ! [[ "$SHADOWGRID_DOMAIN" =~ ^([a-z0-9]([a-z0-
     die "\"$SHADOWGRID_DOMAIN\" is not a valid domain name."
 fi
 SHADOWGRID_PORT="$(ask_value "Internal port for ShadowGrid (only nginx talks to it):" "$SHADOWGRID_PORT")"
-[[ "$SHADOWGRID_PORT" =~ ^[0-9]+$ ]] && [ "$SHADOWGRID_PORT" -ge 1024 ] && [ "$SHADOWGRID_PORT" -le 65535 ] || die "Use a port between 1024 and 65535."
+if ! { [[ "$SHADOWGRID_PORT" =~ ^[0-9]+$ ]] && [ "$SHADOWGRID_PORT" -ge 1024 ] && [ "$SHADOWGRID_PORT" -le 65535 ]; }; then
+    die "Use a port between 1024 and 65535."
+fi
 
 # ---------- where nginx reads site files
 NGINX_CONF="$(nginx -V 2>&1 | sed -nE 's/.*--conf-path=([^ ]+).*/\1/p')"
@@ -411,10 +413,10 @@ $HTTP2_DIRECTIVE
         proxy_pass http://shadowgrid_app;
     }
 
+    # versioned scripts and styles: ShadowGrid marks them cacheable for a year (and compresses them)
     location /static/ {
         limit_req zone=shadowgrid_req burst=200 nodelay;
         proxy_pass http://shadowgrid_app;
-        expires 7d;
     }
 
     location / {

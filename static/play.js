@@ -9,7 +9,7 @@ const S = {
   fitted: false, lastMapId: null, sceneDirty: true, sceneZoom: 1, frame: null, pathCache: null, ghost: null, pingFrame: null, lastTap: 0, clockSkew: 0, iso: {}, sceneIso: null,
 };
 let CAT = null, sheetUI = null, mapRoller = null;
-const post = (path, body) => api('/api/me/' + path, 'POST', body || {});
+const post = (path, body) => api('/api/me/' + path, 'POST', Object.assign({ cellsSig: S.cellsSig || '' }, body || {}));
 
 // ================================================================ tabs
 function setView(v) {
@@ -64,7 +64,7 @@ function renderChips() {
 async function refresh(force) {
   if (!force && (document.hidden || S.busy || S.drag)) return;
   try {
-    const st = await api('/api/me/state?since=' + encodeURIComponent(force ? '' : (S.st ? S.st.version : '')));
+    const st = await api('/api/me/state?since=' + encodeURIComponent(force ? '' : (S.st ? S.st.version : '')) + '&cells=' + encodeURIComponent(force ? '' : (S.cellsSig || '')));
     if (st.unchanged) return;
     applyState(st);
   } catch (e) { /* transient */ }
@@ -164,11 +164,20 @@ function applyView(v) {
   if (!v.map) { S.map = null; $('p-help').textContent = 'Your GM has not placed you on a map yet. This page updates on its own.'; renderActions(); renderTracker(); invalidate(); return; }
   $('p-help').textContent = v.token ? `${v.map.name}. Drag your token or click a room you can reach. Doors on your cell open below or by clicking them.` : `${v.map.name}. Waiting for the GM to place your token.`;
   const m = v.map;
+  // the server leaves the cells out when we already have this version of them
+  let cellsChanged = false;
+  if (m.cells == null && m.cellsSig && m.cellsSig === S.cellsSig && S.cells) m.cells = S.cells;
+  else if (m.cells == null) { S.cellsSig = ''; refresh(true); return; }
+  else if (m.cellsSig !== S.cellsSig || m.cells !== S.cells) { S.cells = m.cells; S.cellsSig = m.cellsSig || ''; cellsChanged = true; }
+  const look = JSON.stringify([m.id, m.gridType, m.settings, m.markers, v.token, v.others, m.mapStation]);
+  const sceneChanged = cellsChanged || look !== S.lookSig;
+  S.lookSig = look;
   S.map = { gridType: m.gridType, width: m.width, height: m.height, cellSize: m.cellSize,
     settings: { colors: m.settings.colors, showGrid: m.settings.showGrid }, data: { cells: m.cells, markers: m.markers, rooms: [] } };
-  S.explored = new Set(Object.keys(m.cells).filter(k => m.cells[k].vis === 'full'));
+  if (cellsChanged) S.explored = new Set(Object.keys(m.cells).filter(k => m.cells[k].vis !== 'dim'));
   if (!S.fitted || S.lastMapId !== m.id) { if (S.view === 'map') { focusToken(); S.fitted = true; S.lastMapId = m.id; } }
-  renderActions(); renderLegend(); renderTracker(); invalidate();
+  renderActions(); renderLegend(); renderTracker();
+  if (sceneChanged) invalidate(); else requestDraw();
 }
 /* initiative order, when the GM shows it */
 function renderTracker() {
@@ -273,14 +282,56 @@ function draw() {
   if (hl) { const c = G.cellCenter(hl.c, hl.r), p = vp.toScreen(c.x, c.y); GridCore.drawLabel(ctx2d, p.x, p.y + G.cs * vp.zoom * 0.35, hl.text, G.cs * vp.zoom); }
   vp.drawMinimap(mini);
 }
+/* what is under the pointer: the drawn icon in the isometric view, else the cell's contents */
+function thingsAt(sx, sy, cell) {
+  if (!S.map || !S.st) return null;
+  const sprite = vp.iso ? GridCore.pickSprite(S.map, viewModel(), vp, sx, sy) : null;
+  const at = sprite ? (sprite.kind === 'marker' ? { c: sprite.m.c, r: sprite.m.r } : { c: sprite.t.c, r: sprite.t.r }) : cell;
+  if (!at) return null;
+  const mk = S.map.data.markers.find(x => x.c === at.c && x.r === at.r);
+  const me = S.st.view.token && S.st.view.token.c === at.c && S.st.view.token.r === at.r;
+  const tk = (S.st.view.others || []).find(o => o.c === at.c && o.r === at.r);
+  return { c: at.c, r: at.r, marker: mk || null, token: tk || null, me };
+}
+const markerName = mk => mk.label || (MARKER_BY_ID[mk.type] || MARKER_TYPES[0]).name;
 function hoverLabel() {
-  if (!S.hover || !S.map) return null;
-  const mk = S.map.data.markers.find(x => x.c === S.hover.c && x.r === S.hover.r);
-  const tk = (S.st.view.others || []).find(o => o.c === S.hover.c && o.r === S.hover.r);
+  const at = S.hoverAt;
+  if (!at) return null;
   const parts = [];
-  if (mk) { if (mk.label) parts.push(mk.label); if (mk.cm) { const st = GridCore.cmStatus(mk.cm); if (st !== 'OK') parts.push(st); } if (mk.isLink) parts.push('→ ' + (mk.targetName || 'somewhere')); }
+  const mk = at.marker, tk = at.token;
+  if (mk) { parts.push(markerName(mk)); if (mk.cm) { const st = GridCore.cmStatus(mk.cm); if (st !== 'OK') parts.push(st); } if (mk.isLink) parts.push('→ ' + (mk.targetName || 'somewhere')); }
   if (tk) parts.push(tk.name + (tk.cm && tk.cm.status !== 'OK' ? ` (${tk.cm.status})` : ''));
-  return parts.length ? { c: S.hover.c, r: S.hover.r, text: parts.join(' · ') } : null;
+  return parts.length ? { c: at.c, r: at.r, text: parts.join(' · ') } : null;
+}
+/* right-click: a small card with what the runner can tell about a marker, a runner or a door */
+function closeDetails() { const old = document.getElementById('map-details'); if (old) old.remove(); }
+function showDetails(sx, sy, at) {
+  closeDetails();
+  if (!at) return;
+  const blocks = [];
+  const stats = st => st && Object.keys(st).length ? SR.statusChips(st) : null;
+  if (at.marker) {
+    const mk = at.marker, type = (MARKER_BY_ID[mk.type] || MARKER_TYPES[0]).name, hs = mk.cm ? GridCore.cmStatus(mk.cm) : null;
+    blocks.push(h('div.md-block', h('div.md-title', h('span.md-dot', { style: { background: mk.color || S.map.settings.colors.markerDefault } }), markerName(mk)),
+      mk.label ? h('div.hint', type) : null,
+      hs ? h('div.row.tight', SR.healthTag(hs)) : null, stats(mk.statuses),
+      mk.isLink ? h('p.hint', `Leads to ${mk.targetName || 'somewhere'}.`) : null,
+      mk.info ? h('p.md-info', mk.info) : null));
+  }
+  for (const t of [at.me ? { name: S.st.me.name + ' (you)', color: S.st.me.color, cm: S.st.me.cm, statuses: S.st.me.statuses } : null, at.token].filter(Boolean)) {
+    const hs = t.cm ? (t.cm.status || GridCore.cmStatus(t.cm)) : null;
+    blocks.push(h('div.md-block', h('div.md-title', h('span.md-dot', { style: { background: t.color } }), t.name), hs ? h('div.row.tight', SR.healthTag(hs)) : null, stats(t.statuses)));
+  }
+  const cell = S.map.data.cells[key(at.c, at.r)];
+  const doors = cell && cell.doors ? Object.values(cell.doors) : [];
+  if (doors.length) blocks.push(h('div.md-block', h('div.hint', doors.length === 1 ? (doors[0].open ? 'An open door.' : doors[0].locked ? 'A locked door.' : 'A closed door.') : `${doors.length} doors.`)));
+  if (!blocks.length) return;
+  S.hoverAt = null;
+  const card = h('div#map-details.map-details', { role: 'dialog', 'aria-label': 'Details' }, h('button.x.md-close', { type: 'button', title: 'Close', onclick: closeDetails }, '×'), blocks);
+  wrap.append(card);
+  const W = wrap.clientWidth, H = wrap.clientHeight, cw = card.offsetWidth, ch = card.offsetHeight;
+  card.style.left = Math.max(8, Math.min(W - cw - 8, sx + 12)) + 'px';
+  card.style.top = Math.max(8, Math.min(H - ch - 8, sy + 12)) + 'px';
 }
 function renderActions() {
   const el = $('p-actions'); el.innerHTML = '';
@@ -332,13 +383,16 @@ canvas.addEventListener('pointerdown', ev => {
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
   const pan = ev.button === 1 || ev.button === 2 || S.spaceDown;
   const t = S.st && S.st.view.token, cell = S.map ? geom(S.map).pointToCell(pt.x, pt.y) : null;
-  const onToken = !pan && t && cell && cell.c === t.c && cell.r === t.r;
-  S.drag = { sx, sy, px: vp.panX, py: vp.panY, moved: false, token: onToken, tap: !pan, pt };
+  const at = !pan ? thingsAt(sx, sy, cell) : null;
+  const onToken = !pan && t && at && at.me;
+  if (!ev.target.closest || !ev.target.closest('#map-details')) closeDetails();
+  S.drag = { sx, sy, px: vp.panX, py: vp.panY, moved: false, token: onToken, tap: !pan, pt, right: ev.button === 2 };
   canvas.classList.toggle('panning', pan);
 });
 canvas.addEventListener('pointermove', ev => {
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
   S.hover = S.map ? geom(S.map).pointToCell(pt.x, pt.y) : null;
+  S.hoverAt = S.drag || document.getElementById('map-details') ? null : thingsAt(sx, sy, S.hover);
   if (S.drag) {
     if (Math.hypot(sx - S.drag.sx, sy - S.drag.sy) > 6) S.drag.moved = true;
     if (S.drag.token) S.drag.pt = pt;
@@ -351,6 +405,7 @@ canvas.addEventListener('pointerup', ev => {
   if (d && S.map) {
     const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy), cell = geom(S.map).pointToCell(pt.x, pt.y);
     const t = S.st.view.token;
+    if (d.right && !d.moved) { showDetails(sx, sy, thingsAt(sx, sy, cell)); requestDraw(); return; }
     if (d.tap && !d.moved) { const nowMs = Date.now(); if (nowMs - S.lastTap < 350 && cell) { S.lastTap = 0; ping(cell); requestDraw(); return; } S.lastTap = nowMs; }
     if (d.token && d.moved) moveTo(cell);
     else if (d.tap && !d.moved && cell && t && cell.c === t.c && cell.r === t.r) {
@@ -360,11 +415,12 @@ canvas.addEventListener('pointerup', ev => {
   }
   requestDraw();
 });
-canvas.addEventListener('pointerleave', () => { S.hover = null; requestDraw(); });
-canvas.addEventListener('wheel', ev => { ev.preventDefault(); const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
+canvas.addEventListener('pointerleave', () => { S.hover = null; S.hoverAt = null; requestDraw(); });
+canvas.addEventListener('wheel', ev => { ev.preventDefault(); closeDetails(); const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
 const ARROWS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
 window.addEventListener('keydown', ev => {
   if (S.view !== 'map' || ev.target.matches('input, textarea, select') || document.querySelector('dialog[open]')) return;
+  if (ev.key === 'Escape') closeDetails();
   if (ev.code === 'Space') { S.spaceDown = true; canvas.classList.add('panning'); ev.preventDefault(); }
   if (ev.key.toLowerCase() === 'f' && S.map) { vp.fit(); invalidate(); }
   if (ev.key.toLowerCase() === 'c' && S.map) { focusToken(); invalidate(); }
@@ -443,14 +499,15 @@ function packCard(e, acc) {
     e.includes ? h('p.hint', `Includes the ${e.includes}.`) : null,
     e.skills ? h('p.hint', `Recommended skills: ${e.skills}`) : null,
     h('details', h('summary', `Contents (${e.contents.length})`), h('ul.pack-list', e.contents.map(x => h('li', x)))),
-    ok ? null : h('p.why', '🔒 ' + acc[1]),
+    ok ? null : h('p.why', (outOfStock(acc) ? '📦 ' : '🔒 ') + acc[1]),
     h('div.buy-opts', grade),
     h('div.buy', h('div.col', priceEl, essEl), btn));
   calc();
   return card;
 }
+const outOfStock = acc => !acc[0] && /^Out of stock/.test(acc[1] || '');
 function storeCard(e, acc, owned) {
-  const ch = S.sheet.char, ok = acc[0];
+  const ch = S.sheet.char, ok = acc[0], oos = outOfStock(acc);
   const rating = e.rating ? h('input', { type: 'number', min: e.rating[0], max: e.rating[1], value: e.rating[0], title: `Rating ${e.rating[0]}-${e.rating[1]}` }) : null;
   const grade = e.implant ? h('select', { title: 'Implant grade' }, Object.keys(CAT.store.grades).map(g => option(g, g === 'Standard' ? 'Standard grade' : g))) : null;
   const qty = !e.implant && !e.rating ? h('input', { type: 'number', min: 1, max: 100, value: 1, title: e.sub === 'Ammunition' ? 'Boxes of 10' : 'Quantity' }) : null;
@@ -469,14 +526,14 @@ function storeCard(e, acc, owned) {
     cost = Math.ceil(cost * metaMult - 1e-9);
     const n = qty ? Math.max(1, +qty.value || 1) : 1;
     const total = cost * n;
-    const reach = availOk(av, legal, e.supply);
+    const reach = oos ? [false, acc[1]] : availOk(av, legal, e.supply);
     priceEl.textContent = money(total) + (n > 1 ? ` (${money(cost)} each)` : '');
     priceEl.classList.toggle('short', total > ch.nuyen);
     availEl.textContent = `Avail ${SR.availText(av, legal)}` + (ess != null ? ` · Essence ${ess}` : '');
-    btn.textContent = !reach[0] ? 'Unavailable' : total > ch.nuyen ? 'Not enough ¥' : 'Buy';
+    btn.textContent = oos ? 'Out of stock' : !reach[0] ? 'Unavailable' : total > ch.nuyen ? 'Not enough ¥' : 'Buy';
     btn.disabled = !reach[0] || total > ch.nuyen;
     btn.title = !reach[0] ? reach[1] : total > ch.nuyen ? `You need ${money(total - ch.nuyen)} more` : '';
-    whyEl.textContent = reach[0] ? '' : '🔒 ' + reach[1];
+    whyEl.textContent = reach[0] ? '' : (oos ? '📦 ' : '🔒 ') + reach[1];
     whyEl.hidden = reach[0];
     return { r, n, total, cost };
   }
@@ -489,8 +546,8 @@ function storeCard(e, acc, owned) {
       sheetUI.setSheet(sh); toast(sh.message);
     } catch (err) { toast(err.message, 4500); }
   };
-  const card = h('div.item-card' + (ok ? '' : '.locked'),
-    h('div.cat', e.sub + (owned ? '' : '')), h('h4', e.name, owned ? h('span.tag.approved', { style: { marginLeft: '.4rem' } }, `owned ×${owned}`) : null),
+  const card = h('div.item-card' + (ok ? '' : '.locked') + (oos ? '.oos' : ''),
+    h('div.cat', e.sub + (owned ? '' : '')), h('h4', e.name, oos ? h('span.tag.oos-tag', 'Out of stock') : null, owned ? h('span.tag.approved', { style: { marginLeft: '.4rem' } }, `owned ×${owned}`) : null),
     h('p.stats', SR.itemStats(e)), e.desc ? h('p.hint', e.desc) : null,
     whyEl,
     h('div.buy', h('div.col', priceEl, availEl), h('div.buy-opts', rating ? h('label', 'Rating', rating) : null, grade, qty ? h('label', e.sub === 'Ammunition' ? 'Boxes' : 'Qty', qty) : null), btn));
@@ -581,4 +638,6 @@ async function boot() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
 boot();
+// handle for automated UI tests
+window.__sgp = { S, vp, canvas };
 })();

@@ -61,8 +61,10 @@ function currentView() {
 }
 function hoverLabel() {
   if (!S.hover) return null;
-  const m = markerAt(S.hover.c, S.hover.r), parts = [];
+  const hs = S.hoverSprite, m = hs && hs.kind === 'marker' ? hs.m : markerAt(S.hover.c, S.hover.r), parts = [];
+  if (hs && hs.kind === 'token') return { c: hs.t.c, r: hs.t.r, text: hs.t.name };
   if (m && m.label) parts.push(m.label);
+  if (m && hs) return parts.length || m.linkId ? { c: m.c, r: m.r, text: parts.concat(m.linkId ? ['→ link'] : []).join(' · ') } : null;
   if (m && m.linkId) { const t = m.target && S.ctx.allMaps.find(x => x.id === m.target.mapId); parts.push('→ ' + (t ? t.name : 'by ID ' + m.linkId)); }
   const rm = roomOf(key(S.hover.c, S.hover.r));
   if (rm && S.map.settings.showRoomLabels === false) parts.push(rm.name);
@@ -393,10 +395,17 @@ canvas.addEventListener('pointerdown', ev => {
   const { sx, sy } = vp.canvasPoint(ev);
   if (ev.button === 1 || ev.button === 2 || S.spaceDown) { S.dragging = { kind: 'pan', sx, sy, px: vp.panX, py: vp.panY }; canvas.classList.add('panning'); return; }
   if (ev.button !== 0) return;
-  const pt = vp.screenToMap(sx, sy), cell = G().pointToCell(pt.x, pt.y);
+  const pt = vp.screenToMap(sx, sy);
+  let cell = G().pointToCell(pt.x, pt.y);
+  // in the isometric view, markers and tokens stand above their cell: hit the drawn icon
+  const sprite = GridCore.pickSprite(S.map, currentView(), vp, sx, sy);
+  const hitMarker = sprite && sprite.kind === 'marker' ? sprite.m : (cell && markerAt(cell.c, cell.r));
+  const grabsMarkers = S.tool === 'marker' || S.tool === 'pmarker' || S.tool === 'select'
+    || (S.mode === 'play' && !S.viewAs && (S.tool === 'reveal' || S.tool === 'hide'));
+  if (grabsMarkers && hitMarker) { S.dragging = { kind: 'marker', m: hitMarker, from: { c: hitMarker.c, r: hitMarker.r }, moved: false }; return; }
+  if (sprite && S.tool === 'select') cell = sprite.kind === 'marker' ? { c: sprite.m.c, r: sprite.m.r } : { c: sprite.t.c, r: sprite.t.r };
   if (S.tool === 'rect') { if (cell) { pushUndo(); S.dragging = { kind: 'rect', start: cell }; } return; }
   if (S.tool === 'room') { if (cell) { pushUndo(); S.dragging = { kind: 'room', start: cell, set: new Set([key(cell.c, cell.r)]) }; } requestDraw(); return; }
-  if ((S.tool === 'marker' || S.tool === 'pmarker') && cell && markerAt(cell.c, cell.r)) { S.dragging = { kind: 'marker', m: markerAt(cell.c, cell.r), from: cell, moved: false }; return; }
   S.shiftDown = ev.shiftKey;
   S.dragging = { kind: 'apply', last: null };
   if (cell) { applyTool(cell, pt, true); S.dragging.last = key(cell.c, cell.r); }
@@ -405,6 +414,7 @@ canvas.addEventListener('pointerdown', ev => {
 canvas.addEventListener('pointermove', ev => {
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
   S.hoverPt = pt; S.hover = G().pointToCell(pt.x, pt.y);
+  S.hoverSprite = S.dragging ? null : GridCore.pickSprite(S.map, currentView(), vp, sx, sy);
   if (S.dragging) {
     if (S.dragging.kind === 'pan') { vp.panX = S.dragging.px + (sx - S.dragging.sx); vp.panY = S.dragging.py + (sy - S.dragging.sy); }
     else if (S.dragging.kind === 'apply' && S.hover) { const k = key(S.hover.c, S.hover.r); if (k !== S.dragging.last) { applyTool(S.hover, pt, false); S.dragging.last = k; } }
@@ -460,7 +470,7 @@ function setMode(m) {
   $('mode-edit').classList.toggle('active', m === 'edit'); $('mode-play').classList.toggle('active', m === 'play');
   document.querySelectorAll('[data-mode]').forEach(g => { if (!g.classList.contains('dock')) g.hidden = g.dataset.mode !== m; });
   document.body.dataset.uiMode = m;
-  setTool(m === 'edit' ? 'paint' : 'reveal');
+  setTool(m === 'edit' ? 'paint' : 'select');
   if (isoPref(m) !== vp.iso) setIso(isoPref(m), false);
   if (m === 'play') $('pane-selected').appendChild($('inspector'));
   else document.querySelector('.tool-group[data-mode="edit"]').appendChild($('inspector'));
@@ -471,7 +481,7 @@ function setMode(m) {
 }
 $('mode-edit').onclick = () => setMode('edit');
 $('mode-play').onclick = () => setMode('play');
-function setViewAs(id) { flushFog(); S.viewAs = id; renderViewAs(); refreshFogPanel(); renderInspector(); renderLegend(); invalidate(); }
+function setViewAs(id) { flushFog(); S.viewAs = id; renderViewAs(); renderPlayers(); refreshFogPanel(); renderInspector(); renderLegend(); invalidate(); }
 function renderViewAs() {
   const el = $('view-as'); el.innerHTML = '';
   const mk = (id, label, color) => {
@@ -490,7 +500,7 @@ function renderViewAs() {
 function refreshFogPanel() {
   const p = player();
   $('fog-player').hidden = !p;
-  $('reveal-hint').textContent = p ? `Drag to change what ${p.name} has explored.` : 'Pick a player above to use the Reveal and Hide brushes.';
+  $('reveal-hint').textContent = p ? `Drag to change what ${p.name} has explored.` : 'Pick a player under “See the map as” (or See as on the Runners tab) to reveal or hide what they’ve explored. In the GM view, drag markers to move them.';
   if (p) { $('fog-player-name').textContent = p.name; $('map-station').checked = !!pms(p).mapStation; }
   renderRoomSelects();
 }
@@ -584,8 +594,9 @@ function renderPlayers() {
   Layout.refresh();
   if (S.viewAs && !S.ctx.players.some(p => p.id === S.viewAs)) S.viewAs = '';
   renderViewAs(); refreshFogPanel();
-  const sig = JSON.stringify(S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses]));
-  if (sig === S.playersSig || $('player-list').contains(document.activeElement)) return;
+  const sig = JSON.stringify([S.viewAs, S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses])]);
+  const typing = document.activeElement && $('player-list').contains(document.activeElement) && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if (sig === S.playersSig || typing) return;
   S.playersSig = sig;
   const el = $('player-list'); el.innerHTML = '';
   for (const p of S.ctx.players) {
@@ -606,6 +617,7 @@ function renderPlayers() {
       h('div.row.tight.between', h('span.hint', here ? 'On this map' : elsewhere ? `On ${elsewhere.name}` : 'Not placed'),
         h('span.row.tight',
           here ? h('button.small', { type: 'button', title: 'Take the token off this map', onclick: async () => { await api(`/api/players/${p.id}/unplace`, 'POST', {}); reloadContext(); } }, 'Unplace') : null,
+          h('button.small' + (S.viewAs === p.id ? '.active' : ''), { type: 'button', title: 'See the map as this runner sees it (fog of war); click again for the GM view', onclick: () => { setMode('play'); setViewAs(S.viewAs === p.id ? "" : p.id); } }, S.viewAs === p.id ? 'Seeing as' : 'See as'),
           h('button.small', { type: 'button', onclick: () => { setMode('play'); setViewAs(p.id); setTool('token'); toast(`Click a room cell to place ${p.name}.`); } }, here ? 'Move' : 'Place')))));
   }
   if (!S.ctx.players.length && hasCampaign) el.innerHTML = '<p class="hint">No runners yet. Invite your players; once they join, place their tokens here.</p>';
@@ -693,6 +705,9 @@ function renderInspector() {
     const inp = document.createElement('input'); inp.value = m.label || ''; inp.placeholder = 'label'; inp.className = 'grow';
     inp.onchange = () => updateMarkerLive(m, { label: inp.value.trim() });
     row.appendChild(inp);
+    const info = h('textarea.marker-info', { rows: 2, maxlength: 600, placeholder: 'What players see when they right-click it (optional)', value: m.info || '' });
+    info.onchange = () => { const v = info.value.trim(); updateMarkerLive(m, { info: v }); if (!v) delete m.info; };
+    row.appendChild(info);
     row.appendChild(markerNpc(m));
     row.appendChild(markerCM(m));
     row.appendChild(statusEditor(m.statuses || {}, (name, on, value) => {
@@ -1220,12 +1235,15 @@ for (const n of [4, 8, 12]) $('dice-quick').append(h('button.small', { type: 'bu
 // ------------------------------------------------------------ context load / polling
 function applyContext(c, full) {
   S.version = c.version;
+  const mapSame = !c.map || c.map.data == null;      // the server left the map out: ours is current
+  if (!mapSame) S.mapSig = c.mapSig;
   if (c.now) S.clockSkew = Date.now() / 1000 - c.now;
   if (c.rolls) renderRolls(c.rolls);
   S.ctx.campaignMaps = c.campaignMaps; S.ctx.snapshots = c.snapshots; S.ctx.campaign = c.campaign; S.ctx.allMaps = c.allMaps; if (c.vehicles) S.ctx.vehicles = c.vehicles;
   for (const np of c.players) { if (S.fogQueue && S.fogQueue.pid === np.id) continue; const lp = S.ctx.players.find(p => p.id === np.id); if (lp) Object.assign(lp, np); else S.ctx.players.push(np); }
   S.ctx.players = S.ctx.players.filter(p => c.players.some(np => np.id === p.id));
-  if (full) S.map.data = c.map.data;
+  if (mapSame) { /* nothing changed on the map */ }
+  else if (full) S.map.data = c.map.data;
   else {
     // live state changed elsewhere (players opening doors, combat damage, statuses) wins unless the editor changed it itself
     for (const k in c.map.data.cells) { const nc = c.map.data.cells[k], lc = cells()[k]; if (lc && lc.doors && nc.doors) for (const e in lc.doors) if (nc.doors[e] && !S.rt.all && !S.rt.doors.has(`${k}:${e}`)) { lc.doors[e].open = nc.doors[e].open; if (nc.doors[e].locked) lc.doors[e].locked = true; else delete lc.doors[e].locked; } }
@@ -1243,10 +1261,11 @@ function applyContext(c, full) {
   if (S.follow && p && p.currentMapId && p.currentMapId !== MAP_ID) location.href = `/map/${p.currentMapId}?view=${encodeURIComponent(p.id)}&follow=1`;
 }
 async function reloadContext(full) { applyContext(await api(`/api/maps/${MAP_ID}/context`), full); }
-function schedulePoll(ms) { clearTimeout(S.pollTimer); S.pollInterval = ms; S.pollTimer = setTimeout(poll, ms); }
+/* live updates (SSE) trigger poll() on every change; the timer is only a fallback while the stream is down */
+function schedulePoll(ms) { clearTimeout(S.pollTimer); S.pollInterval = ms; S.pollTimer = setTimeout(poll, Live.connected() ? Math.max(ms, 20000) : ms); }
 async function poll() {
   if (!document.hidden) {
-    try { const c = await api(`/api/maps/${MAP_ID}/context?since=${encodeURIComponent(S.version || '')}`); if (!c.unchanged) applyContext(c, false); }
+    try { const c = await api(`/api/maps/${MAP_ID}/context?since=${encodeURIComponent(S.version || '')}&map=${encodeURIComponent(S.mapSig || '')}`); if (!c.unchanged) applyContext(c, false); }
     catch (e) { /* transient */ }
   }
   schedulePoll(S.pollInterval);
@@ -1260,7 +1279,7 @@ async function boot() {
   const [c, ov] = await Promise.all([api(`/api/maps/${MAP_ID}/context`), api('/api/overview'), SR.catalog()]);
   S.map = c.map;
   S.ctx = { players: c.players, campaigns: ov.campaigns, campaignMaps: c.campaignMaps, snapshots: c.snapshots, campaign: c.campaign, allMaps: c.allMaps, vehicles: c.vehicles || [] };
-  S.version = c.version; if (c.now) S.clockSkew = Date.now() / 1000 - c.now;
+  S.version = c.version; S.mapSig = c.mapSig; if (c.now) S.clockSkew = Date.now() / 1000 - c.now;
   document.title = S.map.name + ' · ShadowGrid';
   $('map-name').value = S.map.name;
   if (c.campaign) { $('back-link').href = `/game/${c.campaign.id}#maps`; $('back-link').textContent = '‹ ' + c.campaign.name; }
@@ -1282,4 +1301,6 @@ async function boot() {
 new ResizeObserver(() => requestDraw()).observe(wrap);
 window.addEventListener('beforeunload', e => { flushFog(); if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 boot().catch(e => { if (e.message !== 'auth') toast('Could not load the map: ' + e.message); });
+// handle for automated UI tests
+window.__sg = { S, vp, G, markerAt, canvas };
 })();

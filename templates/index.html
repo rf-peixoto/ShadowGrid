@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en">
 <head>
+<meta name="sg-catalog" content="{{ catalog_version() }}">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ShadowGrid · Game master</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="{{ asset('style.css') }}">
 </head>
 <body class="home">
 <header class="home-head">
@@ -134,10 +135,10 @@
   </form>
 </dialog>
 
-<script src="/static/api.js"></script>
-<script src="/static/srui.js"></script>
-<script src="/static/gridcore.js"></script>
-<script src="/static/procgen.js"></script>
-<script src="/static/home.js"></script>
+<script src="{{ asset('api.js') }}"></script>
+<script src="{{ asset('srui.js') }}"></script>
+<script src="{{ asset('gridcore.js') }}"></script>
+<script src="{{ asset('procgen.js') }}"></script>
+<script src="{{ asset('home.js') }}"></script>
 </body>
 </html>

@@ -278,10 +278,12 @@ PACK_ENTRIES = [pack_entry(p, i) for i, p in enumerate(C.PACKS)]
 PACK_BY_ID = {e["id"]: (e, C.PACKS[i]) for i, e in enumerate(PACK_ENTRIES)}
 
 
-def access(c, e, approved):
+def access(c, e, approved, prepared=None):
     """A PACK is on sale only if every item in it is (same contact rule as single items)."""
+    if prepared is None:
+        prepared = CAT.prepare_contacts(c)
     for avail, legal, supply in e["checks"]:
-        ok, why = CAT.access(c, avail, legal, supply, approved)
+        ok, why = CAT.access(c, avail, legal, supply, approved, prepared)
         if not ok:
             return False, why
     return True, ""

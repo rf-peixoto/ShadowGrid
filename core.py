@@ -1,4 +1,6 @@
 """Shared app object, database, and helpers used by every route module."""
+import gzip
+import hashlib
 import json
 import os
 import secrets
@@ -35,7 +37,92 @@ app.config.update(
     JSON_SORT_KEYS=False,
 )
 app.json.sort_keys = False
+app.json.compact = True
 app.after_request(apply_security_headers)
+
+
+# ====================================================================== the web server
+def run_server(default_port):
+    """Serve the app with waitress (keep-alive, a thread pool; one thread per open live-update stream).
+    Falls back to Flask's development server only if waitress is missing."""
+    host = os.environ.get("SHADOWGRID_HOST", "127.0.0.1")
+    port = int(os.environ.get("SHADOWGRID_PORT", str(default_port)))
+    try:
+        from waitress import serve
+    except ImportError:
+        print("waitress is not installed; using Flask's slower development server. Run ./install.sh.", flush=True)
+        app.run(debug=False, threaded=True, host=host, port=port)
+        return
+    serve(app, host=host, port=port, ident=os.environ.get("SHADOWGRID_SERVER_IDENT", "nginx"),
+          threads=int(os.environ.get("SHADOWGRID_THREADS", "64")),
+          connection_limit=int(os.environ.get("SHADOWGRID_CONNECTIONS", "200")), channel_timeout=120,
+          max_request_body_size=600 * 1024 * 1024)
+
+
+# ====================================================================== speed: asset versions, caching, gzip
+_ASSET_V = {}
+
+
+def asset_url(name):
+    """/static/<name>?v=<hash of its mtime and size>: the browser keeps it until the file changes."""
+    path = os.path.join(app.static_folder, name)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return f"/static/{name}"
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _ASSET_V.get(name)
+    if not hit or hit[0] != key:
+        hit = (key, hashlib.sha1(f"{name}:{key}".encode()).hexdigest()[:10])
+        _ASSET_V[name] = hit
+    return f"/static/{name}?v={hit[1]}"
+
+
+app.jinja_env.globals["asset"] = asset_url
+
+GZIP_MIN = 1024
+GZIP_TYPES = {"application/json", "text/html", "text/css", "application/javascript", "text/javascript", "image/svg+xml",
+              "text/plain", "text/markdown", "application/manifest+json"}
+_GZ_STATIC = {}      # (path, etag) -> gzipped bytes; static files never change while the server runs
+
+
+def gzip_bytes(data, level=6):
+    return gzip.compress(data, compresslevel=level, mtime=0)
+
+
+@app.after_request
+def _cache_and_compress(resp):
+    path = request.path
+    if path.startswith("/static/") and resp.status_code == 200:
+        if request.args.get("v"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif path.startswith("/static/fonts/"):
+            resp.headers["Cache-Control"] = "public, max-age=604800"
+    if (resp.status_code != 200 or resp.mimetype not in GZIP_TYPES or resp.is_streamed and not resp.direct_passthrough
+            or "Content-Encoding" in resp.headers or "gzip" not in (request.headers.get("Accept-Encoding") or "").lower()
+            or request.method == "HEAD"):
+        return resp
+    static = resp.direct_passthrough
+    key = (path, resp.headers.get("ETag")) if static else None
+    if key and key in _GZ_STATIC:
+        body = _GZ_STATIC[key]
+        resp.direct_passthrough = False
+    else:
+        resp.direct_passthrough = False
+        data = resp.get_data()
+        if len(data) < GZIP_MIN:
+            return resp
+        body = gzip_bytes(data, 6 if static else 5)
+        if key and len(_GZ_STATIC) < 200:
+            _GZ_STATIC[key] = body
+    resp.set_data(body)
+    resp.headers["Content-Encoding"] = "gzip"
+    resp.headers["Content-Length"] = str(len(body))
+    resp.vary.add("Accept-Encoding")
+    etag, weak = resp.get_etag()
+    if etag and not weak:
+        resp.set_etag(etag, weak=True)
+    return resp
 
 DEFAULT_SETTINGS = {
     # Sixth World palette: teal-black void, steel-teal floors, AR-cyan edges, neon magenta markers
@@ -128,6 +215,14 @@ CREATE INDEX IF NOT EXISTS idx_maps_campaign ON maps(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_players_campaign ON players(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_runs_campaign ON runs(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_player ON ledger(player_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ledger_campaign ON ledger(campaign_id, created_at);
+-- campaign_version(): MAX(updated_at) per game on every live-update check
+CREATE INDEX IF NOT EXISTS idx_rolls_updated ON rolls(campaign_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_players_updated ON players(campaign_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_maps_updated ON maps(campaign_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_runs_updated ON runs(campaign_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_handouts_updated ON handouts(campaign_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(campaign_id, updated_at);
 """
 
 
@@ -213,7 +308,7 @@ def err(msg, code=400):
 
 
 # ====================================================================== game settings
-GAME_DEFAULTS = {"sellPct": 50, "substances": []}
+GAME_DEFAULTS = {"sellPct": 50, "substances": [], "outOfStock": []}
 
 
 def game_settings(cid):

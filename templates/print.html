@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en">
 <head>
+<meta name="sg-catalog" content="{{ catalog_version() }}">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Character sheet · ShadowGrid</title>
-<link rel="stylesheet" href="/static/print.css">
+<link rel="stylesheet" href="{{ asset('print.css') }}">
 </head>
 <body data-sheet-url="{{ sheet_url or '' }}">
 <div class="toolbar no-print">
@@ -14,8 +15,8 @@
   <label class="check"><input type="checkbox" id="opt-skills"> All skills (also untrained)</label>
 </div>
 <main id="sheet"><p class="loading">Loading…</p></main>
-<script src="/static/api.js"></script>
-<script src="/static/srui.js"></script>
-<script src="/static/print.js"></script>
+<script src="{{ asset('api.js') }}"></script>
+<script src="{{ asset('srui.js') }}"></script>
+<script src="{{ asset('print.js') }}"></script>
 </body>
 </html>

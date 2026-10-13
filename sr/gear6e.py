@@ -806,8 +806,20 @@ VEHICLE_MODS = [
     _g("Manual Operation (mount)", "Vehicles", "Modifications", "+1", 500, mod=True, desc="Vehicles only; adds 1 to the mount's Availability."),
 ]
 
+def _substance_doses():
+    """The core book's toxins and drugs, sold by the dose (Medical › Drugs / Toxins)."""
+    from . import toxins6e as TOX
+    out = []
+    for x in TOX.CORE_TOXINS + TOX.CORE_DRUGS:
+        out.append(_g(f"{x['name']} (dose)", "Medical", "Drugs" if x["kind"] == "drug" else "Toxins", x["avail"], x["cost"],
+                      desc=f"Power {x['power']}. {x['desc']}", consumable=True, substance=x["id"]))
+    return out
+
+
+SUBSTANCE_DOSES = _substance_doses()
+
 GEAR_CATALOG = (WEAPONS + AMMO + EXPLOSIVES + WEAPON_ACCESSORIES + ARMOR + COMMLINKS + CYBERDECKS + RCCS
-                + ELECTRONICS + CYBERWARE + BIOWARE + MAGIC_GEAR + VEHICLES + VEHICLE_MODS)
+                + ELECTRONICS + SUBSTANCE_DOSES + CYBERWARE + BIOWARE + MAGIC_GEAR + VEHICLES + VEHICLE_MODS)
 
 
 

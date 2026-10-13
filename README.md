@@ -37,7 +37,8 @@ game masters, with screenshots.
   and they find items with an Availability below their Connection. Implants
   come in grades, ammo is sold by the box, and gear can be sold back at a
   percentage the GM sets. PACKs are bought in one go, item by item checked
-  against the player's contacts.
+  against the player's contacts. The GM marks items out of stock (and back)
+  from the game's Store tab.
 - **A map-first play screen** for players and the GM: the map fills the
   screen, the initiative order runs in a strip above it, the dice roller and
   table log sit in a collapsible panel below, and everything else is in a
@@ -45,7 +46,8 @@ game masters, with screenshots.
   dice.
 - **Fog-of-war maps** on square or hex grids, drawn by hand or generated. Each
   player sees only what their runner has explored, and doors block movement and
-  sight.
+  sight. Players right-click markers and runners for details, including a
+  description the GM writes; the GM can see the map as any runner.
 - **Isometric view** in the style of the SNES Shadowrun, or a flat top-down
   view. Toggle with <kbd>I</kbd>.
 - **SR6 dice roller**: pools from the sheet, hits and glitches, thresholds, the
@@ -65,10 +67,11 @@ game masters, with screenshots.
     damage, and Edge gained from Attack Rating against Defense Rating.
 - **Rigging**: vehicles and drones on the sheet can also be placed on the map
   as markers that share their damage. Control modes, autosofts and ramming.
-- **Toxins and drugs**: a library per game (with the Companion's substances
-  built in) that the GM extends. The GM exposes runners from their sheet;
-  players take the drugs they carry. Effects, crashes and addiction tests
-  are applied.
+- **Toxins and drugs**: the core rulebook's toxins and drugs and the
+  Companion's substances are built in, the store sells doses, and the GM adds
+  their own. The GM exposes runners from their sheet; players take the drugs
+  they carry. Damage, statuses, bonuses, crashes and addiction tests are
+  applied.
 - **NPCs** from the core-book templates by Professional Rating, critters,
   spirits of any Force, IC, vehicles and drones, the runners' own vehicles,
   the Companion's contact archetypes and the Infected, with grunt condition
@@ -138,7 +141,8 @@ computers and phones on it. The script prints the addresses to open.
 ./local.sh --only-me    # only this computer can connect
 ```
 
-`python app.py` does the same, but only this computer can connect.
+`python app.py` does the same, but only this computer can connect. Both use
+the same production web server (waitress) as `serve.sh`.
 
 ## Play over the internet: `./serve.sh`
 
@@ -190,6 +194,15 @@ can also set them yourself when running `app.py` or `serve.py` directly.
 | `SHADOWGRID_SERVER_IDENT` | `Server` response header (default `nginx`) |
 | `SHADOWGRID_THREADS` / `SHADOWGRID_CONNECTIONS` | Worker threads and connection limit of `serve.py` (64 and 200) |
 | `SHADOWGRID_MAX_STREAMS` | Live-update connections allowed at once (default 150) |
+
+### Speed
+
+- Pages, scripts and data are compressed; scripts and styles carry a
+  version in their address, so browsers keep them until they change.
+- The catalog (every item, spell and rules topic) is built once when the
+  server starts and cached by browsers.
+- Live updates only send what changed: unchanged map cells, for example,
+  are not sent again.
 
 ### Security measures
 
@@ -278,9 +291,10 @@ the `data/` folder, or download a backup and restore it there.
   own, Pilot + autosoft. Vehicles have one monitor of 8 + Body/2 and ignore
   Stun up to their Body.
 - **Toxins and drugs:** Body + Willpower resists, each hit lowering the Power
-  by 1; what's left becomes damage, statuses and a drug's bonuses, with its
-  crash when it wears off. Failing an addiction test gives or worsens the
-  Addiction quality.
+  by 1; what's left becomes damage (equal to the Power left), statuses and a
+  drug's bonuses, with its crash when it wears off. Failing an addiction test
+  gives or worsens the Addiction quality. The core values come from the
+  rulebook's tables, with the 2019 errata's prices.
 - **Reputation and Heat** are set by the GM and logged in the history.
 - **Healing:** first aid and medkits test against 5 − Essence, once per set of
   injuries (−2 and no Edge without a medkit; a medkit adds +1 and uses a set of
@@ -297,7 +311,8 @@ the `data/` folder, or download a backup and restore it there.
 - **Advancement after approval:**
   - Raising an attribute or skill costs the new rating × 5 Karma.
   - A specialization or expertise costs 5, a knowledge skill 3, a spell or
-    complex form 5, and a positive quality twice its cost.
+    complex form 5, and a positive quality twice its cost. Negative
+    qualities taken after approval give no Karma.
   - Initiation or submersion costs 10 + the new grade.
   - Bonding a focus costs Force × its type multiplier in Karma.
   - Karma trades for nuyen at 1 = 2,000¥.

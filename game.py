@@ -1,5 +1,6 @@
 """Games: invites, player accounts, character sheets, the Shadowrun dice roller,
 Edge, runs (contracts), Karma/Nuyen grants and the reference catalog."""
+import hashlib
 import json
 import re
 import secrets
@@ -7,7 +8,7 @@ import secrets
 from flask import Response, abort, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from core import (APPROVED, DRAFT, GM_COLOR, INVITE_DAYS, PLAYER_COLORS, SUBMITTED, add_roll, app, body,
+from core import (APPROVED, DRAFT, GM_COLOR, INVITE_DAYS, PLAYER_COLORS, SUBMITTED, add_roll, app, body, gzip_bytes,
                   campaign_version, clamp_int, display_name, err, fetch_player_row, game_settings, get_db, ledger_add,
                   ledger_rows, load_char, new_id, now, player_required, roll_rows, row_to_player, save_char)
 import handouts as HO
@@ -79,11 +80,38 @@ def catalog():
     return CATALOG
 
 
+_CATALOG_BLOB = None
+
+
+def catalog_blob():
+    """The catalog as JSON bytes, gzipped bytes and a version hash, built once per server start."""
+    global _CATALOG_BLOB
+    if _CATALOG_BLOB is None:
+        raw = app.json.dumps(catalog()).encode()
+        _CATALOG_BLOB = (raw, gzip_bytes(raw, 9), hashlib.sha1(raw).hexdigest()[:16])
+    return _CATALOG_BLOB
+
+
+app.jinja_env.globals["catalog_version"] = lambda: catalog_blob()[2]
+
+
 @app.route("/api/catalog")
 def api_catalog():
     if not session.get("gamemaster") and not session.get("pid"):
         return err("Sign in required.", 401)
-    return jsonify(catalog())
+    raw, gz, ver = catalog_blob()
+    cache = "private, max-age=31536000, immutable" if request.args.get("v") == ver else "private, no-cache"
+    if request.if_none_match.contains_weak(ver):
+        resp = Response(status=304)
+    else:
+        use_gz = "gzip" in (request.headers.get("Accept-Encoding") or "").lower()
+        resp = Response(gz if use_gz else raw, mimetype="application/json")
+        if use_gz:
+            resp.headers["Content-Encoding"] = "gzip"
+        resp.vary.add("Accept-Encoding")
+    resp.set_etag(ver, weak=True)
+    resp.headers["Cache-Control"] = cache
+    return resp
 
 
 # ====================================================================== shared payload builders
@@ -99,18 +127,64 @@ def run_to_dict(row):
             "scaledPayout": scaled, "createdAt": row["created_at"], "completedAt": row["completed_at"]}
 
 
-def store_access(c, approved):
+def store_access(c, approved, out_of_stock=()):
     """{item id: [ok, reason, price]} for the store tab."""
     out = {}
-    mk = R.price_markup(c)
+    mk = tuple(R.price_markup(c))
+    prepared = CAT.prepare_contacts(c)
     for e in CAT.ITEMS:
-        o = CAT.offer(e, None, "Standard", mk)
-        ok, why = CAT.access(c, o["avail"], o["legal"], e["supply"], approved)
+        o = CAT.base_offer(e["id"], mk)
+        ok, why = CAT.access(c, o["avail"], o["legal"], e["supply"], approved, prepared)
         out[e["id"]] = [ok, why, o["cost"]]
     for e in PK.PACK_ENTRIES:
-        ok, why = PK.access(c, e, approved)
+        ok, why = PK.access(c, e, approved, prepared)
         out[e["id"]] = [ok, why, int(round(e["cost"] * (1 + mk[0])))]
+    oos = set(out_of_stock)
+    if oos:
+        for e in PK.PACK_ENTRIES:
+            gone = [CAT.BY_ID[r]["name"] for r in pack_refs(e["id"]) & oos]
+            if gone and e["id"] not in oos:
+                out[e["id"]] = [False, f"Out of stock right now: {', '.join(gone)}.", out[e["id"]][2]]
+    for i in oos:
+        if i in out:
+            out[i] = [False, "Out of stock right now. The GM will say when it's back.", out[i][2]]
     return out
+
+
+_PACK_REFS = {}
+
+
+def pack_refs(pid):
+    """Store item ids inside a PACK (cached; the PACK list never changes at runtime)."""
+    if pid not in _PACK_REFS:
+        hit = PK.PACK_BY_ID.get(pid)
+        _PACK_REFS[pid] = {x["ref"] for x in PK.resolve_pack(hit[1])["items"] if x.get("ref")} if hit else set()
+    return _PACK_REFS[pid]
+
+
+STOCK_MAX = 5000
+
+
+@app.route("/api/games/<cid>/stock", methods=["PUT"])
+@gamemaster_required
+def stock_update(cid):
+    """Mark store items or PACKs out of stock (inStock false) or back in stock, for this game."""
+    g = game_or_404(cid)
+    b = body()
+    ids = b.get("ids")
+    if not isinstance(ids, list):
+        return err("Send the item ids.")
+    valid = {str(i) for i in ids[:STOCK_MAX] if str(i) in CAT.BY_ID or str(i) in PK.PACK_BY_ID}
+    cur = json.loads(g["settings"] or "{}")
+    out = set(cur.get("outOfStock") or [])
+    if b.get("inStock"):
+        out -= valid
+    else:
+        out |= valid
+    cur["outOfStock"] = sorted(out)[:STOCK_MAX]
+    get_db().execute("UPDATE campaigns SET settings=?, updated_at=? WHERE id=?", (json.dumps(cur), now(), cid))
+    get_db().commit()
+    return jsonify({"outOfStock": cur["outOfStock"]})
 
 
 def sheet_payload(row, gamemaster):
@@ -127,8 +201,9 @@ def sheet_payload(row, gamemaster):
     return {"player": row_to_player(row, include_state=False), "char": c, "derived": d, "pools": R.pools(c, d),
             "approved": approved, "locked": approved and not gamemaster, "gamemaster": gamemaster,
             "ledger": ledger_rows(pid=row["id"], limit=50), "allies": allies,
-            "store": store_access(c, approved), "sellPct": settings["sellPct"],
-            "substances": [{k: x.get(k) for k in ("id", "name", "kind", "power", "duration", "effects", "attrs", "init_dice", "desc", "vectors", "damage", "addiction")}
+            "store": store_access(c, approved, settings["outOfStock"]), "sellPct": settings["sellPct"],
+            "substances": [{k: x.get(k) for k in ("id", "name", "kind", "source", "power", "speed", "duration", "effects", "attrs", "init_dice", "desc", "vectors",
+                                                    "damage", "addiction", "pool", "pool_physical", "skills", "hpt", "sustain", "zero", "crash")}
                            for x in substances(row["campaign_id"])],
             "spirits": [R.spirit_stats(s["type"], s["force"]) for s in c.get("spirits") or [] if s.get("type") in M.SPIRITS]}
 
@@ -144,7 +219,8 @@ def char_tx(pid, gamemaster, mutate):
             abort(404)
         c = load_char(row)
         start = {"karma": c["karma"], "nuyen": c["nuyen"]}
-        ctx = R.Ctx(row["approved"] == APPROVED, gamemaster, game_settings(row["campaign_id"])["sellPct"])
+        gs = game_settings(row["campaign_id"])
+        ctx = R.Ctx(row["approved"] == APPROVED, gamemaster, gs["sellPct"], gs["outOfStock"])
         msg = mutate(c, ctx, row)
         R.clamp_state(c)
         save_char(pid, c)
@@ -541,7 +617,9 @@ def me_dose(me):
 
         def mutate(c, ctx, row):
             name = sub["name"].lower()
-            it = next((x for x in c["inventory"] if (x.get("name") or "").lower().startswith(name) and R._int(x.get("qty"), 1) > 0), None)
+            mine = [x for x in c["inventory"] if R._int(x.get("qty"), 1) > 0]
+            it = next((x for x in mine if (CAT.BY_ID.get(x.get("ref") or "") or {}).get("substance") == sub.get("id")), None) \
+                or next((x for x in mine if (x.get("name") or "").lower().startswith(name)), None)
             if not it:
                 raise R.RuleError(f"You don't carry any {sub['name']}.")
             it["qty"] = R._int(it.get("qty"), 1) - 1
@@ -897,7 +975,8 @@ def me_state(me):
         "me": row_to_player(me, include_state=False),
         "view": player_view(me), "rolls": roll_rows(me["campaign_id"]),
         "activeRuns": sum(1 for r in runs if r["status"] == "Active"), "runsSig": [[r["id"], r["status"], r["progress"]] for r in runs],
-        "sheetRev": me["char_rev"],
+        # the sheet also changes with the game's settings (store stock, sell %, substance library)
+        "sheetRev": f'{me["char_rev"]}-{hashlib.sha1(json.dumps(game_settings(me["campaign_id"]), sort_keys=True).encode()).hexdigest()[:10]}',
         "handouts": HO.visible_handouts(me),
         "sessionsSig": [[r["id"], r["updated_at"]] for r in get_db().execute(
             "SELECT id, updated_at FROM sessions WHERE campaign_id=? AND shared=1 AND ended_at IS NOT NULL", (me["campaign_id"],)).fetchall()],

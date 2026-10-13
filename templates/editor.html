@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en">
 <head>
+<meta name="sg-catalog" content="{{ catalog_version() }}">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ShadowGrid · Map</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="{{ asset('style.css') }}">
 </head>
 <body class="editor" data-map-id="{{ map_id }}">
 
@@ -100,12 +101,15 @@
         <div class="view-as" id="view-as"></div>
         <h4 class="pane-h">Tool</h4>
       <div class="tool-buttons">
-        <button data-tool="reveal" class="tool active" title="Reveal cells by dragging (P)">Reveal</button>
+        <button data-tool="reveal" class="tool" title="Reveal cells for the runner you see the map as (P)">Reveal</button>
         <button data-tool="hide" class="tool" title="Hide cells again (E)">Hide</button>
         <button data-tool="pdoor" class="tool" title="Open or close a door (D)">Doors</button>
         <button data-tool="token" class="tool" title="Place this player's token (T)">Token</button>
         <button data-tool="pmarker" class="tool" title="Move markers, set enemy health (M)">Markers</button>
-        <button data-tool="select" class="tool" title="Inspect a cell (V)">Select</button>
+        <button data-tool="select" class="tool active" title="Click to inspect, drag a marker to move it (V)">Select</button>
+      </div>
+      <div class="tool-opts" data-for="select">
+        <p class="hint">Click a marker, token or cell to inspect it in the Selected tab. Drag a marker to move it.</p>
       </div>
       <div class="tool-opts" data-for="reveal hide">
         <label>Brush size <input type="range" id="brush-size" min="1" max="5" value="1"> <span id="brush-size-val">1</span></label>
@@ -256,10 +260,10 @@
   </form>
 </dialog>
 
-<script src="/static/api.js"></script>
-<script src="/static/layout.js"></script>
-<script src="/static/srui.js"></script>
-<script src="/static/gridcore.js"></script>
-<script src="/static/editor.js"></script>
+<script src="{{ asset('api.js') }}"></script>
+<script src="{{ asset('layout.js') }}"></script>
+<script src="{{ asset('srui.js') }}"></script>
+<script src="{{ asset('gridcore.js') }}"></script>
+<script src="{{ asset('editor.js') }}"></script>
 </body>
 </html>

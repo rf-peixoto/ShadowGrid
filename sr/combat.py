@@ -514,11 +514,13 @@ def status_parts(f, key, ranged=False):
     return out
 
 
-def sustain_parts(f):
+def sustain_parts(f, physical=False):
+    """Sustained spells and drugs in effect (runners only)."""
     if f.char is None:
         return []
     n = R.sustain_count(f.char)
-    return [[f"Sustaining {n} spell{'s' if n > 1 else ''}", n * ACT.SUSTAIN_PENALTY]] if n else []
+    out = [[f"Sustaining {n} spell{'s' if n > 1 else ''}", n * R.sustain_step(f.char)]] if n else []
+    return out + R.substance_parts(f.char, physical=physical)
 
 
 def interrupt_ok(key, weapon):
@@ -568,7 +570,7 @@ def resolve_attack(att, weapon, target, opts):
     a_parts = [list(p) for p in weapon["parts"]]
     if att.wound:
         a_parts.append(["Wound modifier", att.wound])
-    a_parts += sustain_parts(att) + status_parts(att, "attack", ranged)
+    a_parts += sustain_parts(att, physical=any(p[0] in K.PHYSICAL for p in a_parts)) + status_parts(att, "attack", ranged)
     if opts.get("dirt"):
         a_parts.append(["Hit the Dirt", ACT.HIT_THE_DIRT_PENALTY])
     if called:
@@ -613,7 +615,7 @@ def resolve_attack(att, weapon, target, opts):
             d_parts = [p for p in d_parts if p[0] != "Reaction"] + [["Immobilized: no Reaction", 0]]
     if target.wound:
         d_parts.append(["Wound modifier", target.wound])
-    d_parts += sustain_parts(target) + status_parts(target, "defense", ranged)
+    d_parts += sustain_parts(target, physical=any(p[0] in K.PHYSICAL for p in d_parts)) + status_parts(target, "defense", ranged)
     if target.status("Prone") and not matrix and not weapon.get("astral") and not (weapon.get("spell") and weapon.get("direct")):
         far = ranged and rng in ACT.PRONE["far_ranges"]
         d_parts.append(["Prone", ACT.PRONE["defense_far"] if far else ACT.PRONE["defense_near"]])

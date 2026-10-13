@@ -1,10 +1,11 @@
 <!doctype html>
 <html lang="en">
 <head>
+<meta name="sg-catalog" content="{{ catalog_version() }}">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>ShadowGrid</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="{{ asset('style.css') }}">
 </head>
 <body class="app player-page">
 <header class="appbar">
@@ -111,12 +112,12 @@
 <!-- ===== WIKI ===== -->
 <section class="view" id="view-wiki"><div class="page"><div class="page-inner"><div class="wiki" id="wiki"></div></div></div></section>
 
-<script src="/static/api.js"></script>
-<script src="/static/layout.js"></script>
-<script src="/static/gridcore.js"></script>
-<script src="/static/srui.js"></script>
-<script src="/static/sheet.js"></script>
-<script src="/static/wiki.js"></script>
-<script src="/static/play.js"></script>
+<script src="{{ asset('api.js') }}"></script>
+<script src="{{ asset('layout.js') }}"></script>
+<script src="{{ asset('gridcore.js') }}"></script>
+<script src="{{ asset('srui.js') }}"></script>
+<script src="{{ asset('sheet.js') }}"></script>
+<script src="{{ asset('wiki.js') }}"></script>
+<script src="{{ asset('play.js') }}"></script>
 </body>
 </html>

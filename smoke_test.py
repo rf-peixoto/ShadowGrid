@@ -638,8 +638,12 @@ after = j(r)["derived"]
 check(r.status_code == 200 and after["attributes"]["Reaction"] == before["attributes"]["Reaction"] + 1 and after["initiative_dice"] == before["initiative_dice"] + 1, "a drug's bonuses apply while it's in effect")
 check(item(j(r), "Test Jazz")["qty"] == 1, "taking a dose uses one up")
 s0 = j(r)["char"]["stun_damage"]
-r = rg.post("/api/me/sheet/action", json={"action": "end_substance", "index": 0}, headers=H)
+act_i = next(i for i, t in enumerate(j(r)["char"]["toxins"]) if t["name"] == "Test Jazz")
+r = rg.post("/api/me/sheet/action", json={"action": "end_substance", "index": act_i}, headers=H)
 check(j(r)["derived"]["attributes"]["Reaction"] == before["attributes"]["Reaction"] and j(r)["char"]["stun_damage"] == min(j(r)["derived"]["stun_boxes"], s0 + 3), "when it wears off, the crash applies")
+st_i = next(i for i, t in enumerate(j(r)["char"]["toxins"]) if t["name"] == "Test Stunner")
+r = gm.post(f"/api/players/{rgid}/sheet/action", json={"action": "end_substance", "index": st_i}, headers=H)
+check(not j(r)["char"]["statuses"].get("Nauseated"), "when a toxin wears off, its statuses end")
 r = rg.post("/api/me/sheet/action", json={"action": "set_info", "heat": 3}, headers=H)
 check(r.status_code == 400 and "GM" in j(r)["error"], "players can't change their own Heat")
 r = gm.post(f"/api/players/{rgid}/sheet/action", json={"action": "set_info", "heat": 3, "reputation": 2}, headers=H)
@@ -717,6 +721,64 @@ check(not any(x["name"] == "After the backup" for x in j(gm.get(f"/api/games/{ci
 r = gm.post("/api/backup/restore", data={"file": (io.BytesIO(b"not a zip"), "x.zip")}, headers=H, content_type="multipart/form-data")
 check(r.status_code == 400, "a bad file is refused")
 check(gm.get("/api/backups/..%2Fshadowgrid.db").status_code == 404, "no path tricks on backup names")
+
+print("Store stock, core substances, qualities in play, marker details, speed")
+login(gm, "gamemaster", "gm-password-123")
+login(pl, "ana", "brand-new-pass")
+me0 = j(pl.get("/api/me/sheet"))
+gun = next(e for e in j(pl.get("/api/catalog"))["store"]["items"] if e["name"] == "Ares Predator VI")
+r = gm.put(f"/api/games/{cid}/stock", json={"ids": [gun["id"], "nope"], "inStock": False}, headers=H)
+check(r.status_code == 200 and j(r)["outOfStock"] == [gun["id"]], "the GM marks an item out of stock (unknown ids ignored)")
+sh = j(pl.get("/api/me/sheet"))
+check(not sh["store"][gun["id"]][0] and sh["store"][gun["id"]][1].startswith("Out of stock"), "players see it out of stock")
+r = pl.post("/api/me/sheet/action", json={"action": "buy", "ref": gun["id"]}, headers=H)
+check(r.status_code == 400 and "out of stock" in j(r)["error"], "and can't buy it")
+packs_with = [e["id"] for e in j(pl.get("/api/catalog"))["packs"] if not sh["store"][e["id"]][0] and "Ares Predator VI" in sh["store"][e["id"]][1]]
+check(packs_with, "PACKs with it inside are out of stock too")
+gm.put(f"/api/games/{cid}/stock", json={"ids": [gun["id"]], "inStock": True}, headers=H)
+check(j(pl.get("/api/me/sheet"))["store"][gun["id"]][1] == me0["store"][gun["id"]][1], "back in stock")
+check(j(gm.get(f"/api/games/{cid}"))["game"]["settings"]["outOfStock"] == [], "the game settings list what is out")
+subs = j(gm.get(f"/api/players/{pid}/sheet"))["substances"]
+names = {x["name"] for x in subs}
+check({"Narcoject", "Neuro-Stun X", "Seven-7", "Jazz", "Kamikaze", "Novacoke", "Psyche", "Zen", "Long Haul"} <= names, "the core book's toxins and drugs are built in")
+dose = next(e for e in j(pl.get("/api/catalog"))["store"]["items"] if e.get("substance") == "nitro")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "buy", "ref": dose["id"], "qty": 2}, headers=H)
+pool0 = next(p for p in j(pl.get("/api/me/sheet"))["pools"] if p["key"] == "skill:Perception")
+r = pl.post("/api/me/dose", json={"id": "nitro", "resist": False}, headers=H)
+sh = j(r)
+pool1 = next(p for p in sh["pools"] if p["key"] == "skill:Perception")
+check(r.status_code == 200 and pool1["value"] == pool0["value"] + 2, "a dose bought in the store works (Nitro: +2 Perception)")
+i = next(i for i, t in enumerate(sh["char"]["toxins"]) if t["name"] == "Nitro")
+sh = j(pl.post("/api/me/sheet/action", json={"action": "end_substance", "index": i}, headers=H))
+pool2 = next(p for p in sh["pools"] if p["key"] == "skill:Perception")
+check(any(t["name"] == "Nitro crash" for t in sh["char"]["toxins"]) and pool2["value"] == max(0, pool0["value"] - 2), "its crash: −2 dice for a while")
+r = gm.post(f"/api/players/{pid}/expose", json={"id": "seven-7", "resist": False}, headers=H)
+check(j(r)["char"]["statuses"].get("Blinded") == 1 and j(r)["char"]["statuses"].get("Nauseated"), "Seven-7: Blinded I and Nauseated")
+approved = j(gm.get(f"/api/players/{pid}/sheet"))["approved"]
+if not approved:
+    gm.post(f"/api/players/{pid}/review", json={"decision": "approve"}, headers=H)
+k0 = j(pl.get("/api/me/sheet"))["char"]["karma"]
+r = pl.post("/api/me/sheet/action", json={"action": "add_quality", "quality": "Distinctive Style"}, headers=H)
+check(r.status_code == 200 and j(r)["char"]["karma"] == k0 and any(q["name"] == "Distinctive Style" for q in j(r)["char"]["qualities"]), "after approval a runner takes a negative quality (no Karma)")
+check(any("Distinctive Style" in (x.get("data") or {}).get("text", "") for x in j(gm.get(f"/api/games/{cid}"))["rolls"]), "and the GM sees it in the table log")
+r = gm.post(f"/api/maps/{mid}/marker", json={"id": "e1", "info": "A tall troll in a long coat."}, headers=H)
+check(r.status_code == 200 and j(r)["marker"]["info"] == "A tall troll in a long coat.", "the GM writes what players see on a marker")
+st = j(pl.get("/api/me/state"))
+mk = [m for m in (st["view"]["map"] or {}).get("markers", []) if m["id"] == "e1"]
+check(not mk or mk[0].get("info") == "A tall troll in a long coat.", "players get the description with the marker")
+if st["view"]["map"]:
+    sig = st["view"]["map"]["cellsSig"]
+    again = j(pl.get(f"/api/me/state?cells={sig}"))["view"]["map"]
+    check(again["cells"] is None and again["cellsSig"] == sig, "unchanged map cells aren't sent again")
+r = pl.get("/api/catalog", headers={"Accept-Encoding": "gzip"})
+check(r.headers.get("Content-Encoding") == "gzip" and r.headers.get("ETag"), "the catalog comes compressed, with an ETag")
+check(pl.get("/api/catalog", headers={"If-None-Match": r.headers["ETag"]}).status_code == 304, "and is not sent again when unchanged")
+r = pl.get("/api/me/sheet", headers={"Accept-Encoding": "gzip"})
+check(r.headers.get("Content-Encoding") == "gzip", "API answers are compressed")
+page = pl.get("/play").data.decode()
+check("/static/play.js?v=" in page and 'name="sg-catalog"' in page, "pages link versioned scripts")
+r = pl.get(page.split('src="')[1].split('"')[0] if 'src="/static/' in page else "/static/api.js?v=x")
+check("immutable" in r.headers.get("Cache-Control", ""), "versioned scripts are cached for good")
 
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "All checks passed.")

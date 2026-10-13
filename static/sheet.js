@@ -459,14 +459,13 @@ function mount(root, cfg) {
     });
     if (!list.children.length) list.append(h('p.hint', 'None yet.'));
     cur.append(list);
-    if (locked()) cur.append(h('p.hint.mt', `After approval a positive quality costs ${CAT.karma.quality_mult}× its Karma and a negative one can be bought off for ${CAT.karma.quality_mult}× its bonus. New negative qualities come from the GM.`));
+    if (locked()) cur.append(h('p.hint.mt', `After approval a positive quality costs ${CAT.karma.quality_mult}× its Karma and a negative one can be bought off for ${CAT.karma.quality_mult}× its bonus. Negative qualities taken now give no Karma, and the GM sees them in the table log.`));
     out.append(cur);
     for (const side of ['Positive', 'Negative']) {
-      if (locked() && side === 'Negative') continue;
       const items = Object.entries(CAT.qualities).filter(([, q]) => !q.racial_only && (side === 'Positive' ? q.karma > 0 : q.karma <= 0)).map(([name, q]) => ({ name, ...q }));
-      const card = h('div.card', h('h3', `${side} qualities`, h('span.hint', side === 'Positive' ? (locked() ? `cost ${CAT.karma.quality_mult}× Karma` : 'cost Karma') : 'give Karma')));
+      const card = h('div.card', h('h3', `${side} qualities`, h('span.hint', side === 'Positive' ? (locked() ? `cost ${CAT.karma.quality_mult}× Karma` : 'cost Karma') : (locked() ? 'no Karma after approval' : 'give Karma'))));
       card.append(pickList(items, { height: '40vh', render: q => {
-        const k = Math.abs(q.karma) * (locked() ? CAT.karma.quality_mult : 1);
+        const k = side === 'Negative' && locked() ? 0 : Math.abs(q.karma) * (locked() ? CAT.karma.quality_mult : 1);
         return h('div.pick', h('div', h('div', q.name + (q.levels ? ` (1-${q.levels})` : ''), q.source ? h('span.tag.src', q.group && !['Positive', 'Negative'].includes(q.group) ? q.group : 'Companion') : null),
           h('div.meta', `${q.desc} · ${k} Karma${q.levels ? ' per level' : ''}${q.choice ? ` · choose ${q.choice}` : ''}`)),
           h('button.small', { type: 'button', disabled: side === 'Positive' && !cfg.gm && ch.karma < k, onclick: () => addQuality(q) }, 'Add'));
@@ -489,7 +488,8 @@ function mount(root, cfg) {
       level = +lv.value || 1; choice = ch ? ch.value : '';
     }
     const k = Math.abs(q.karma) * level * (locked() ? CAT.karma.quality_mult : 1);
-    if (locked() && !await UI.confirm(`Take ${q.name} for ${k} Karma?`, { ok: 'Confirm' })) return;
+    if (locked() && q.karma <= 0 && !await UI.confirm(`Take the negative quality ${q.name}? You get no Karma for it after approval, and the GM is told in the table log.`, { ok: 'Take it' })) return;
+    if (locked() && q.karma > 0 && !await UI.confirm(`Take ${q.name} for ${k} Karma?`, { ok: 'Confirm' })) return;
     act('add_quality', { quality: q.name, level, choice });
   }
 
@@ -903,11 +903,21 @@ function mount(root, cfg) {
 
   // ------------------------------------------------------------ combat
   /* toxins, drugs and diseases: drugs in effect, taking a dose (player), exposing the runner (GM) */
+  /* "Reaction +1, +2D6 Initiative, Perception +2, −2 dice on all tests, Dazed" */
+  function substanceEffects(t) {
+    const sg = v => (v > 0 ? '+' : '−') + Math.abs(v);
+    return [Object.entries(t.attrs || {}).map(([a, v]) => `${a} ${sg(v)}`).join(', '),
+      t.init_dice ? `+${t.init_dice}D6 Initiative` : '',
+      Object.entries(t.skills || {}).map(([k, v]) => `${k} ${sg(v)}`).join(', '),
+      t.pool ? `${sg(t.pool)} dice on all tests` : '', t.pool_physical ? `${sg(t.pool_physical)} dice on Physical tests` : '',
+      t.hpt ? `wound modifiers −${t.hpt}` : '', t.sustain ? `sustaining costs ${sg(t.sustain)} per spell` : '',
+      (t.zero || []).length ? `${t.zero.join(' and ')} 0` : '', (t.statuses || []).join(', ')].filter(Boolean).join(', ');
+  }
   function substanceCard() {
     const ch = c(), lib = S.sheet.substances || [], active = ch.toxins || [];
     const card = h('div.card', h('h3', 'Drugs and toxins'));
     if (active.length) card.append(h('ul.plain', active.map((t, i) => h('li.row.tight', h('b', t.name),
-      h('span.hint', [Object.entries(t.attrs || {}).map(([a, v]) => `${a} ${v > 0 ? '+' : ''}${v}`).join(', '), t.init_dice ? `+${t.init_dice}D6 Initiative` : '', t.duration ? `for ${t.duration}` : ''].filter(Boolean).join(' · ')),
+      h('span.hint', [substanceEffects(t), t.duration ? `for ${t.duration}` : ''].filter(Boolean).join(' · ')),
       h('button.small', { type: 'button', title: 'The effect ends and the crash applies', onclick: () => act('end_substance', { index: i }) }, 'Wears off')))));
     else card.append(h('p.hint', 'Nothing in effect. Resisting a toxin: Body + Willpower, each hit lowers its Power by 1; what is left applies.'));
     const resist = h('input', { type: 'checkbox', checked: true });
@@ -919,7 +929,8 @@ function mount(root, cfg) {
       } }, 'Expose')), lib.length ? null : h('p.hint', 'Add toxins and drugs on the game page (Runners › Toxins & drugs).'));
     } else {
       const drugs = lib.filter(x => x.kind === 'drug');
-      const carried = drugs.filter(x => ch.inventory.some(it => (it.name || '').toLowerCase().startsWith(x.name.toLowerCase())));
+      const subOf = it => { const e = (CAT.store.items || []).find(y => y.id === it.ref); return e && e.substance; };
+      const carried = drugs.filter(x => ch.inventory.some(it => (it.qty ?? 1) > 0 && (subOf(it) === x.id || (it.name || '').toLowerCase().startsWith(x.name.toLowerCase()))));
       if (carried.length) {
         const sel = h('select', carried.map(x => option(x.id, `${x.name} (Power ${x.power})`)));
         card.append(h('div.row.tight.mt', sel, h('label.check', { title: 'Untick to take the full effect without resisting' }, resist, 'Resist'), h('button.small', { type: 'button', onclick: async () => {

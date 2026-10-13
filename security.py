@@ -136,7 +136,7 @@ def apply_security_headers(resp):
         # uploaded images: never run as a document, cached privately for an hour
         resp.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
         resp.headers["Cache-Control"] = "private, max-age=3600"
-    elif not request.path.startswith("/static/"):
+    elif not request.path.startswith("/static/") and "Cache-Control" not in resp.headers:
         resp.headers["Cache-Control"] = "no-store"
     resp.headers.pop("X-Powered-By", None)
     return resp

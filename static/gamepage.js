@@ -8,7 +8,7 @@ try { Object.assign(S.gm, JSON.parse(localStorage.getItem('sg.gmroller') || '{}'
 
 // ================================================================ tabs & polling
 function setView(v) {
-  if (!['players', 'runs', 'handouts', 'maps', 'log', 'sessions', 'history', 'wiki'].includes(v)) v = 'players';
+  if (!['players', 'runs', 'store', 'handouts', 'maps', 'log', 'sessions', 'history', 'wiki'].includes(v)) v = 'players';
   S.view = v;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
@@ -43,7 +43,57 @@ function render() {
   $('badge-runs').hidden = !active; $('badge-runs').textContent = active;
   const live = (S.data.sessions || []).find(x => x.active);
   $('badge-session').hidden = !live; $('badge-session').title = live ? `“${live.title}” is running` : '';
-  ({ players: renderPlayers, runs: renderRuns, handouts: renderHandouts, maps: renderMaps, sessions: renderSessions, log: renderLog, history: renderHistory, wiki: () => {} })[S.view]();
+  ({ players: renderPlayers, runs: renderRuns, store: renderStore, handouts: renderHandouts, maps: renderMaps, sessions: renderSessions, log: renderLog, history: renderHistory, wiki: () => {} })[S.view]();
+}
+
+// ================================================================ store (stock)
+const ST = { q: '', cat: 'All', show: 'all', limit: 150 };
+async function setStock(ids, inStock) {
+  try {
+    const r = await api(`/api/games/${CID}/stock`, 'PUT', { ids, inStock });
+    S.data.game.settings.outOfStock = r.outOfStock; renderStore();
+  } catch (e) { toast(e.message); }
+}
+async function renderStore() {
+  const root = $('store-root');
+  const cat = await SR.catalog();
+  const out = new Set(S.data.game.settings.outOfStock || []);
+  const all = [...cat.store.items, ...cat.packs];
+  const q = ST.q.trim().toLowerCase();
+  const shown = all.filter(e => (ST.cat === 'All' || (ST.cat === 'PACKs' ? e.pack : e.cat === ST.cat && !e.pack))
+    && (!q || e.name.toLowerCase().includes(q) || (e.sub || '').toLowerCase().includes(q))
+    && (ST.show === 'all' || (ST.show === 'out') === out.has(e.id)));
+  const focused = document.activeElement && document.activeElement.id === 'stock-search';
+  root.innerHTML = '';
+  root.append(h('div.section-head', h('h2', 'Store'), h('span.hint', out.size ? `${out.size} item${out.size === 1 ? '' : 's'} out of stock` : 'Everything is in stock')));
+  root.append(h('p.hint', 'When the sellers run out of something, untick it: players see it as out of stock and can’t buy it (you can still give it from a sheet). Tick it again when it’s back.'));
+  const search = h('input#stock-search', { type: 'search', placeholder: 'Search items and PACKs', value: ST.q, oninput: e => { ST.q = e.target.value; ST.limit = 150; renderStore(); } });
+  const catSel = h('select', { 'aria-label': 'Category', onchange: e => { ST.cat = e.target.value; ST.limit = 150; renderStore(); } },
+    ['All', ...cat.store.categories, 'PACKs'].map(c => h('option', { value: c, selected: c === ST.cat }, c === 'All' ? 'All categories' : c)));
+  const showSel = h('select', { 'aria-label': 'Show', onchange: e => { ST.show = e.target.value; ST.limit = 150; renderStore(); } },
+    [['all', 'In and out of stock'], ['in', 'In stock'], ['out', 'Out of stock']].map(([v, t]) => h('option', { value: v, selected: v === ST.show }, t)));
+  const ids = shown.map(e => e.id);
+  root.append(h('div.gm-toolbar.stock-bar', search, catSel, showSel, h('span.grow'),
+    h('button.small', { type: 'button', disabled: !ids.some(i => out.has(i)), onclick: () => setStock(ids, true) }, 'All shown in stock'),
+    h('button.small.danger', { type: 'button', disabled: !ids.some(i => !out.has(i)), onclick: async () => {
+      if (ids.length > 1 && !await UI.confirm(`Mark ${ids.length} items out of stock?`, { danger: true, ok: 'Out of stock' })) return;
+      setStock(ids, false);
+    } }, 'All shown out of stock')));
+  if (!shown.length) { root.append(h('div.card.empty', h('p', 'Nothing matches.'))); return; }
+  const tb = h('tbody');
+  for (const e of shown.slice(0, ST.limit)) {
+    const inStock = !out.has(e.id);
+    const cb = h('input', { type: 'checkbox', checked: inStock, 'aria-label': `${e.name} in stock`, onchange: ev => setStock([e.id], ev.target.checked) });
+    tb.append(h('tr' + (inStock ? '' : '.out'),
+      h('td', h('label.check.stock-toggle', cb, inStock ? 'In stock' : 'Out of stock')),
+      h('td', h('b', e.name), e.sub ? h('span.hint', ` · ${e.sub}`) : null),
+      h('td.hint', e.pack ? 'PACK' : e.cat),
+      h('td.num', SR.availText ? SR.availText(e.availN, e.legalN) : e.avail),
+      h('td.num', typeof e.costN === 'number' ? money(e.costN) : String(e.cost))));
+  }
+  root.append(h('div.card', h('table.list.stock-table', h('thead', h('tr', h('th', 'Stock'), h('th', 'Item'), h('th', 'Category'), h('th.num', 'Avail'), h('th.num', 'Price'))), tb)));
+  if (shown.length > ST.limit) root.append(h('div.row.mt', h('button', { type: 'button', onclick: () => { ST.limit += 300; renderStore(); } }, `Show more (${shown.length - ST.limit} left)`)));
+  if (focused) { const el = $('stock-search'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
 
 // ================================================================ runners
@@ -243,22 +293,32 @@ async function editRun(r) {
 
 // ================================================================ toxins, drugs and diseases
 const VECTORS = ['Contact', 'Ingestion', 'Inhalation', 'Injection'];
-const EFFECTS = ['Nausea', 'Disorientation', 'Paralysis', 'Ongoing'];
+const EFFECTS = ['Dazed', 'Nauseated', 'Immobilized', 'Blinded I', 'Fatigued I', 'Fatigued II', 'Confused II', 'Frightened', 'Ongoing'];
 const CORE_ATTRS = ['Body', 'Agility', 'Reaction', 'Strength', 'Willpower', 'Logic', 'Intuition', 'Charisma'];
 async function substanceLibrary() {
   let list = (S.data.substances || []).filter(x => !x.builtin).map(x => ({ ...x }));
   const box = h('div');
+  const effectText = x => [x.damage ? `${x.damage === 'P' ? 'Physical' : 'Stun'} damage` : '', ...(x.effects || []), Object.entries(x.attrs || {}).map(([a, v]) => `${a} ${v > 0 ? '+' : ''}${v}`).join(', '), x.init_dice ? `+${x.init_dice}D6 Init` : '',
+    Object.entries(x.skills || {}).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join(', '), x.pool ? `${x.pool > 0 ? '+' : ''}${x.pool} all tests` : '',
+    x.pool_physical ? `${x.pool_physical} Physical tests` : '', x.hpt ? 'High Pain Tolerance' : '', x.crash ? 'crash' : ''].filter(Boolean).join(' · ');
+  const table = (rows, actions) => h('table.compact.substances', h('thead', h('tr', h('th', 'Name'), h('th', 'Kind'), h('th.num', 'Power'), h('th', 'Effect'), h('th', ''))),
+    h('tbody', rows.map(x => h('tr', h('td', h('b', x.name), x.source && x.source !== 'Custom' ? h('span.hint', ` · ${x.source}`) : null), h('td', x.kind), h('td.num', x.power),
+      h('td.hint', effectText(x)), h('td', h('div.row.tight.end', actions(x)))))));
   function draw() {
     box.innerHTML = '';
-    const all = [...(S.data.substances || []).filter(x => x.builtin), ...list];
-    box.append(h('p.hint', 'Runners resist with Body + Willpower; each hit lowers the Power by 1, and what is left applies (damage, statuses, a drug’s bonuses). Enter the core book’s toxins and drugs with their book values. Expose a runner from their sheet (Combat); players take drugs they carry from their own sheet.'),
-      h('table.compact', h('thead', h('tr', h('th', 'Name'), h('th', 'Kind'), h('th', 'Power'), h('th', 'Effect'), h('th', ''))),
-        h('tbody', all.map(x => h('tr', h('td', h('b', x.name), x.builtin ? h('span.hint', ` · ${x.source}`) : null), h('td', x.kind), h('td.num', x.power),
-          h('td.hint', [x.damage ? `${x.damage === 'P' ? 'Physical' : 'Stun'} damage` : '', ...(x.effects || []), Object.entries(x.attrs || {}).map(([a, v]) => `${a} ${v > 0 ? '+' : ''}${v}`).join(', '), x.init_dice ? `+${x.init_dice}D6 Init` : ''].filter(Boolean).join(' · ')),
-          h('td', h('div.row.tight.end', x.builtin ? h('span.hint', 'built in') : [
-            h('button.small', { type: 'button', onclick: async () => { const e = await editSubstance(x); if (e) { Object.assign(x, e); draw(); } } }, 'Edit'),
-            h('button.small.danger', { type: 'button', onclick: () => { list = list.filter(y => y !== x); draw(); } }, '✕')])))))),
-      h('button.mt', { type: 'button', onclick: async () => { const e = await editSubstance(null); if (e) { list.push(e); draw(); } } }, '+ New toxin, drug or disease'));
+    const builtin = (S.data.substances || []).filter(x => x.builtin);
+    box.append(h('p.hint', 'Runners resist with Body + Willpower; each hit lowers the Power by 1, and what is left applies (damage, statuses, a drug’s bonuses). Expose a runner from their sheet (Combat); players take drugs they carry from their own sheet, and the store sells the core book’s toxins and drugs by the dose (Medical).'),
+      h('h4.mt', 'Your substances'),
+      list.length ? table(list, x => [
+        h('button.small', { type: 'button', onclick: async () => { const e = await editSubstance(x); if (e) { Object.assign(x, e); draw(); } } }, 'Edit'),
+        h('button.small.danger', { type: 'button', title: 'Remove', onclick: () => { list = list.filter(y => y !== x); draw(); } }, '✕')])
+        : h('p.hint', 'None yet. Add your own, or copy a built-in one to change it.'),
+      h('button.mt', { type: 'button', onclick: async () => { const e = await editSubstance(null); if (e) { list.push(e); draw(); } } }, '+ New toxin, drug or disease'),
+      h('details.mt', h('summary', `Built in: the core rulebook and the Sixth World Companion (${builtin.length})`),
+        table(builtin, x => h('button.small.ghost', { type: 'button', title: 'Make an editable copy', onclick: () => {
+          const { builtin: _b, id: _i, ...rest } = x;
+          list.push(JSON.parse(JSON.stringify({ ...rest, name: `${x.name} (house)`, source: 'Custom' }))); draw();
+        } }, 'Copy'))));
   }
   draw();
   if (!await UI.modal('Toxins & drugs', box, { ok: 'Save library', wide: true })) return;
@@ -266,29 +326,46 @@ async function substanceLibrary() {
 }
 async function editSubstance(x) {
   x = x || { name: '', kind: 'toxin', vectors: ['Injection'], speed: 'Immediate', power: 8, duration: '', damage: 'S', effects: [], attrs: {}, init_dice: 0, addiction: 0, crash: null, desc: '' };
+  const num = (v, min, max) => h('input', { type: 'number', min, max, value: v || 0, style: { width: '4.2rem' } });
   const name = h('input', { value: x.name, required: true, maxlength: 60 });
   const kind = h('select', ['toxin', 'drug', 'disease'].map(k => option(k, k, x.kind === k)));
   const power = h('input', { type: 'number', min: 0, max: 30, value: x.power });
   const speed = h('input', { value: x.speed || '', placeholder: 'Immediate, 1 combat round…' }), duration = h('input', { value: x.duration || '', placeholder: 'e.g. 10 × 1D6 minutes' });
   const damage = h('select', option('', 'No damage', !x.damage), option('S', 'Stun', x.damage === 'S'), option('P', 'Physical', x.damage === 'P'));
   const vec = VECTORS.map(v => h('label.check', h('input', { type: 'checkbox', checked: (x.vectors || []).includes(v), dataset: { v } }), v));
-  const eff = EFFECTS.map(v => h('label.check', h('input', { type: 'checkbox', checked: (x.effects || []).includes(v), dataset: { v } }), v));
-  const attrs = CORE_ATTRS.map(a => h('label', a.slice(0, 3), h('input', { type: 'number', min: -6, max: 6, value: (x.attrs || {})[a] || 0, dataset: { a }, style: { width: '3.6rem' } })));
-  const initd = h('input', { type: 'number', min: 0, max: 4, value: x.init_dice || 0 }), addiction = h('input', { type: 'number', min: 0, max: 10, value: x.addiction || 0 });
-  const cr = x.crash || {}, crashDv = h('input', { type: 'number', min: 0, max: 30, value: cr.dv || 0 }), crashType = h('select', option('S', 'Stun', cr.damage !== 'P'), option('P', 'Physical', cr.damage === 'P'));
+  const effBoxes = list => EFFECTS.map(v => h('label.check', h('input', { type: 'checkbox', checked: (list || []).includes(v), dataset: { v } }), v));
+  const eff = effBoxes(x.effects);
+  const attrRow = src => CORE_ATTRS.map(a => h('label', a.slice(0, 3), h('input', { type: 'number', min: -6, max: 6, value: (src || {})[a] || 0, dataset: { a }, style: { width: '3.6rem' } })));
+  const attrs = attrRow(x.attrs);
+  const initd = num(x.init_dice, 0, 4), addiction = num(x.addiction, 0, 10);
+  const pool = num(x.pool, -6, 6), poolPhys = num(x.pool_physical, -6, 6), perc = num((x.skills || {}).Perception, -6, 6), hpt = num(x.hpt, 0, 3);
+  const cr = x.crash || {};
+  const crashDv = num(cr.dv, 0, 30), crashType = h('select', option('S', 'Stun', cr.damage !== 'P'), option('P', 'Physical', cr.damage === 'P'));
+  const crashEff = effBoxes(cr.effects), crashAttrs = attrRow(cr.attrs), crashPool = num(cr.pool, -6, 6);
+  const crashDur = h('input', { value: cr.duration || '', placeholder: 'e.g. as long as the effect lasted' });
   const desc = h('textarea', { rows: 2, maxlength: 600 }, x.desc || '');
   const ok = await UI.modal(x.name ? `Edit ${x.name}` : 'New substance', h('div',
-    h('div.form-grid', h('label', 'Name', name), h('label', 'Kind', kind), h('label', 'Power', power), h('label', 'Speed', speed), h('label', 'Duration', duration), h('label', 'Damage', damage)),
-    h('h4.mt', 'Vectors'), h('div.row', vec), h('h4.mt', 'Effects (statuses: Nauseated, Dazed, Immobilized, Poisoned)'), h('div.row', eff),
-    h('h4.mt', 'Drug bonuses while in effect'), h('div.row.tight', attrs, h('label', 'Init dice', initd)),
-    h('div.form-grid.mt', h('label', 'Crash damage', crashDv), h('label', 'Crash type', crashType), h('label', 'Addiction test threshold (0 = none)', addiction)),
+    h('div.form-grid', h('label', 'Name', name), h('label', 'Kind', kind), h('label', 'Power', power), h('label', 'Speed', speed), h('label', 'Duration', duration), h('label', 'Damage (equal to the Power left)', damage)),
+    h('h4.mt', 'Vectors'), h('div.row', vec),
+    h('h4.mt', 'Statuses while it lasts'), h('div.row', eff),
+    h('h4.mt', 'Effects while it lasts'), h('div.row.tight', attrs, h('label', 'Init dice', initd)),
+    h('div.row.tight.mt', h('label', 'All tests ±', pool), h('label', 'Physical tests ±', poolPhys), h('label', 'Perception ±', perc), h('label', 'High Pain Tolerance', hpt)),
+    h('details.mt', { open: !!x.crash }, h('summary', 'Crash (when it wears off)'),
+      h('div.row.tight', h('label', 'Unresisted damage', crashDv), crashType, h('label', 'All tests ±', crashPool), h('label.grow', 'Lasts', crashDur)),
+      h('div.row.tight.mt', crashAttrs), h('div.row.mt', crashEff)),
+    h('div.form-grid.mt', h('label', 'Addiction test threshold (0 = none)', addiction)),
     h('label.stack', 'Notes', desc)), { ok: 'Done', wide: true });
   if (!ok) return null;
   const pick = boxes => boxes.map(l => l.querySelector('input')).filter(i => i.checked).map(i => i.dataset.v);
-  const at = {}; attrs.forEach(l => { const i = l.querySelector('input'); if (+i.value) at[i.dataset.a] = +i.value; });
+  const readAttrs = row => { const at = {}; row.forEach(l => { const i = l.querySelector('input'); if (+i.value) at[i.dataset.a] = +i.value; }); return at; };
+  const crash = { dv: +crashDv.value || 0, damage: crashType.value, effects: pick(crashEff), attrs: readAttrs(crashAttrs), pool: +crashPool.value || 0,
+    duration: crashDur.value.trim(), zero: cr.zero || [] };
+  const hasCrash = crash.dv || crash.effects.length || Object.keys(crash.attrs).length || crash.pool || crash.zero.length || crash.duration;
+  const skills = Object.assign({}, x.skills || {}); if (+perc.value) skills.Perception = +perc.value; else delete skills.Perception;
   return { id: x.id, name: name.value.trim(), kind: kind.value, power: +power.value || 0, speed: speed.value, duration: duration.value, damage: damage.value,
-    vectors: pick(vec), effects: pick(eff), attrs: at, init_dice: +initd.value || 0, addiction: +addiction.value || 0,
-    crash: +crashDv.value ? { dv: +crashDv.value, damage: crashType.value, effects: [] } : null, desc: desc.value, source: 'Custom' };
+    vectors: pick(vec), effects: pick(eff), attrs: readAttrs(attrs), init_dice: +initd.value || 0, addiction: +addiction.value || 0,
+    pool: +pool.value || 0, pool_physical: +poolPhys.value || 0, hpt: +hpt.value || 0, skills, sustain: x.sustain || 0,
+    crash: hasCrash ? crash : null, desc: desc.value, source: x.source && x.source !== 'Custom' ? x.source : 'Custom' };
 }
 
 // ================================================================ sessions

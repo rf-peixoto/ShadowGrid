@@ -9,6 +9,7 @@ Responsibilities:
 - turn a catalog entry into an inventory item.
 """
 import ast
+import functools
 import math
 import re
 
@@ -28,14 +29,20 @@ _ALLOWED = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Name, ast.
             ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.BoolOp, ast.And, ast.Or)
 
 
-def _eval(expr, rating):
-    tree = ast.parse(str(expr), mode="eval")
+@functools.lru_cache(maxsize=8192)
+def _code(expr):
+    """Parse, check and compile a rating expression once (the catalog has a few hundred)."""
+    tree = ast.parse(expr, mode="eval")
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED):
             raise CatalogError(f"Bad expression: {expr}")
         if isinstance(node, ast.Name) and node.id != "R":
             raise CatalogError(f"Bad expression: {expr}")
-    return eval(compile(tree, "<catalog>", "eval"), {"__builtins__": {}}, {"R": rating})  # noqa: S307 (whitelisted AST)
+    return compile(tree, "<catalog>", "eval")
+
+
+def _eval(expr, rating):
+    return eval(_code(str(expr)), {"__builtins__": {}}, {"R": rating})  # noqa: S307 (whitelisted AST)
 
 
 def num(expr, rating=1, round_up=True):
@@ -204,6 +211,12 @@ def offer(e, rating=None, grade="Standard", metatype=""):
             "avail": a, "legal": legal, "essence": essence}
 
 
+@functools.lru_cache(maxsize=16384)
+def base_offer(eid, markup=(0, 0)):
+    """offer() at the base rating and Standard grade, cached per price markup (the store tab's prices)."""
+    return offer(BY_ID[eid], None, "Standard", tuple(markup))
+
+
 G_SIZE = {"Dwarf": ("fitted", 0.10), "Troll": ("all", 0.10)}
 _by_rating()
 
@@ -214,7 +227,13 @@ def contact_supply(ct):
     return set(G.CONTACT_TYPE_SUPPLY.get(ct.get("type") or "", [])) | set(ct.get("supply") or [])
 
 
-def access(c, avail, legal, supply, approved):
+def prepare_contacts(c):
+    """[(supply set, connection, verified, name)] for many access() checks in a row."""
+    return [(contact_supply(ct), int(ct.get("connection") or 0), ct.get("verified", True), ct.get("name") or "")
+            for ct in c.get("contacts") or []]
+
+
+def access(c, avail, legal, supply, approved, prepared=None):
     """Can this character source an item? -> (ok, reason)."""
     if avail is None:
         return True, ""
@@ -225,12 +244,11 @@ def access(c, avail, legal, supply, approved):
     if avail <= ALWAYS_AVAIL and legal != "I":
         return True, ""
     pending = None
-    for ct in c.get("contacts") or []:
-        sup = contact_supply(ct)
-        if (supply in sup or "Fixer" in sup) and int(ct.get("connection") or 0) > avail:
-            if ct.get("verified", True):
-                return True, ct.get("name") or ""
-            pending = pending or ct.get("name") or "A contact"
+    for sup, conn, verified, name in (prepared if prepared is not None else prepare_contacts(c)):
+        if (supply in sup or "Fixer" in sup) and conn > avail:
+            if verified:
+                return True, name
+            pending = pending or name or "A contact"
     if pending:
         return False, f"{pending} can get this once the GM confirms them."
     return False, f"Needs a contact for {supply} with Connection {avail + 1} or more."

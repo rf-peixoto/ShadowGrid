@@ -3,7 +3,16 @@
 window.SR = (() => {
 'use strict';
 let CAT = null;
-async function catalog() { if (!CAT) CAT = await api('/api/catalog'); return CAT; }
+/* the catalog never changes while the server runs: the page names its version so the browser can keep it */
+let catLoad = null;
+async function catalog() {
+  if (CAT) return CAT;
+  if (!catLoad) {
+    const m = document.querySelector('meta[name="sg-catalog"]');
+    catLoad = api('/api/catalog' + (m && m.content ? '?v=' + encodeURIComponent(m.content) : '')).then(c => { CAT = c; return c; }, e => { catLoad = null; throw e; });
+  }
+  return catLoad;
+}
 
 // ---------------------------------------------------------------- tags & pips
 const STATUS_LABEL = { draft: 'Draft', waiting: 'Waiting for approval', approved: 'Approved' };

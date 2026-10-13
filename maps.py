@@ -3,8 +3,10 @@
 Players are real accounts, tokens and enemy markers carry Shadowrun condition
 monitors, and dice live in the Shadowrun roller (game.py).
 """
+import hashlib
 import json
 import re
+import threading
 
 from flask import Response, abort, jsonify, request
 
@@ -18,6 +20,7 @@ from sr import combat as X
 from sr import rules as R
 
 MAP_FORMAT = "shadowgrid-map-1"
+INFO_MAX = 600              # marker description players can read (right-click)
 
 
 # ====================================================================== cleaning
@@ -127,6 +130,9 @@ def clean_data(data, grid_type="square"):
             continue
         if m.get("hidden"):
             nm["hidden"] = True
+        info = str(m.get("info") or "").strip()[:INFO_MAX]
+        if info:
+            nm["info"] = info
         cm = clean_cm(m.get("cm"))
         if cm:
             nm["cm"] = cm
@@ -300,6 +306,14 @@ def runner_vehicle_npc(key):
     return npc, R._int(it.get("damage"))
 
 
+def _this_map_only(p, map_id):
+    """The editor only needs each runner's fog and token on the map it shows."""
+    st = p.get("state") or {}
+    maps = st.get("maps") or {}
+    p["state"] = dict(st, maps={map_id: maps[map_id]} if map_id in maps else {})
+    return p
+
+
 @app.route("/api/maps/<map_id>/context", methods=["GET"])
 @gamemaster_required
 def map_context(map_id):
@@ -309,12 +323,15 @@ def map_context(map_id):
     version = campaign_version(m["campaignId"], map_id)
     if request.args.get("since") == version:
         return jsonify({"unchanged": True, "version": version})
-    ctx = {"map": m, "players": [], "campaignMaps": [], "snapshots": [], "campaign": None, "version": version}
+    msig = hashlib.sha1(json.dumps(m["data"], separators=(",", ":")).encode()).hexdigest()[:20]
+    if request.args.get("map") == msig:                 # the editor already has this map data
+        m = dict(m, data=None)
+    ctx = {"map": m, "mapSig": msig, "players": [], "campaignMaps": [], "snapshots": [], "campaign": None, "version": version}
     if m["campaignId"]:
         crow = db.execute("SELECT * FROM campaigns WHERE id=?", (m["campaignId"],)).fetchone()
         ctx["campaign"] = dict(crow) if crow else None
         prow = db.execute("SELECT * FROM players WHERE campaign_id=? ORDER BY created_at", (m["campaignId"],)).fetchall()
-        ctx["players"] = [row_to_player(r) for r in prow]
+        ctx["players"] = [_this_map_only(row_to_player(r), map_id) for r in prow]
         ctx["vehicles"] = runner_vehicles(prow)
         ctx["campaignMaps"] = [{"id": r["id"], "name": r["name"]} for r in db.execute(
             "SELECT id,name FROM maps WHERE campaign_id=? ORDER BY name", (m["campaignId"],)).fetchall()]
@@ -551,6 +568,12 @@ def gamemaster_update_marker(map_id):
         mk["c"], mk["r"] = c, r
     if "label" in b:
         mk["label"] = str(b["label"])[:80]
+    if "info" in b:
+        info = str(b["info"] or "").strip()[:INFO_MAX]
+        if info:
+            mk["info"] = info
+        else:
+            mk.pop("info", None)
     if "hidden" in b:
         if b["hidden"]:
             mk["hidden"] = True
@@ -725,6 +748,57 @@ def defaults():
 
 
 # ====================================================================== player map view
+VIEW_CACHE_MAX = 32
+_VIEW_CELLS = {}          # signature -> visible cells (insertion-ordered: the oldest goes first)
+_VIEW_LOCK = threading.Lock()
+
+
+def _known_cells():
+    """The cells version the browser already has (?cells= on GET, cellsSig in a POST body)."""
+    known = request.args.get("cells")
+    if not known and request.method == "POST":
+        known = (request.get_json(silent=True) or {}).get("cellsSig")
+    return str(known or "")
+
+
+def _visible_cells(m, explored, station):
+    """Explored cells (and the map station's dim view), with doors facing them; defaults left out."""
+    cells = {}
+    all_cells = m["data"]["cells"]
+    for k, cell in all_cells.items():
+        if explored.get(k):
+            vis = None
+        elif station and not cell.get("secret"):
+            vis = "dim"
+        else:
+            continue
+        o = {"fill": cell.get("fill")}
+        if cell.get("border"):
+            o["border"] = cell["border"]
+        if cell.get("borderOn", True) is False:
+            o["borderOn"] = False
+        if cell.get("doors"):
+            o["doors"] = dict(cell["doors"])
+        if vis:
+            o["vis"] = vis
+        cells[k] = o
+    # doors stored on a hidden neighbour but facing a visible cell: mirror them onto the visible cell
+    edges = geo.edge_count(m["gridType"])
+    for k in list(cells.keys()):
+        c, r = (int(x) for x in k.split(","))
+        for e in range(edges):
+            if str(e) in (cells[k].get("doors") or {}):
+                continue
+            nc, nr = geo.neighbor(m["gridType"], c, r, e)
+            nk = f"{nc},{nr}"
+            if nk in cells:
+                continue
+            d = ((all_cells.get(nk) or {}).get("doors") or {}).get(str(geo.opposite_edge(m["gridType"], e)))
+            if d:
+                cells[k].setdefault("doors", {})[str(e)] = dict(d)
+    return cells
+
+
 def player_view(me_row):
     """Filter the player's current map down to what they are allowed to see."""
     p = row_to_player(me_row)
@@ -739,35 +813,24 @@ def player_view(me_row):
     ms = player_map_state(p, m["id"])
     explored = ms.get("explored") or {}
     station = bool(ms.get("mapStation"))
-    cells = {}
-    all_cells = m["data"]["cells"]
-    for k, cell in all_cells.items():
-        if explored.get(k):
-            vis = "full"
-        elif station and not cell.get("secret"):
-            vis = "dim"
-        else:
-            continue
-        cells[k] = {"fill": cell.get("fill"), "border": cell.get("border"), "borderOn": cell.get("borderOn", True),
-                    "doors": dict(cell.get("doors") or {}), "vis": vis}
-    # doors stored on a hidden neighbour but facing a visible cell: mirror them onto the visible cell
-    for k in list(cells.keys()):
-        c, r = (int(x) for x in k.split(","))
-        for e in range(geo.edge_count(m["gridType"])):
-            if str(e) in cells[k]["doors"]:
-                continue
-            nc, nr = geo.neighbor(m["gridType"], c, r, e)
-            nk = f"{nc},{nr}"
-            if nk in cells:
-                continue
-            d = ((all_cells.get(nk) or {}).get("doors") or {}).get(str(geo.opposite_edge(m["gridType"], e)))
-            if d:
-                cells[k]["doors"][str(e)] = dict(d)
+    # the visible cells only change with the map or with what this runner has explored: cache them, and
+    # skip them entirely when the browser says it already has this version
+    sig = hashlib.sha1("\x00".join((row["id"], row["data"], json.dumps(explored), str(station))).encode()).hexdigest()[:20]
+    with _VIEW_LOCK:
+        cells = _VIEW_CELLS.get(sig)
+    if cells is None:
+        cells = _visible_cells(m, explored, station)
+        with _VIEW_LOCK:
+            _VIEW_CELLS[sig] = cells
+            while len(_VIEW_CELLS) > VIEW_CACHE_MAX:
+                _VIEW_CELLS.pop(next(iter(_VIEW_CELLS)))
+    if _known_cells() == sig:
+        cells = None
     markers = []
     for mk in m["data"]["markers"]:
         k = f"{mk['c']},{mk['r']}"
         if explored.get(k) and not mk.get("hidden"):
-            o = {k2: mk.get(k2) for k2 in ("id", "c", "r", "type", "color", "label", "cm", "statuses")}
+            o = {k2: mk.get(k2) for k2 in ("id", "c", "r", "type", "color", "label", "cm", "statuses", "info") if mk.get(k2) is not None}
             if is_link(mk):
                 o["isLink"] = True
                 trow, _, _ = resolve_link(mk, m)
@@ -802,7 +865,7 @@ def player_view(me_row):
     out["map"] = {"id": m["id"], "name": m["name"], "gridType": m["gridType"], "width": m["width"],
                   "height": m["height"], "cellSize": m["cellSize"],
                   "settings": {"colors": m["settings"]["colors"], "showGrid": m["settings"]["showGrid"], "legendVisible": m["settings"]["legendVisible"]},
-                  "cells": cells, "markers": markers, "mapStation": station}
+                  "cells": cells, "cellsSig": sig, "markers": markers, "mapStation": station}
     return out
 
 

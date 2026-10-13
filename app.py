@@ -21,7 +21,8 @@ import game  # noqa: F401  (registers routes)
 import handouts  # noqa: F401  (registers routes)
 import sessions  # noqa: F401  (registers routes)
 import maps  # noqa: F401  (registers routes)
-from core import (BUS, DB_PATH, MAX_STREAMS, app, body, current_player_row, err, get_db, init_db, kv_get, kv_set)
+from core import (BUS, DB_PATH, MAX_STREAMS, app, body, current_player_row, err, get_db, init_db, kv_get, kv_set, run_server)
+from game import catalog_blob
 from security import LOGIN_POW_BITS, gamemaster_required, issue_challenge, rate_limited, verify_pow
 
 
@@ -246,6 +247,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "has-password":
         has_password_cli()
     init_db()
-    app.run(debug=False, threaded=True, host=os.environ.get("SHADOWGRID_HOST", "127.0.0.1"), port=int(os.environ.get("SHADOWGRID_PORT", "5000")))
+    catalog_blob()          # build the catalog now rather than on the first page load
+    run_server(5000)
 else:
     init_db()
