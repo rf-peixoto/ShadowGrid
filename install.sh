@@ -86,6 +86,7 @@ pkg_install() {  # pkg_install name... (distro-neutral names, mapped below)
             *:openssl)       pkgs+=(openssl) ;;
             *:nginx)         pkgs+=(nginx) ;;
             *:certbot)       pkgs+=(certbot) ;;
+            dnf:ffmpeg|yum:ffmpeg) pkgs+=(ffmpeg-free) ;;
             *)               pkgs+=("$n") ;;
         esac
     done
@@ -110,6 +111,14 @@ SHADOWGRID_PORT=8000
 SHADOWGRID_LOCAL_PORT=5000
 SHADOWGRID_SERVICE=0
 SHADOWGRID_ADDRESS=""
+# tuning (edit shadowgrid.env; install.sh keeps your values)
+SHADOWGRID_GATE_BITS=22            # connection check before sign-in: 2^bits hashes per sector (0 turns it off)
+SHADOWGRID_GATE_PUZZLES=64         # sectors per check
+SHADOWGRID_SESSION_HOURS=12        # a sign-in lasts this long after the last activity (at least 4)
+SHADOWGRID_SESSION_MAX_HOURS=24    # and never longer than this after signing in
+SHADOWGRID_MUSIC_KBPS=48           # Opus bitrate music is compressed to
+SHADOWGRID_MUSIC_MAX_MB=100        # largest audio upload
+SHADOWGRID_MUSIC_TOTAL_MB=2048     # music library limit
 if [ -f "$ENV_FILE" ]; then
     # shellcheck disable=SC1090
     . "$ENV_FILE"
@@ -126,6 +135,19 @@ SHADOWGRID_NGINX='$SHADOWGRID_NGINX'
 SHADOWGRID_DOMAIN='$SHADOWGRID_DOMAIN'
 SHADOWGRID_SERVICE='$SHADOWGRID_SERVICE'
 SHADOWGRID_ADDRESS='$SHADOWGRID_ADDRESS'
+
+# Tuning. Restart ShadowGrid after changing these.
+# Connection check before the sign-in page: each check solves GATE_PUZZLES sectors of 2^GATE_BITS
+# hashes (22 and 64: roughly 15-30 s on a laptop, about a minute on a phone). 0 bits turns it off.
+SHADOWGRID_GATE_BITS='$SHADOWGRID_GATE_BITS'
+SHADOWGRID_GATE_PUZZLES='$SHADOWGRID_GATE_PUZZLES'
+# A sign-in lasts SESSION_HOURS after the last activity (at least 4) and at most SESSION_MAX_HOURS.
+SHADOWGRID_SESSION_HOURS='$SHADOWGRID_SESSION_HOURS'
+SHADOWGRID_SESSION_MAX_HOURS='$SHADOWGRID_SESSION_MAX_HOURS'
+# Music: Opus bitrate, largest upload and library size in MB.
+SHADOWGRID_MUSIC_KBPS='$SHADOWGRID_MUSIC_KBPS'
+SHADOWGRID_MUSIC_MAX_MB='$SHADOWGRID_MUSIC_MAX_MB'
+SHADOWGRID_MUSIC_TOTAL_MB='$SHADOWGRID_MUSIC_TOTAL_MB'
 EOF
     chmod 600 "$ENV_FILE"
 }
@@ -170,6 +192,36 @@ say "Installing dependencies"
 "$PY" -m pip install --quiet --disable-pip-version-check --upgrade pip
 "$PY" -m pip install --quiet --disable-pip-version-check -r "$ROOT/requirements.txt"
 ok "Dependencies installed in .venv"
+
+# music needs ffmpeg with the Opus encoder: the imageio-ffmpeg package ships one for most systems
+has_ffmpeg() {
+    "$PY" - <<'PYEOF'
+import shutil, subprocess, sys
+cands = []
+try:
+    import imageio_ffmpeg
+    cands.append(imageio_ffmpeg.get_ffmpeg_exe())
+except Exception:
+    pass
+cands.append(shutil.which("ffmpeg"))
+for c in cands:
+    try:
+        if c and "libopus" in subprocess.run([c, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=20).stdout:
+            sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)
+PYEOF
+}
+if has_ffmpeg; then
+    ok "ffmpeg with Opus found (music uploads work)"
+else
+    warn "No ffmpeg with Opus support was found; the gamemaster can't upload music without it."
+    if ask_yes_no "Install ffmpeg with the system package manager?" y; then
+        pkg_install ffmpeg || true
+    fi
+    has_ffmpeg && ok "ffmpeg installed" || warn "Still no ffmpeg with Opus. Everything else works; install ffmpeg later and restart ShadowGrid."
+fi
 
 mkdir -p "$DATA_DIR"
 chmod 700 "$DATA_DIR"
@@ -403,14 +455,33 @@ $HTTP2_DIRECTIVE
         proxy_send_timeout 1h;
     }
 
-    # backup restore is the one large upload (gamemaster only)
+    # backup restore is the largest upload (gamemaster only)
     location = /api/backup/restore {
         limit_req zone=shadowgrid_auth burst=5 nodelay;
-        client_max_body_size 512m;
+        client_max_body_size 2048m;
         client_body_timeout 120s;
         proxy_request_buffering on;
         proxy_read_timeout 300s;
         proxy_pass http://shadowgrid_app;
+    }
+
+    # music uploads (gamemaster only; compressed on the server afterwards)
+    location ~ ^/api/games/[A-Za-z0-9]+/music\$ {
+        limit_req zone=shadowgrid_req burst=20 nodelay;
+        client_max_body_size 110m;
+        client_body_timeout 300s;
+        proxy_request_buffering on;
+        proxy_read_timeout 300s;
+        proxy_pass http://shadowgrid_app;
+    }
+
+    # music streams: range requests straight through, no buffering
+    location /music/ {
+        limit_req zone=shadowgrid_req burst=60 nodelay;
+        proxy_pass http://shadowgrid_app;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
     }
 
     # versioned scripts and styles: ShadowGrid marks them cacheable for a year (and compresses them)
@@ -588,6 +659,7 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

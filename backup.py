@@ -3,12 +3,14 @@ and a manifest. Backups are kept in data/backups (the newest ones), can be downl
 file can be restored. Restoring first saves the current state as a backup, so it can be undone.
 
 A daily backup is also made automatically (on the first request of the day), keeping the last
-AUTO_KEEP automatic ones.
+AUTO_KEEP automatic ones. Automatic backups leave the (large) music files out; manual ones include
+them unless asked not to. Restoring a backup without music keeps the music files already on the server.
 """
 import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import tempfile
 import threading
@@ -24,9 +26,10 @@ from security import gamemaster_required
 FORMAT = "shadowgrid-backup-1"
 AUTO_KEEP = 10
 MANUAL_KEEP = 30
-MAX_RESTORE = 512 * 1024 * 1024
+MAX_RESTORE = 2048 * 1024 * 1024
 NAME_RE = re.compile(r"^shadowgrid-(auto|manual|before-restore)-\d{8}-\d{6}\.zip$")
 UPLOAD_NAME_RE = re.compile(r"^[a-f0-9]{24}\.(png|jpg)$")
+MUSIC_NAME_RE = re.compile(r"^[a-f0-9]{32}\.(webm|m4a)$")
 REQUIRED_TABLES = {"kv", "campaigns", "maps", "players", "invites", "snapshots", "rolls", "runs", "ledger"}
 _lock = threading.Lock()
 
@@ -46,8 +49,11 @@ def _db_copy(dst_path):
         src.close()
 
 
-def make_backup(kind="manual"):
+def make_backup(kind="manual", with_music=None):
     """Write data/backups/shadowgrid-<kind>-<time>.zip and return its file name."""
+    import music
+    if with_music is None:
+        with_music = kind != "auto"
     with _lock:
         name = f"shadowgrid-{kind}-{_stamp()}.zip"
         while os.path.exists(os.path.join(BACKUP_DIR, name)):
@@ -58,13 +64,17 @@ def make_backup(kind="manual"):
             db_tmp = os.path.join(tmp, "shadowgrid.db")
             _db_copy(db_tmp)
             uploads = sorted(f for f in os.listdir(UPLOAD_DIR) if UPLOAD_NAME_RE.match(f))
-            manifest = {"format": FORMAT, "created": time.time(), "kind": kind, "uploads": len(uploads)}
+            tracks = sorted(f for f in os.listdir(music.MUSIC_DIR) if MUSIC_NAME_RE.match(f)) if with_music else []
+            manifest = {"format": FORMAT, "created": time.time(), "kind": kind, "uploads": len(uploads),
+                        "music": len(tracks), "withMusic": bool(with_music)}
             part = path + ".part"
             with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED) as z:
                 z.writestr("manifest.json", json.dumps(manifest, indent=2))
                 z.write(db_tmp, "shadowgrid.db")
                 for f in uploads:
                     z.write(os.path.join(UPLOAD_DIR, f), f"uploads/{f}")
+                for f in tracks:      # already compressed: store, don't deflate
+                    z.write(os.path.join(music.MUSIC_DIR, f), f"music/{f}", compress_type=zipfile.ZIP_STORED)
             os.chmod(part, 0o600)
             os.replace(part, path)
         _prune()
@@ -126,7 +136,7 @@ class RestoreError(ValueError):
 
 
 def _check_backup(zf):
-    """Validate a backup zip; returns (db_bytes, {upload name: bytes})."""
+    """Validate a backup zip; returns (db_bytes, {upload name: bytes}, [music member names])."""
     names = zf.namelist()
     if "manifest.json" not in names or "shadowgrid.db" not in names:
         raise RestoreError("This isn't a ShadowGrid backup (manifest or database missing).")
@@ -139,15 +149,18 @@ def _check_backup(zf):
     total = sum(i.file_size for i in zf.infolist())
     if total > 2 * MAX_RESTORE:
         raise RestoreError("The backup is too large once unpacked.")
-    uploads = {}
+    uploads, tracks = {}, []
     for n in names:
         if n in ("manifest.json", "shadowgrid.db"):
+            continue
+        if n.startswith("music/") and MUSIC_NAME_RE.match(n[6:]):
+            tracks.append(n)
             continue
         m = re.match(r"^uploads/([a-f0-9]{24}\.(?:png|jpg))$", n)
         if not m:
             raise RestoreError(f"Unexpected file in the backup: {n[:60]}")
         uploads[m.group(1)] = zf.read(n)
-    return zf.read("shadowgrid.db"), uploads
+    return zf.read("shadowgrid.db"), uploads, tracks
 
 
 def _check_db(path):
@@ -167,12 +180,18 @@ def _check_db(path):
 
 
 def restore_bytes(data):
-    """Restore a backup zip given as bytes. Saves the current state first. Returns that safety backup's name."""
+    """Restore a backup zip given as bytes (tests). See restore_file."""
+    return restore_file(io.BytesIO(data))
+
+
+def restore_file(fileobj):
+    """Restore a backup zip (a path or an open file). Saves the current state first. Returns that safety backup's name."""
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile:
+        zf = zipfile.ZipFile(fileobj)
+    except (zipfile.BadZipFile, OSError):
         raise RestoreError("That file isn't a zip backup.")
-    db_bytes, uploads = _check_backup(zf)
+    db_bytes, uploads, tracks = _check_backup(zf)
+    import music
     from core import init_db
     with tempfile.TemporaryDirectory(dir=BACKUP_DIR) as tmp:
         new_db = os.path.join(tmp, "restore.db")
@@ -195,8 +214,34 @@ def restore_bytes(data):
             for name, blob in uploads.items():
                 with open(os.path.join(UPLOAD_DIR, name), "wb") as f:
                     f.write(blob)
+            for member in tracks:             # streamed: music can be large
+                with zf.open(member) as src, open(os.path.join(music.MUSIC_DIR, member[6:]), "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1 << 20)
+            _reconcile_music(music)
     init_db(quiet=True)      # schema of this version + the restored secret key (signs everyone out)
     return safety
+
+
+def _reconcile_music(music):
+    """After a restore: drop music files no track uses; tracks whose files are missing can't play."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        try:
+            rows = conn.execute("SELECT id, status FROM music").fetchall()
+        except sqlite3.Error:          # a backup from before music existed
+            rows = []
+        ids = {r[0] for r in rows}
+        for f in os.listdir(music.MUSIC_DIR):
+            if MUSIC_NAME_RE.match(f) and f[:32] not in ids:
+                os.remove(os.path.join(music.MUSIC_DIR, f))
+        for tid, status in rows:
+            have = all(os.path.exists(os.path.join(music.MUSIC_DIR, f"{tid}.{e}")) for e in ("webm", "m4a"))
+            if status != "ready" or not have:
+                conn.execute("UPDATE music SET status='failed', error='Not in the restored backup. Upload it again.' WHERE id=? AND status!='failed'", (tid,))
+                conn.execute("DELETE FROM music_state WHERE track_id=?", (tid,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------- routes
@@ -209,7 +254,7 @@ def backups_list():
 @app.route("/api/backups", methods=["POST"])
 @gamemaster_required
 def backups_create():
-    name = make_backup("manual")
+    name = make_backup("manual", with_music=bool((request.get_json(silent=True) or {}).get("music", True)))
     return jsonify({"name": name, "backups": list_backups()}), 201
 
 
@@ -238,9 +283,7 @@ def backups_delete(name):
 def backups_restore_saved(name):
     if not NAME_RE.match(name) or not os.path.exists(os.path.join(BACKUP_DIR, name)):
         return err("Backup not found.", 404)
-    with open(os.path.join(BACKUP_DIR, name), "rb") as f:
-        data = f.read()
-    return _restore(data)
+    return _restore(os.path.join(BACKUP_DIR, name))
 
 
 @app.route("/api/backup/restore", methods=["POST"])
@@ -250,14 +293,17 @@ def backups_restore_upload():
     f = request.files.get("file")
     if not f:
         return err("Choose a backup file.")
-    return _restore(f.read(MAX_RESTORE + 1))
+    with tempfile.NamedTemporaryFile(dir=BACKUP_DIR, suffix=".upload") as tmp:
+        shutil.copyfileobj(f.stream, tmp, 1 << 20)
+        tmp.flush()
+        if tmp.tell() > MAX_RESTORE:
+            return err("The backup is too large.", 413)
+        return _restore(tmp.name)
 
 
-def _restore(data):
-    if len(data) > MAX_RESTORE:
-        return err("The backup is too large.", 413)
+def _restore(path):
     try:
-        safety = restore_bytes(data)
+        safety = restore_file(path)
     except RestoreError as e:
         return err(str(e))
     session.clear()

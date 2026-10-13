@@ -8,7 +8,7 @@ try { Object.assign(S.gm, JSON.parse(localStorage.getItem('sg.gmroller') || '{}'
 
 // ================================================================ tabs & polling
 function setView(v) {
-  if (!['players', 'runs', 'store', 'handouts', 'maps', 'log', 'sessions', 'history', 'wiki'].includes(v)) v = 'players';
+  if (!['players', 'runs', 'store', 'handouts', 'maps', 'music', 'log', 'sessions', 'history', 'wiki'].includes(v)) v = 'players';
   S.view = v;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
@@ -43,7 +43,7 @@ function render() {
   $('badge-runs').hidden = !active; $('badge-runs').textContent = active;
   const live = (S.data.sessions || []).find(x => x.active);
   $('badge-session').hidden = !live; $('badge-session').title = live ? `“${live.title}” is running` : '';
-  ({ players: renderPlayers, runs: renderRuns, store: renderStore, handouts: renderHandouts, maps: renderMaps, sessions: renderSessions, log: renderLog, history: renderHistory, wiki: () => {} })[S.view]();
+  ({ players: renderPlayers, runs: renderRuns, store: renderStore, handouts: renderHandouts, maps: renderMaps, music: renderMusic, sessions: renderSessions, log: renderLog, history: renderHistory, wiki: () => {} })[S.view]();
 }
 
 // ================================================================ store (stock)
@@ -435,6 +435,90 @@ async function endSession(s) {
   try { await api(`/api/sessions/${s.id}/end`, 'POST', {}); toast('Session ended. The recap is saved.'); reload(); } catch (e) { toast(e.message); }
 }
 
+// ================================================================ music
+const MU = { data: null, timer: 0, uploads: [] };
+const mb = n => n == null ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+const clock = s => s == null ? '–' : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+async function renderMusic() {
+  clearTimeout(MU.timer);
+  try { MU.data = await api(`/api/games/${CID}/music`); } catch (e) { toast(e.message); return; }
+  if (S.view !== 'music') return;
+  drawMusic();
+  if (MU.data.tracks.some(t => t.status === 'processing')) MU.timer = setTimeout(() => { if (S.view === 'music') renderMusic(); }, 1500);
+}
+function uploadTrack(file) {
+  // XMLHttpRequest rather than fetch: it reports upload progress
+  return new Promise((resolve, reject) => {
+    const job = { name: file.name, pct: 0 }; MU.uploads.push(job); drawUploads();
+    const fd = new FormData(); fd.append('file', file);
+    const x = new XMLHttpRequest();
+    x.open('POST', `/api/games/${CID}/music`);
+    x.setRequestHeader('X-Requested-With', 'ShadowGrid');
+    x.upload.onprogress = e => { if (e.lengthComputable) { job.pct = Math.round(100 * e.loaded / e.total); drawUploads(); } };
+    const done = () => { MU.uploads.splice(MU.uploads.indexOf(job), 1); drawUploads(); };
+    x.onload = () => { done(); let d = {}; try { d = JSON.parse(x.responseText); } catch { /* not JSON */ }
+      if (x.status >= 200 && x.status < 300) resolve(d); else reject(new Error(d.error || (x.status === 413 ? 'That file is too large.' : `Upload failed (${x.status}).`))); };
+    x.onerror = () => { done(); reject(new Error('The upload was interrupted.')); };
+    x.send(fd);
+  });
+}
+async function uploadAll(files) {
+  for (const f of files) {
+    try { await uploadTrack(f); toast(`“${f.name}” uploaded. Compressing…`); } catch (e) { toast(`${f.name}: ${e.message}`, 6000); }
+    renderMusic();
+  }
+}
+function drawUploads() {
+  const box = $('music-uploads'); if (!box) return;
+  box.replaceChildren(...MU.uploads.map(u => h('div.music-upload', h('span.grow', `Uploading ${u.name}`), h('span.num', u.pct + '%'),
+    h('div.music-bar', h('span', { style: { width: u.pct + '%' } })))));
+}
+function drawNowPlaying() {
+  const box = $('music-now'); if (!box) return;
+  const st = Music.state(), p = st && st.playing;
+  clearInterval(box._t);
+  if (!p) { box.replaceChildren(h('h3', 'Nothing playing'), h('p.hint', 'Press Play on a track: everyone in this game hears it from the same moment, and anyone who joins later drops in mid-song. Starting another track replaces it.')); return; }
+  const bar = h('span'), time = h('span.num.hint');
+  const tick = () => {
+    const el = Math.max(0, Date.now() / 1000 - p.startedAt), d = p.duration || 0;
+    const pos = d ? (p.loop ? el % d : Math.min(el, d)) : el;
+    bar.style.width = d ? (100 * pos / d).toFixed(1) + '%' : '0'; time.textContent = `${clock(pos)} / ${clock(d)}`;
+  };
+  box.replaceChildren(
+    h('div.row', h('span.music-eq-big', h('i'), h('i'), h('i')), h('h3.grow', p.title),
+      h('label.check', h('input', { type: 'checkbox', checked: p.loop, onchange: e => Music.setLoop(e.target.checked).catch(err => toast(err.message)) }), 'Loop'),
+      h('button.danger', { type: 'button', onclick: () => Music.stop().catch(err => toast(err.message)) }, 'Stop for everyone')),
+    h('div.music-bar.big', bar), time);
+  tick(); box._t = setInterval(tick, 500);
+}
+function drawMusic() {
+  const root = $('music-root'); root.innerHTML = '';
+  const d = MU.data;
+  const file = h('input', { type: 'file', multiple: true, hidden: true, accept: d.formats.join(',') + ',audio/*', onchange: e => { const fs = [...e.target.files]; e.target.value = ''; uploadAll(fs); } });
+  const drop = h('div.music-drop', { tabindex: 0, role: 'button', onclick: () => file.click(), onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); file.click(); } },
+      ondragover: e => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'),
+      ondrop: e => { e.preventDefault(); drop.classList.remove('over'); uploadAll([...e.dataTransfer.files]); } },
+    h('strong', 'Add music'), h('span.hint', `Drop audio files here or click to choose. MP3, OGG, Opus, WAV, FLAC, M4A or WebM, up to ${d.maxMB} MB each. Each track is compressed once to ${d.kbps} kbps Opus, so streaming it costs little.`), file);
+  root.append(
+    h('div.card#music-now'),
+    d.ffmpeg ? drop : h('div.banner.warn', h('strong', 'Music needs ffmpeg. '), h('span', 'The server has no ffmpeg with Opus support, so uploads are off. Run ./install.sh again; it installs one.')),
+    h('div#music-uploads'),
+    h('p.hint', `Library: ${d.usedMB} MB of ${d.totalMB} MB.`));
+  drawUploads(); drawNowPlaying();
+  if (!d.tracks.length) { root.append(h('div.card.empty', h('h3', 'No tracks yet'), h('p', 'Upload ambience, combat themes or a club soundtrack. Players hear whatever you play, in sync, at their own volume.'))); return; }
+  const st = Music.state(), cur = st && st.playing && st.playing.trackId;
+  root.append(h('table.compact.music-table', h('thead', h('tr', h('th', 'Track'), h('th', 'Length'), h('th', 'Size'), h('th', ''))),
+    h('tbody', d.tracks.map(t => h('tr', { class: t.id === cur ? 'current' : '' },
+      h('td', h('strong', t.title), t.status === 'processing' ? h('div.hint', `Compressing… ${t.progress ?? 0}%`) : t.status === 'failed' ? h('div.bad', t.error || 'Compressing failed.') : null),
+      h('td.num', clock(t.duration)),
+      h('td.num.hint', t.status === 'ready' ? `${mb(t.srcSize)} → ${mb(t.size)}` : mb(t.srcSize)),
+      h('td', h('div.row.tight.end',
+        t.status === 'ready' ? h('button.small.primary', { type: 'button', onclick: () => Music.play(t.id, true).then(renderMusic).catch(e => toast(e.message)) }, t.id === cur ? 'Restart' : 'Play') : null,
+        t.id === cur ? h('button.small', { type: 'button', onclick: () => Music.stop().then(renderMusic).catch(e => toast(e.message)) }, 'Stop') : null,
+        h('button.small', { type: 'button', onclick: async () => { const v = await UI.prompt('Rename track', 'Name', { value: t.title, ok: 'Rename' }); if (v) { try { await api(`/api/music/${t.id}`, 'PUT', { title: v }); renderMusic(); } catch (e) { toast(e.message); } } } }, 'Rename'),
+        t.status !== 'processing' ? h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete “${t.title}”?${t.id === cur ? ' It stops for everyone.' : ''}`, { danger: true, ok: 'Delete' })) { try { await api(`/api/music/${t.id}`, 'DELETE'); await Music.refresh(); renderMusic(); } catch (e) { toast(e.message); } } } }, 'Delete') : null)))))));
+}
+
 // ================================================================ handouts
 function recipientsText(rec) {
   if (rec === 'all') return [h('span.chip', 'Every runner')];
@@ -602,6 +686,8 @@ function renderHistory() {
     setView(location.hash.slice(1) || 'players');
     setInterval(poll, 20000);
     Live.on(poll);
+    Music.mount({ gm: true, game: CID, host: document.querySelector('.appbar .chips') });
+    Music.onChange(d => { $('badge-music').hidden = !d.playing; $('badge-music').title = d.playing ? `Playing: ${d.playing.title}` : ''; if (S.view === 'music') drawNowPlaying(); });
   } catch (e) { if (e.message !== 'auth') toast(e.message); }
 })();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

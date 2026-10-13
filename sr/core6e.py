@@ -189,6 +189,8 @@ STATUSES = {
     "Petrified": {"icon": "🗿", "desc": "No actions, +10 armor."},
     "Poisoned": {"icon": "☠", "value": True, "desc": "Resist the damage each round; drops by 1."},
     "Prone": {"icon": "⬇", "desc": "+2 defense vs Medium+ range, -2 vs Close/Near, -4 melee."},
+    "Restrained": {"icon": "🤼", "desc": "Grappled: can only try to break free (or cast); -4 on Defense tests; attackers gain Edge."},
+    "Grappling": {"icon": "✊", "desc": "Holding someone: Restrain, Squeeze or Tackle them as a Major Action."},
     "Silent": {"icon": "🤫", "value": True, "desc": "Hearing threshold #."},
     "Stilled": {"icon": "⏸", "desc": "Can't move or act; -10 DR."},
     "Wet": {"icon": "💧", "desc": "-6 to resist cold and electricity."},

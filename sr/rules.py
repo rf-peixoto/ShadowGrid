@@ -548,8 +548,13 @@ def derive(c):
         "gear_value": int(sum(_int(it.get("cost")) * (1 if it.get("unit") else max(1, _int(it.get("qty"), 1)))
                               for it in c["inventory"])),
         "lifestyle_cost": lifestyle_cost(c, lifestyle_mult), "lifestyle_mult": round(lifestyle_mult, 3),
-        "vehicles": [{"uid": it["uid"], "boxes": 8 + _half_up(_int(it.get("body"))), "damage": _int(it.get("damage"))}
-                     for it in items(c, "Vehicles", "Drones") if not it.get("mod")],
+        "vehicles": [{"uid": it["uid"], "boxes": 8 + _half_up(_int(it.get("body"))), "damage": _int(it.get("damage")),
+                      "speed": _int(it.get("speed")), "moved": it.get("moved"), "speed_penalty": speed_penalty(it),
+                      "mount_slots": mount_slots(it), "mount_used": mount_room_used(c, it["uid"]),
+                      "mounts": [{"uid": mt["uid"], "name": mt["name"], "heavy": RIG.MOUNTS[mt["ref"]]["heavy"],
+                                  "weapon": (lambda w: {"uid": w["uid"], "name": w["name"]} if w else None)(weapon_on_mount(c, mt["uid"]))}
+                                 for mt in mounts_on(c, it["uid"])]}
+                     for it in items(c, "Vehicles", "Drones") if not it.get("mod") and it.get("handling")],
         "statuses": c.get("statuses") or {},
     }
 
@@ -623,20 +628,58 @@ def matrix_stats(c, aug):
                     "slots": _int(dev.get("program_slots")), "damage": _int(dev.get("matrix_damage"))})
     else:
         return out
+    perm = m.get("config") if isinstance(m.get("config"), dict) else None
+    if perm and sorted(perm.values()) == sorted(MX.PERSONA_ATTRS) and set(perm) == set(MX.PERSONA_ATTRS):
+        base = {k: out[k] for k in MX.PERSONA_ATTRS}       # Reconfigure Matrix Attribute: the ratings swapped around
+        for k, src in perm.items():
+            out[k] = base[src]
+        out["config"] = dict(perm)
     out["boxes"] = 8 + _half_up(out["device_rating"])
     if dev == "persona":                       # errata: the living persona uses the Stun Condition Monitor
         out["boxes"] = 8 + _half_up(aug["Willpower"])
         out["damage"] = _int(c.get("stun_damage"))
         out["stun"] = True
     out["penalty"] = -(min(out["damage"], out["boxes"]) // MX.DEVICE_PENALTY_STEP)
+    out["programs"] = [{"uid": it["uid"], "name": it.get("choice") or it["name"], "running": bool(it.get("running"))}
+                       for it in c["inventory"] if it.get("sub") == "Software" and it.get("ref", "").startswith("cyberdecks-software-cyberprogram")]
+    running = {p["name"] for p in out["programs"] if p["running"]}
+    if "Toolbox" in running:
+        out["data_processing"] += 1                    # Toolbox: +1 Data Processing
+    if "Virtual Machine" in running:
+        out["slots"] += MX.VIRTUAL_MACHINE["slots"]
+    noise = max(0, min(MX.NOISE_MAX, _int(m.get("noise"))))
+    out["noise_raw"] = noise
+    out["noise"] = max(0, noise - (MX.SIGNAL_SCRUBBER if "Signal Scrubber" in running else 0))
+    out["no_access"] = out["noise"] > out["device_rating"] > 0
+    out["saved_config"] = m.get("saved_config") if "Configurator" in running else None
+    out["ic_mods"] = {}
+    for k, v in (ms.get("ic_mods") or {}).items():     # Acid, Binder, Jammer, Marker IC: until leaving the host
+        if k in ("attack", "sleaze", "data_processing", "firewall") and _int(v):
+            out[k] = max(0, out[k] + _int(v))
+            out["ic_mods"][k] = _int(v)
     out["ar"] = out["attack"] + out["sleaze"]
-    out["dr"] = out["data_processing"] + out["firewall"]
+    out["dr"] = out["data_processing"] + out["firewall"] + (2 if "Armor" in running else 0)   # Armor: +2 Defense Rating
     attr, dice = M.MATRIX_INIT[mode]
     out["init_score"] = aug["Intuition"] + (aug["Reaction"] if attr == "Reaction" else out["data_processing"])
     out["init_dice"] = dice
     out["programs"] = [{"uid": it["uid"], "name": it.get("choice") or it["name"], "running": bool(it.get("running"))}
                        for it in c["inventory"] if it.get("sub") == "Software" and it.get("ref", "").startswith("cyberdecks-software-cyberprogram")]
     return out
+
+
+def a_leave_host(c, p, ctx):
+    """Leaving the host restores attributes lowered by IC (Acid, Binder, Jammer, Marker)."""
+    ms = c.setdefault("matrix_state", {})
+    if not ms.get("ic_mods"):
+        raise RuleError("No IC effects to clear.")
+    ms["ic_mods"] = {}
+    ctx.log.append("leaves the host: Matrix attributes lowered by IC are restored.")
+    return "Matrix attributes restored."
+
+
+def program_running(d, name):
+    """Is this program running on the active device? (``d`` from derive)"""
+    return any(p.get("running") and p.get("name") == name for p in (d.get("matrix") or {}).get("programs") or [])
 
 
 def condition_summary(c, d=None):
@@ -678,7 +721,7 @@ def weapon_items(c):
     """Items that can be used to attack (weapons, implant weapons, throwables)."""
     out = []
     for it in c["inventory"]:
-        if it.get("cat") in ("Melee", "Ranged") and it.get("equipped", True) and it.get("dv"):
+        if it.get("cat") in ("Melee", "Ranged") and it.get("equipped", True) and it.get("dv") and not it.get("mounted"):
             out.append(it)
         elif it.get("implant") and isinstance(it.get("weapon"), dict):
             out.append(it)
@@ -870,8 +913,21 @@ def pools(c, d=None):
                 continue
             if mx.get("penalty"):
                 parts = parts + [["Matrix damage on the device", mx["penalty"]]]
+            if mx.get("noise"):
+                parts = parts + [["Noise", -mx["noise"]]]
+            if program_running(d, "Overclock"):
+                parts = parts + [["Overclock (one is the Wild Die)", MX.OVERCLOCK["dice"]]]
+            for prog, (act, n) in MX.PROGRAM_DICE.items():
+                if key == act and program_running(d, prog):
+                    parts = parts + [[prog, n]]
+            edge_prog = next((pg for pg, act in MX.PROGRAM_EDGE.items() if act == key and program_running(d, pg)), None)
             out.append(_pool(f"matrix:{key}", "Matrix", a["name"], parts, matrix=True, legal=a["legal"],
-                             defense=a["defense"], uses=a.get("uses")))
+                             defense=a["defense"], uses=a.get("uses"), wild=program_running(d, "Overclock") or None,
+                             free_edge=edge_prog))
+        if program_running(d, "Defuse"):                # Defuse: Device Rating or Body against a Data Bomb
+            body = A["Body"]
+            pick = [["Body", body]] if body >= _int(mx.get("device_rating")) else [["Device Rating", _int(mx.get("device_rating"))]]
+            out.append(_pool("matrix:resist_bomb", "Matrix", "Resist a Data Bomb (Defuse)", pick, matrix=True))
     for p in vehicle_pools(c, d):
         out.append(p)
     return _apply_conditions(c, d, out)
@@ -1876,6 +1932,26 @@ def a_set_matrix(c, p, ctx):
         if dev and dev != "persona":
             find_item(c, dev)
         m["device"] = dev
+    if "noise" in p:
+        m["noise"] = max(0, min(MX.NOISE_MAX, _int(p.get("noise"))))
+    if "swap" in p:                                     # Reconfigure Matrix Attribute (Minor Action): swap two
+        a, b = (p.get("swap") or [None, None])[:2]
+        if a not in MX.PERSONA_ATTRS or b not in MX.PERSONA_ATTRS or a == b:
+            raise RuleError("Pick two different Matrix attributes to swap.")
+        cfg = dict(m.get("config") or {k: k for k in MX.PERSONA_ATTRS})
+        cfg[a], cfg[b] = cfg[b], cfg[a]
+        m["config"] = cfg
+        ctx.log.append(f"reconfigures their persona: {a.replace('_', ' ').title()} and {b.replace('_', ' ').title()} swapped.")
+    if p.get("config") == "reset":
+        m.pop("config", None)
+    if p.get("config") in ("save", "load"):
+        if not program_running(derive(c), "Configurator"):
+            raise RuleError("That needs the Configurator program running.")
+        if p["config"] == "save":
+            m["saved_config"] = dict(m.get("config") or {k: k for k in MX.PERSONA_ATTRS})
+        elif m.get("saved_config"):
+            m["config"] = dict(m["saved_config"])
+            ctx.log.append("switches to their saved persona setup (Configurator).")
     if "damage" in p:
         d = derive(c)["matrix"]
         v = max(0, min(d.get("boxes", 0), _int(p.get("damage"))))
@@ -2293,14 +2369,18 @@ def _lasting(src):
     return {k: src[k] for k in LASTING if src.get(k)}
 
 
-def expose(c, sub, ctx, resist=True, label="Exposed to"):
-    """Toxin Resistance (Body + Willpower): hits lower the Power; what's left applies."""
+def expose(c, sub, ctx, resist=True, label="Exposed to", doses=1, protection=0):
+    """Toxin Resistance (Body + Willpower + protective gear): hits lower the Power; what's left applies.
+    Each dose after the first adds 1 to the Power (Concentration, p. 122)."""
     d = derive(c)
-    power = _int(sub.get("power"))
+    doses = max(1, min(10, _int(doses, 1)))
+    power = _int(sub.get("power")) + doses - 1
     parts = [["Body", d["attributes"]["Body"]], ["Willpower", d["attributes"]["Willpower"]]]
+    if _int(protection):
+        parts.append(["Protective gear", max(0, min(12, _int(protection)))])
     res = roll(sum(p[1] for p in parts)) if resist else {"hits": 0, "dice": [], "pool": 0, "glitch": False, "critical": False}
     left = max(0, power - res["hits"])
-    lines = [f"{label} {sub['name']} (Power {power})" + (f": resisted {res['hits']} → Power {left}" if resist else " without resisting")]
+    lines = [f"{label} {sub['name']}" + (f" ×{doses}" if doses > 1 else "") + f" (Power {power})" + (f": resisted {res['hits']} → Power {left}" if resist else " without resisting")]
     if resist:
         res["label"] = f"Toxin resistance: {sub['name']}"
         res["parts"] = parts
@@ -2385,22 +2465,125 @@ def vehicles_of(c):
     return [it for it in c["inventory"] if it.get("cat") in ("Vehicles", "Drones") and it.get("handling")]
 
 
+# ---- vehicle speed and weapon mounts (core pp. 199-201)
+def speed_penalty(v):
+    """−1 die per Speed Interval passed (cumulative) on Handling tests and attacks from the vehicle."""
+    interval = _int(v.get("speed_interval"))
+    return -(max(0, _int(v.get("speed"))) // interval) if interval > 0 else 0
+
+
+def mount_slots(v):
+    return max(0, _int(v.get("body"))) // RIG.MOUNT_BODY_DIVISOR
+
+
+def mounts_on(c, vuid):
+    return [it for it in c["inventory"] if it.get("ref") in RIG.MOUNTS and it.get("installed_on") == vuid]
+
+
+def mount_room_used(c, vuid):
+    return sum(RIG.MOUNTS[m["ref"]]["slots"] for m in mounts_on(c, vuid))
+
+
+def weapon_on_mount(c, mount_uid):
+    return next((it for it in c["inventory"] if it.get("mounted") == mount_uid), None)
+
+
+def mount_vehicle(c, w):
+    """(mount item, vehicle item) a weapon is mounted on, or (None, None)."""
+    m = next((x for x in c["inventory"] if x.get("uid") == w.get("mounted")), None) if w.get("mounted") else None
+    v = next((x for x in c["inventory"] if x.get("uid") == m.get("installed_on")), None) if m else None
+    return (m, v) if m and v else (None, None)
+
+
+def a_install_mount(c, p, ctx):
+    """Install a weapon mount bought in the store on one of your vehicles or drones (or take it off)."""
+    m = find_item(c, p.get("uid"))
+    if m.get("ref") not in RIG.MOUNTS:
+        raise RuleError("That isn't a weapon mount.")
+    vuid = p.get("vehicle") or None
+    if not vuid:
+        w = weapon_on_mount(c, m["uid"])
+        if w:
+            w.pop("mounted", None)
+        m.pop("installed_on", None)
+        return f"{m['name']} removed."
+    v = find_item(c, vuid)
+    if v.get("cat") not in ("Vehicles", "Drones") or not v.get("handling"):
+        raise RuleError("Weapon mounts go on vehicles and drones.")
+    if m.get("installed_on") == vuid:
+        return "Already installed."
+    need, room = RIG.MOUNTS[m["ref"]]["slots"], mount_slots(v)
+    used = mount_room_used(c, vuid)
+    if used + need > room:
+        raise RuleError(f"The {v['name']} has room for {room} weapon mount{'s' if room != 1 else ''} (Body {_int(v.get('body'))} / 3), "
+                        f"{used} already used; a {m['name'].lower()} takes {need}.")
+    w = weapon_on_mount(c, m["uid"])
+    if w and m.get("installed_on"):
+        w.pop("mounted", None)
+    m["installed_on"] = vuid
+    return f"{m['name']} installed on the {v['name']}."
+
+
+def a_mount_weapon(c, p, ctx):
+    """Put a ranged weapon in an installed mount (or take it out). Standard mounts take an assault rifle or smaller."""
+    m = find_item(c, p.get("mount"))
+    if m.get("ref") not in RIG.MOUNTS or not m.get("installed_on"):
+        raise RuleError("Install the mount on a vehicle first.")
+    old = weapon_on_mount(c, m["uid"])
+    if old:
+        old.pop("mounted", None)
+    if not p.get("weapon"):
+        return f"{old['name'] if old else 'The weapon'} taken out of the mount."
+    w = find_item(c, p["weapon"])
+    sub = w.get("sub") or ""
+    if w.get("cat") != "Ranged" or sub not in RIG.STANDARD_MOUNT_WEAPONS | RIG.HEAVY_MOUNT_WEAPONS:
+        raise RuleError(f"The {w['name']} can't go in a weapon mount.")
+    if sub in RIG.HEAVY_MOUNT_WEAPONS and not RIG.MOUNTS[m["ref"]]["heavy"]:
+        raise RuleError(f"A standard mount takes an assault rifle or smaller. The {w['name']} needs a heavy weapon mount.")
+    w["mounted"] = m["uid"]
+    v = find_item(c, m["installed_on"])
+    return f"{w['name']} mounted on the {v['name']}."
+
+
+def a_vehicle_speed(c, p, ctx):
+    """Speed up or slow down by at most the vehicle's Acceleration per combat round, or set the speed outright.
+    Distance this round = speed at the start ± half the change."""
+    v = find_item(c, p.get("uid"))
+    if v.get("cat") not in ("Vehicles", "Drones") or not v.get("handling"):
+        raise RuleError("Pick a vehicle or drone.")
+    old, top, accel = max(0, _int(v.get("speed"))), _int(v.get("top_speed")), _int(v.get("accel"))
+    if "set" in p:
+        new = max(0, min(top or 999, _int(p["set"])))
+        v["speed"], v["moved"] = new, None
+        pen = speed_penalty(v)
+        return f"{v['name']}: speed {new} m per round" + (f" ({pen} dice from Speed Intervals)" if pen else "") + "."
+    delta = _int(p.get("change"))
+    if abs(delta) > accel and not ctx.gamemaster:
+        raise RuleError(f"The {v['name']} can change speed by at most {accel} m per round (its Acceleration).")
+    new = max(0, min(top or 999, old + delta))
+    moved = old + (new - old) / 2
+    v["speed"], v["moved"] = new, round(moved, 1)
+    pen = speed_penalty(v)
+    ctx.log.append(f"{v['name']}: {old} → {new} m per round, travels {moved:g} m" + (f"; {pen} dice from Speed Intervals" if pen else ""))
+    return f"{v['name']} now goes {new} m per round ({moved:g} m this round)."
+
+
 def vehicle_pools(c, d):
-    """Piloting pools for each vehicle or drone the character owns, in each control mode they can use."""
+    """Pools for each vehicle or drone the character owns: Handling tests at the controls or jumped in
+    (threshold Handling, +1 per 3 boxes of damage), and the drone's own Pilot/Sensor + autosoft pools."""
     out = []
     vs = vehicles_of(c)
     if not vs:
         return out
     rig = control_rig(c)
-    can_remote = bool(d["matrix"].get("device")) or any(it.get("sub") == "RCCs" for it in c["inventory"])
     for it in vs:
         boxes = monitor_boxes(it)
-        dmg_pen = -(min(_int(it.get("damage")), boxes) // WOUND_STEP)
-        hint = f"Handling {it.get('handling')}"
+        worse = min(_int(it.get("damage")), boxes) // RIG.DAMAGE_HANDLING_STEP
+        hint = f"Handling {it.get('handling')}" + (f" (+{worse} from damage)" if worse else "")
+        spd = speed_penalty(it)
+        spd_part = [[f"Speed {_int(it.get('speed'))} m/round", spd]] if spd else []
         for mode, m in RIG.CONTROL.items():
             if mode == "jumped" and not rig:
-                continue
-            if mode == "remote" and not can_remote:
                 continue
             skill, attr = m["pool"]
             parts = _skill_parts(c, d, skill, attr=attr)
@@ -2408,17 +2591,27 @@ def vehicle_pools(c, d):
                 continue
             if mode == "jumped":
                 parts = parts + [[f"Control rig {rig}", rig]]
-            if dmg_pen:
-                parts = parts + [["Vehicle damage", dmg_pen]]
-            out.append(_pool(f"vehicle:{it['uid']}:{mode}", "Vehicles", f"{it['name']}: {m['name'].lower()}", parts,
-                             vehicle=it["uid"], hint=hint + (f" · thresholds −{rig}" if mode == "jumped" else "")))
-        pilot = _int(it.get("pilot"))
-        if pilot and it.get("cat") == "Drones":
-            for kind in ("Maneuvering", "Clearsight", "Evasion", "Stealth"):
+            out.append(_pool(f"vehicle:{it['uid']}:{mode}", "Vehicles", f"{it['name']}: {m['name'].lower()}", parts + spd_part,
+                             vehicle=it["uid"], hint=hint))
+        for mnt in mounts_on(c, it["uid"]):
+            w = weapon_on_mount(c, mnt["uid"])
+            if not w:
+                continue
+            sk, attr = RIG.GUNNERY["manual"]
+            gp = _skill_parts(c, d, sk, attr=attr)
+            if gp is not None:
+                out.append(_pool(f"vgun:{w['uid']}:gunner", "Vehicles", f"{it['name']}: fire the {w['name']}", gp + spd_part,
+                                 vehicle=it["uid"], hint=f"Mounted {w['name']} (Engineering + Logic)"))
+        if it.get("cat") == "Drones":
+            stats = {"Pilot": _int(it.get("pilot")), "Sensor": _int(it.get("sensor"))}
+            for kind, (_desc, attr) in RIG.AUTOSOFTS.items():
                 r = autosoft(c, kind)
                 if r:
                     out.append(_pool(f"drone:{it['uid']}:{kind}", "Vehicles", f"{it['name']} on its own: {kind}",
-                                     [["Pilot", pilot], [f"{kind} autosoft", r]] + ([["Vehicle damage", dmg_pen]] if dmg_pen else []), vehicle=it["uid"], hint=hint))
+                                     [[attr, stats[attr]], [f"{kind} autosoft", r]], vehicle=it["uid"], hint=hint))
+                elif kind == "Targeting" and stats["Sensor"]:
+                    out.append(_pool(f"drone:{it['uid']}:{kind}", "Vehicles", f"{it['name']} on its own: shoot (no Targeting autosoft)",
+                                     [["Sensor", stats["Sensor"]], ["No Targeting autosoft", -1]] + spd_part, vehicle=it["uid"], hint=hint))
     return out
 
 
@@ -2549,13 +2742,22 @@ def sustain_count(c):
     return max(0, n - free)
 
 
-def start_sustaining(c, sp, ctx, hits=0):
+def start_sustaining(c, sp, ctx, hits=0, dv=None):
     lst = c.setdefault("sustained", [])
     if len(lst) >= 20:
         raise RuleError("That's a lot of spells to hold at once. Drop one first.")
-    lst.append({"name": sp["name"], "hits": max(0, _int(hits)), "since": round(__import__("time").time())})
+    lst.append({"name": sp["name"], "hits": max(0, _int(hits)), "since": round(__import__("time").time()),
+                "dv": max(1, _int(dv if dv is not None else sp.get("drain"), 1))})
     pen = sustain_count(c)
     ctx.log.append(f"is sustaining {sp['name']}" + (f" (−{-pen * sustain_step(c)} dice on other tests)." if pen else "."))
+
+
+def sustained_dv(c, rec):
+    """Drain Value a sustained spell was cast with (dispelling rolls twice that)."""
+    if _int(rec.get("dv")):
+        return _int(rec["dv"])
+    sp = next((x for x in c.get("spells") or [] if x.get("name") == rec.get("name")), None)
+    return max(1, _int((sp or {}).get("drain"), 3))
 
 
 def a_drop_sustained(c, p, ctx):
@@ -2869,6 +3071,7 @@ ACTIONS = {
     "set_damage": a_set_damage, "damage": a_damage,
     "set_status": a_set_status, "gamemaster_set": a_gamemaster_set, "set_ammo": a_set_ammo,
     "drop_sustained": a_drop_sustained, "sustain": a_sustain, "set_os": a_set_os, "end_substance": a_end_substance,
+    "leave_host": a_leave_host, "install_mount": a_install_mount, "mount_weapon": a_mount_weapon, "vehicle_speed": a_vehicle_speed,
 }
 GAMEMASTER_ONLY = {"give", "verify_contact", "set_status", "gamemaster_set", "set_ammo", "set_os"}
 
@@ -2886,6 +3089,10 @@ EDGE_SPEND = {
 
 
 def spend_edge(c, cost):
+    if cost > 0 and (c.get("statuses") or {}).get("Dazed"):
+        raise RuleError("You're Dazed: you can't spend Edge until it wears off.")
+    if cost > 0 and c.get("_edge_guard"):
+        c["_edge_guard"]()                       # one Edge expenditure per combat round (set by the server)
     if c["current_edge"] < cost:
         raise RuleError(f"That needs {cost} Edge; you have {c['current_edge']}.")
     c["current_edge"] -= cost

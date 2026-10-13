@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 
 from flask import Response, abort, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -70,9 +71,13 @@ def catalog():
             "npcTemplates": X.templates(),
             "rules": {"edgeCap": R.EDGE_CAP, "pushCost": DICE.PUSH_COST, "ampUpDrain": M.AMP_UP_DRAIN},
             "matrixActions": MX.MATRIX_ACTIONS, "matrixEdge": MX.MATRIX_EDGE, "ic": MX.IC,
-            "autosofts": RIG.AUTOSOFTS, "rigControl": RIG.CONTROL, "ram": RIG.RAM,
+            "autosofts": {k: f"{v[0]} (with {v[1]})" for k, v in RIG.AUTOSOFTS.items()}, "rigControl": RIG.CONTROL, "ram": RIG.RAM,
             "combat": {"interrupts": ACT.INTERRUPTS, "calledShots": ACT.CALLED_SHOTS, "anticipation": ACT.ANTICIPATION,
                        "intercept": ACT.INTERCEPT, "multiple": ACT.MULTIPLE_ATTACKS, "edgeGainCap": ACT.EDGE_GAIN_CAP,
+                       "edgeActions": ACT.EDGE_ACTIONS, "counterspell": ACT.COUNTERSPELL,
+                       "defenseEdgeActions": ACT.DEFENSE_EDGE_ACTIONS,
+                       "mounts": {"standard": sorted(RIG.STANDARD_MOUNT_WEAPONS), "heavy": sorted(RIG.HEAVY_MOUNT_WEAPONS), "bodyPerMount": RIG.MOUNT_BODY_DIVISOR}, "takeAim": ACT.TAKE_AIM, "trip": ACT.TRIP, "dispel": ACT.DISPEL,
+                       "grapple": {k: {"name": v["name"], "desc": v["desc"], "held": bool(v.get("held"))} for k, v in ACT.GRAPPLE["actions"].items()},
                        "statusMods": ACT.STATUS_MODS, "ongoing": list(ACT.ONGOING), "sustainPenalty": ACT.SUSTAIN_PENALTY,
                        "minorPerMajor": ACT.MINOR_PER_MAJOR},
             "wiki": WIKI.build(),
@@ -190,7 +195,8 @@ def stock_update(cid):
 def sheet_payload(row, gamemaster):
     c = load_char(row)
     d = R.derive(c)
-    if not gamemaster:      # the GM tracks Overwatch in secret; players only know what Check Overwatch Score told them
+    if not gamemaster and not R.program_running(d, "Baby Monitor"):
+        # the GM tracks Overwatch in secret; players only know what Check Overwatch Score (or Baby Monitor) told them
         known = (c.get("matrix_state") or {}).get("os_known")
         c["matrix_state"] = {"os": known, "os_known": known}
         d["matrix"]["os"] = known
@@ -221,7 +227,13 @@ def char_tx(pid, gamemaster, mutate):
         start = {"karma": c["karma"], "nuyen": c["nuyen"]}
         gs = game_settings(row["campaign_id"])
         ctx = R.Ctx(row["approved"] == APPROVED, gamemaster, gs["sellPct"], gs["outOfStock"])
-        msg = mutate(c, ctx, row)
+        if not gamemaster:
+            import fight                     # one Edge expenditure per combat round while in combat
+            c["_edge_guard"] = lambda: fight.player_edge_round(row["campaign_id"], pid)
+        try:
+            msg = mutate(c, ctx, row)
+        finally:
+            c.pop("_edge_guard", None)
         R.clamp_state(c)
         save_char(pid, c)
         running = dict(start)
@@ -302,8 +314,12 @@ def rename_campaign(cid):
 @app.route("/api/campaigns/<cid>", methods=["DELETE"])
 @gamemaster_required
 def delete_campaign(cid):
+    import music
+    gone = [r["id"] for r in get_db().execute("SELECT id FROM music WHERE campaign_id=?", (cid,)).fetchall()]
     get_db().execute("DELETE FROM campaigns WHERE id=?", (cid,))
     get_db().commit()
+    for tid in gone:
+        music._remove_files(tid)
     return jsonify({"ok": True})
 
 
@@ -374,7 +390,9 @@ def invite_row(token):
 @app.route("/api/invite/<token>", methods=["POST"])
 @rate_limited("invite_accept", 10, burst=5)
 def accept_invite(token):
-    from security import LOGIN_POW_BITS, verify_pow
+    from security import LOGIN_POW_BITS, gate_consume, gate_ok, gate_refused, verify_pow
+    if not gate_ok():
+        return gate_refused()
     b = body()
     if not verify_pow(b.get("challenge"), b.get("counter"), LOGIN_POW_BITS):
         return err("Browser check failed. Reload and try again.")
@@ -413,8 +431,10 @@ def accept_invite(token):
     except BaseException:
         db.rollback()
         raise
+    gate_consume()
     session.clear()
     session.permanent = True
+    session["t0"] = time.time()
     session["pid"] = pid
     session["pwv"] = 0
     return jsonify({"ok": True, "next": "/play"})
@@ -596,7 +616,8 @@ def gamemaster_expose(pid):
     row = fetch_player_row(pid)
     try:
         sub = find_substance(row["campaign_id"], str(b.get("id") or ""))
-        row2, _ctx, msg = char_tx(pid, True, lambda c, ctx, r: R.expose(c, sub, ctx, resist=b.get("resist", True)))
+        row2, _ctx, msg = char_tx(pid, True, lambda c, ctx, r: R.expose(c, sub, ctx, resist=b.get("resist", True),
+                                                                         doses=b.get("doses", 1), protection=b.get("protection", 0)))
     except R.RuleError as e:
         return err(str(e))
     out = sheet_payload(row2, True)
@@ -1125,6 +1146,7 @@ def me_roll(me):
         key = str(b.get("key") or "")
         extra = []
         follow = None
+        pool = {}
         if key:
             pool = R.pool_by_key(c, key, d)
             parts = [list(p) for p in pool["parts"]]
@@ -1166,25 +1188,31 @@ def me_roll(me):
             parts.append(["Modifier", mod])
         pool_n = max(0, sum(p[1] for p in parts))
         push = 0
+        free_edge = 1 if pool.get("free_edge") else 0      # Browse, Edit, Stealth, Trace: 1 Edge for this action only
         if b.get("push"):
-            R.spend_edge(c, DICE.PUSH_COST)
+            R.spend_edge(c, DICE.PUSH_COST - free_edge)
+            free_edge = 0
             push = d["edge_max"]
             parts.append(["Edge (pushed, exploding 6s)", push])
         try:
-            res = DICE.new_roll(pool_n, wild=bool(b.get("wild")), push_edge=push, threshold=clamp_int(b.get("threshold"), 0, 30, 0))
+            res = DICE.new_roll(pool_n, wild=bool(b.get("wild")) or bool(pool.get("wild")), push_edge=push, threshold=clamp_int(b.get("threshold"), 0, 30, 0))
         except DICE.DiceError as e:
             raise R.RuleError(str(e))
         res["label"] = label
         res["parts"] = parts
+        if free_edge:
+            res["free_edge"] = free_edge
+            extra.append(f"{pool['free_edge']}: 1 Edge for this roll only")
         if key.startswith("matrix:") and key[7:] in MX.MATRIX_ACTIONS:
             extra += R.matrix_action_roll(c, d, key[7:], res, clamp_int(b.get("targetRating"), 0, 12, 0), ctx)
         if extra:
             res["note"] = " · ".join(extra)
         out["rid"] = add_roll(row["campaign_id"], row["id"], display_name(row, c), row["color"], "sr", res)
         if follow and follow[0] == "spell":
-            R.after_cast(c, follow[1], ctx, clamp_int(b.get("drain"), 0, 20, 0))
+            extra_drain = clamp_int(b.get("drain"), 0, 20, 0)
+            R.after_cast(c, follow[1], ctx, extra_drain)
             if follow[1].get("duration") == "S" and res["hits"] > 0 and b.get("sustain", True):
-                R.start_sustaining(c, follow[1], ctx, res["hits"])
+                R.start_sustaining(c, follow[1], ctx, res["hits"], R._int(follow[1].get("drain")) + extra_drain)
         elif follow:
             R.after_form(c, follow[1], ctx)
         return "Rolled."
@@ -1221,7 +1249,10 @@ def me_boost(me, rid):
             cost = DICE.apply_boost(r, str(b.get("boost") or ""), b.get("dice") or [])
         except DICE.DiceError as e:
             raise R.RuleError(str(e))
-        R.spend_edge(c, cost)
+        free = min(cost, R._int(r.get("free_edge")))          # a program's Edge for this roll goes first
+        if free:
+            r["free_edge"] = R._int(r.get("free_edge")) - free
+        R.spend_edge(c, cost - free)
         db.execute("UPDATE rolls SET data=?, updated_at=? WHERE id=?", (json.dumps(r), now(), rid))
         return "Boosted."
     try:

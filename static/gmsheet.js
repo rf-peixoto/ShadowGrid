@@ -14,4 +14,5 @@
   };
   setInterval(check, 20000);
   Live.on(check);
+  Music.mount({ gm: true, game: document.body.dataset.gameId, host: document.querySelector('.appbar .chips') });
 })();

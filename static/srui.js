@@ -282,7 +282,8 @@ function roller(opts) {
     const edge = sh.char.current_edge, pushCost = CAT.rules.pushCost;
     const healing = S.mode === 'pool' && pool && pool.heal;
     const optsRow = h('div.opts', healing ? null : [
-      h('label.check', { title: 'One die is the Wild Die: 5-6 = 3 hits, 1 = your 5s don’t count' }, h('input', { type: 'checkbox', checked: S.wild, onchange: e => { S.wild = e.target.checked; save(); } }), 'Wild Die'),
+      pool && pool.wild ? h('span.tag', { title: 'Overclock: one of its dice is the Wild Die' }, 'Wild Die (Overclock)')
+        : h('label.check', { title: 'One die is the Wild Die: 5-6 = 3 hits, 1 = your 5s don’t count' }, h('input', { type: 'checkbox', checked: S.wild, onchange: e => { S.wild = e.target.checked; save(); } }), 'Wild Die'),
       h('label', 'Threshold', h('input', { type: 'number', min: 0, max: 30, value: S.threshold, placeholder: '–', oninput: e => { S.threshold = e.target.value; save(); } }))]);
     if (S.mode === 'pool') {
       optsRow.append(h('label', 'Mod', h('input', { type: 'number', min: -30, max: 30, value: S.mod, oninput: e => { S.mod = e.target.value; refreshTotals(); } })));
@@ -313,9 +314,9 @@ function roller(opts) {
     const info = [hitsLine(d), d.note || '', d.wildOne ? 'Wild Die rolled a 1: your 5s don’t count' : '', d.boost ? `Edge: ${d.boost.label}` : ''].filter(Boolean).join(' · ');
     if (info) card.append(h('p.hint.mb0', info));
     if (canBoost) {
-      const edge = sh.char.current_edge, n = S.sel.size;
+      const free = d.free_edge || 0, edge = sh.char.current_edge + free, n = S.sel.size;
       const b = h('div.boosts');
-      b.append(h('p.hint', `Edge Boost (one per roll). You have ${edge} Edge. Click dice to select them.`));
+      b.append(h('p.hint', `Edge Boost (one per roll). You have ${sh.char.current_edge} Edge${free ? ` + ${free} for this roll only (program)` : ''}. Click dice to select them.`));
       b.append(h('button', { type: 'button', disabled: !n || edge < n, onclick: () => boost('reroll') }, `Reroll ${n || ''} selected (${n || 1} Edge)`));
       b.append(h('button', { type: 'button', disabled: n !== 1 || edge < 2, onclick: () => boost('plus_one') }, '+1 to selected (2)'));
       b.append(h('button', { type: 'button', disabled: edge < 3, onclick: () => boost('buy_hit') }, 'Buy a hit (3)'));

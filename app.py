@@ -12,7 +12,7 @@ import sqlite3
 import sys
 import time
 
-from flask import Response, jsonify, redirect, render_template, request, session, url_for
+from flask import Response, jsonify, make_response, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import backup  # noqa: F401  (registers routes)
@@ -21,9 +21,50 @@ import game  # noqa: F401  (registers routes)
 import handouts  # noqa: F401  (registers routes)
 import sessions  # noqa: F401  (registers routes)
 import maps  # noqa: F401  (registers routes)
+import music  # noqa: F401  (registers routes)
 from core import (BUS, DB_PATH, MAX_STREAMS, app, body, current_player_row, err, get_db, init_db, kv_get, kv_set, run_server)
 from game import catalog_blob
-from security import LOGIN_POW_BITS, gamemaster_required, issue_challenge, rate_limited, verify_pow
+from security import (GATE_ON, LOGIN_POW_BITS, gamemaster_required, gate_consume, gate_fail, gate_ok, gate_refused,
+                      grant_gate_pass, issue_challenge, issue_gate_challenge, rate_limited, verify_gate, verify_pow)
+
+NEXT_RE = re.compile(r"/(?![/\\])[A-Za-z0-9_\-./#?=&%]*")
+
+
+def safe_next(v, default="/login"):
+    return v if isinstance(v, str) and len(v) < 300 and NEXT_RE.fullmatch(v) else default
+
+
+# ====================================================================== the gate (before the sign-in pages)
+@app.route("/gate")
+def gate():
+    nxt = safe_next(request.args.get("next"))
+    if session.get("gamemaster"):
+        return redirect(url_for("index"))
+    if current_player_row():
+        return redirect(url_for("play"))
+    if gate_ok():
+        return redirect(nxt)
+    return render_template("gate.html", next=nxt)
+
+
+@app.route("/api/gate/challenge")
+@rate_limited("gate_challenge", 6, burst=4)
+def gate_challenge():
+    return jsonify(issue_gate_challenge())
+
+
+@app.route("/api/gate", methods=["POST"])
+@rate_limited("gate_solve", 6, burst=4)
+def gate_post():
+    b = body()
+    if not verify_gate(b.get("challenge"), b.get("counters")):
+        return err("The connection check failed. Run it again.")
+    grant_gate_pass()
+    return jsonify({"ok": True, "next": safe_next(b.get("next"))})
+
+
+def to_gate():
+    return redirect(url_for("gate", next=request.full_path.rstrip("?")))
 
 
 # ====================================================================== sign in / out
@@ -33,18 +74,24 @@ def login():
         return redirect(url_for("index"))
     if current_player_row():
         return redirect(url_for("play"))
+    if not gate_ok():
+        return to_gate()
     return render_template("login.html", bits=LOGIN_POW_BITS)
 
 
 @app.route("/api/login/challenge")
 @rate_limited("login_challenge", 20)
 def login_challenge():
+    if not gate_ok():
+        return gate_refused()
     return jsonify(issue_challenge(LOGIN_POW_BITS))
 
 
 @app.route("/api/login", methods=["POST"])
 @rate_limited("login", 8, burst=5)
 def login_post():
+    if not gate_ok():
+        return gate_refused()
     b = body()
     if not verify_pow(b.get("challenge"), b.get("counter"), LOGIN_POW_BITS):
         return err("Browser check failed. Reload and try again.")
@@ -55,17 +102,23 @@ def login_post():
     if username.lower() == "gamemaster":
         if not check_password_hash(kv_get(db, "gamemaster_password"), pw):
             time.sleep(0.5)
+            gate_fail()
             return err("Wrong username or password.", 401)
+        gate_consume()
         session.clear()
         session.permanent = True
+        session["t0"] = time.time()
         session["gamemaster"] = True
         return jsonify({"ok": True, "next": nxt if nxt and not nxt.startswith("/play") else "/"})
     row = db.execute("SELECT * FROM players WHERE username=?", (username,)).fetchone()
     if not row or not check_password_hash(row["pw_hash"], pw):
         time.sleep(0.5)
+        gate_fail()
         return err("Wrong username or password.", 401)
+    gate_consume()
     session.clear()
     session.permanent = True
+    session["t0"] = time.time()
     session["pid"] = row["id"]
     session["pwv"] = row["pw_rev"]
     return jsonify({"ok": True, "next": "/play"})
@@ -80,23 +133,41 @@ def logout():
 @app.route("/invite/<token>")
 @rate_limited("invite_page", 30)
 def invite_page(token):
+    if not gate_ok():
+        return to_gate()
     inv, problem = game.invite_row(token)
     return render_template("invite.html", token=token, problem=problem,
                            game_name=inv["game_name"] if inv else "", bits=LOGIN_POW_BITS)
 
 
 # ====================================================================== pages
+# The app's screens (home, game, map, sheets, the player page) open inside a thin persistent frame
+# (shell.html) that keeps the music playing while you move between them: browsers only allow sound on
+# a newly loaded page after a click there. A top-level visit gets the frame, and the frame loads the
+# screen itself (Sec-Fetch-Dest: iframe, or ?embed=1 for browsers that don't send that header).
+SHELL = os.environ.get("SHADOWGRID_SHELL", "1") != "0"
+
+
+def app_page(template, **kw):
+    inner = request.headers.get("Sec-Fetch-Dest") in ("iframe", "frame") or request.args.get("embed") == "1"
+    if SHELL and not inner:
+        resp = make_response(render_template("shell.html", player=template == "play.html"))
+    else:
+        resp = make_response(render_template(template, **kw))
+    resp.headers["Vary"] = "Sec-Fetch-Dest"
+    return resp
+
 @app.route("/")
 @gamemaster_required
 def index():
-    return render_template("index.html")
+    return app_page("index.html")
 
 
 @app.route("/game/<cid>")
 @gamemaster_required
 def game_page(cid):
     game.game_or_404(cid)
-    return render_template("game.html", game_id=cid)
+    return app_page("game.html", game_id=cid)
 
 
 @app.route("/game/<cid>/sheet/<pid>")
@@ -105,14 +176,14 @@ def gm_sheet_page(cid, pid):
     row = game.fetch_player_row(pid)
     if row["campaign_id"] != cid:
         return redirect(url_for("game_page", cid=row["campaign_id"]))
-    return render_template("gm_sheet.html", game_id=cid, player_id=pid)
+    return app_page("gm_sheet.html", game_id=cid, player_id=pid)
 
 
 @app.route("/map/<map_id>")
 @gamemaster_required
 def editor(map_id):
     maps.fetch_map(map_id)
-    return render_template("editor.html", map_id=map_id)
+    return app_page("editor.html", map_id=map_id)
 
 
 @app.route("/play")
@@ -122,7 +193,7 @@ def play():
         if session.get("gamemaster"):
             return redirect(url_for("index"))
         return redirect(url_for("login"))
-    return render_template("play.html")
+    return app_page("play.html")
 
 
 # ====================================================================== printable sheets

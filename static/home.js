@@ -184,7 +184,7 @@ async function backupsDialog() {
           h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete the backup from ${new Date(b.at * 1000).toLocaleString()}?`, { danger: true, ok: 'Delete' })) draw((await api(`/api/backups/${encodeURIComponent(b.name)}`, 'DELETE')).backups); } }, 'Delete'))))))));
   }
   async function restore(run, label) {
-    if (!await UI.confirm(`Restore the backup from ${label}? Everything (games, maps, runners, images) goes back to that moment, and everyone is signed out. The current state is saved as a backup first, so you can undo this.`, { danger: true, ok: 'Restore' })) return;
+    if (!await UI.confirm(`Restore the backup from ${label}? Everything (games, maps, runners, images, music) goes back to that moment, and everyone is signed out. The current state is saved as a backup first, so you can undo this.`, { danger: true, ok: 'Restore' })) return;
     try { const r = await run(); await UI.info('Backup restored', h('p', r.message)); location.href = '/login'; }
     catch (e) { toast(e.message, 6000); }
   }
@@ -199,9 +199,11 @@ async function backupsDialog() {
       return data;
     }, `the file ${f.name}`);
   };
+  const withMusic = h('input', { type: 'checkbox', checked: true });
   const body = h('div',
-    h('p.hint', 'A backup holds everything: games, maps, runners and their sheets, runs, handouts and their images. One is made automatically every day (the last 10 are kept).'),
-    h('div.row.tight', h('button.primary', { type: 'button', onclick: async () => { toast('Saving a backup…'); draw((await api('/api/backups', 'POST', {})).backups); toast('Backup saved.'); } }, 'Back up now'),
+    h('p.hint', 'A backup holds everything: games, maps, runners and their sheets, runs, handouts and their images, and music. One is made automatically every day without the music (the last 10 are kept); restoring one keeps the music already here.'),
+    h('div.row.tight', h('button.primary', { type: 'button', onclick: async () => { toast('Saving a backup…'); draw((await api('/api/backups', 'POST', { music: withMusic.checked })).backups); toast('Backup saved.'); } }, 'Back up now'),
+      h('label.check', withMusic, 'Include music'),
       h('button', { type: 'button', onclick: () => file.click() }, 'Restore from a file…'), file),
     h('div.mt', list));
   draw();
@@ -217,3 +219,4 @@ load().then(() => {
   if (g) (q.get('newmap') ? newMap : genMap)(g);
 }).catch(e => { if (e.message !== 'auth') toast(e.message); });
 })();
+Music.attach();

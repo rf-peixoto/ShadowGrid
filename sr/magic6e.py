@@ -273,11 +273,12 @@ PROGRAMS = {
     "Basic": {
         "Baby Monitor": "Always know your Overwatch Score.",
         "Browse": "1 Edge on Matrix Search (spend immediately).",
-        "Configurator": "Store an alternate deck configuration.",
+        "Configurator": "Store an alternate attribute setup and switch to it at once.",
         "Edit": "1 Edge on Edit File (spend immediately).",
         "Encryption": "+2 dice on Encrypt File.",
         "Signal Scrubber": "Reduce noise by 2.",
         "Toolbox": "+1 Data Processing.",
+        "Virtual Machine": "2 more program slots; you take 1 extra box of Matrix damage when attacked.",
     },
     "Hacking": {
         "Armor": "+2 Defense Rating.",

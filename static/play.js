@@ -634,6 +634,7 @@ async function boot() {
     setView(first);
     setInterval(() => refresh(false), 15000);
     Live.on(() => refresh(false));
+    Music.mount({ host: document.querySelector('.appbar .chips') });
   } catch (e) { if (e.message !== 'auth') toast('Could not load: ' + e.message, 6000); }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShadowGrid - connecting</title>
+<link rel="stylesheet" href="{{ asset('style.css') }}">
+</head>
+<body class="login gate-page" data-next="{{ next }}" data-worker="{{ asset('gate-worker.js') }}">
+<main class="gate panel" id="gate">
+  <h1 class="brand">Shadow<span>Grid</span></h1>
+  <p class="gate-legend" id="gate-legend" aria-live="polite">Connecting to the Matrix</p>
+  <div class="gate-sectors" id="gate-sectors" role="progressbar" aria-label="Connection progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+  <div class="gate-bar"><span id="gate-fill"></span></div>
+  <div class="gate-stats">
+    <span id="gate-pct">0%</span>
+    <span id="gate-rate"></span>
+    <span id="gate-eta"></span>
+  </div>
+  <ol class="gate-log" id="gate-log" aria-hidden="true"></ol>
+  <p class="hint" id="gate-hint">Your device is proving it isn't a bot. It runs once per sign-in and can take a minute on a phone. Keep this tab open.</p>
+  <button id="gate-retry" class="primary" type="button" hidden>Try again</button>
+  <noscript><p>Turn on JavaScript to connect.</p></noscript>
+</main>
+<script src="{{ asset('gate.js') }}"></script>
+</body>
+</html>

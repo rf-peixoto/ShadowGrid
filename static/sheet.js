@@ -721,17 +721,36 @@ function mount(root, cfg) {
     card.append(h('div.stats.mt', stat('Attack', mx.attack), stat('Sleaze', mx.sleaze), stat('Data Proc.', mx.data_processing), stat('Firewall', mx.firewall),
       stat('Matrix AR', mx.ar, '', 'Attack + Sleaze'), stat('Matrix DR', mx.dr, '', 'Data Processing + Firewall'), stat('Initiative', `${mx.init_score} + ${mx.init_dice}D6`),
       stat('Device Rating', mx.device_rating)));
+    // Reconfigure Matrix Attribute (Minor): swap two ratings; Configurator keeps a second setup
+    const ATTRS = [['attack', 'Attack'], ['sleaze', 'Sleaze'], ['data_processing', 'Data Processing'], ['firewall', 'Firewall']];
+    const sw1 = h('select', ATTRS.map(([k, n]) => option(k, n))), sw2 = h('select', ATTRS.map(([k, n], i) => option(k, n, i === 1)));
+    const configurator = (mx.programs || []).some(p => p.running && p.name === 'Configurator');
+    card.append(h('div.row.tight.mt', h('span.hint', 'Reconfigure (Minor):'), sw1, h('span.hint', '⇄'), sw2,
+      h('button.small', { type: 'button', onclick: () => act('set_matrix', { swap: [sw1.value, sw2.value] }) }, 'Swap'),
+      mx.config ? h('button.small.ghost', { type: 'button', title: 'Back to the ratings of your devices', onclick: () => act('set_matrix', { config: 'reset' }) }, 'Reset') : null,
+      configurator ? h('button.small', { type: 'button', title: 'Configurator: remember this setup', onclick: () => act('set_matrix', { config: 'save' }) }, 'Save setup') : null,
+      configurator && mx.saved_config ? h('button.small', { type: 'button', title: 'Configurator: switch to the saved setup at once', onclick: () => act('set_matrix', { config: 'load' }) }, 'Load saved setup') : null),
+      h('div.row.tight', h('label', 'Noise', h('input', { type: 'number', min: 0, max: 20, value: mx.noise_raw || 0, style: { width: '4.5rem' },
+        title: 'Distance, jamming, spam zones… (−1 per point on Matrix tests; above the Device Rating you can’t reach the Matrix)',
+        onchange: e => act('set_matrix', { noise: +e.target.value }, { quiet: true }) })),
+        mx.noise_raw ? h('span.hint', `−${mx.noise} on Matrix tests${mx.noise !== mx.noise_raw ? ' (Signal Scrubber −2)' : ''}`) : h('span.hint', 'none'),
+        mx.no_access ? h('span.bad', 'Noise above the Device Rating: no Matrix access') : null));
     const cm = { p: mx.damage, pm: mx.boxes, s: 0, sm: 0, ov: 0 };
     card.append(h('div.mt', SR.monitor('physical', cm, { label: mx.stun ? 'Matrix damage (your Stun track)' : 'Matrix damage', onSet: (_t, v) => act('set_matrix', { damage: v }, { quiet: true }), showTools: false })),
       mx.penalty ? h('p.warn', `${mx.penalty} dice on Matrix actions from damage on the device.`) : null);
     // Overwatch Score: the GM sees and changes it; players only know what Check Overwatch Score told them
     const os = mx.os, pct = Math.min(100, ((os || 0) / 40) * 100);
+    const icm = mx.ic_mods || {};
+    if (Object.keys(icm).length) card.append(h('div.row.tight.mt.warn-line', h('span.warn', 'IC: ' + Object.entries(icm).map(([k, v]) => `${k.replace('_', ' ')} ${v}`).join(', ')),
+      h('button.small', { type: 'button', title: 'Lowered attributes come back once you leave the host', onclick: () => act('leave_host') }, 'Leave host')));
     card.append(h('div.os-block.mt', h('h4', 'Overwatch Score'),
       cfg.gm ? h('div.os-meter', h('b', `${os} / 40`), h('div.bar', h('span', { style: { width: pct + '%' } })),
         h('button.small', { type: 'button', onclick: () => act('set_os', { delta: -1 }) }, '−1'), h('button.small', { type: 'button', onclick: () => act('set_os', { delta: 1 }) }, '+1'),
         h('button.small', { type: 'button', onclick: async () => { const v = await UI.prompt('Overwatch Score', 'Set the score (0-40)', { type: 'number', value: os, min: 0 }); if (v !== null) act('set_os', { os: +v }); } }, 'Set…'),
         h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm('Converge now? The device is bricked, the runner is dumped (dumpshock in VR) and their location is reported.', { danger: true, ok: 'Converge' })) act('set_os', { converge: true }); } }, 'Converge')) :
-        h('p.hint', os == null ? 'Unknown. Illegal actions raise it by the defender’s hits; at 40 the GOD converges on you. Use Check Overwatch Score to find out.' : `${os} when you last checked (at 40 the GOD converges).`)));
+        (mx.programs || []).some(p => p.running && p.name === 'Baby Monitor')
+          ? h('div.os-meter', h('b', `${os} / 40`), h('div.bar', h('span', { style: { width: pct + '%' } })), h('span.hint', 'Baby Monitor keeps you posted'))
+          : h('p.hint', os == null ? 'Unknown. Illegal actions raise it by the defender’s hits; at 40 the GOD converges on you. Use Check Overwatch Score to find out.' : `${os} when you last checked (at 40 the GOD converges).`)));
     card.append(h('details.mt', h('summary', 'Matrix actions'), h('table.list', h('tbody', Object.values(CAT.matrixActions).map(a => h('tr',
       h('td', h('b', a.name), h('div.hint', a.effect)), h('td', h('span.tag' + (a.legal ? '' : '.illegal'), a.legal ? 'Legal' : 'Illegal')),
       h('td.hint', a.pool ? `${a.pool[0]} + ${a.pool[1]}` : '—'), h('td.hint', Array.isArray(a.defense) ? `vs ${a.defense.join(' + ')}` : a.defense === 'rating' ? 'vs rating × 2' : a.defense ? `vs ${a.defense}` : ''),
@@ -770,6 +789,7 @@ function mount(root, cfg) {
         cfg.gm ? h('button', { type: 'button', onclick: gmGive }, 'Give an item…') : null,
         h('span.hint', cfg.gm ? 'GM changes are free.' : draft() ? 'Returning an item refunds its full price while you create the character.' :
           `Selling pays ${S.sheet.sellPct}% of the price, through a contact who could get that item.`))));
+    if ((dv.vehicles || []).length) out.append(vehiclesCard());
     const byCat = {};
     for (const it of ch.inventory) (byCat[it.cat] = byCat[it.cat] || []).push(it);
     let any = false;
@@ -784,6 +804,39 @@ function mount(root, cfg) {
     }
     if (!any) out.append(h('div.card.empty', h('h3', 'No gear yet'), h('p', 'Weapons, armor, ammo, cyberware, vehicles and everything else is bought in the store.')));
     return out;
+  }
+  /* Vehicles and drones: speed (Speed Interval penalties) and weapon mounts */
+  function vehiclesCard() {
+    const ch = c(), dv = d(), M = CAT.combat.mounts;
+    const card = h('div.card', h('h3', 'Vehicles and drones', h('span.hint', 'speed and weapon mounts')));
+    const spareMounts = ch.inventory.filter(it => (it.ref === 'vehicles-standard-weapon-mount' || it.ref === 'vehicles-heavy-weapon-mount') && !it.installed_on);
+    for (const v of dv.vehicles) {
+      const it = ch.inventory.find(x => x.uid === v.uid); if (!it) continue;
+      const accel = +it.accel || 0;
+      const row = h('div.vehicle-row');
+      row.append(h('div.row.tight', h('b', it.name), h('span.hint', `Accel ${it.accel} · Speed Interval ${it.speed_interval} · top ${it.top_speed}`)),
+        h('div.row.tight', h('span', `Speed ${v.speed} m/round`), v.speed_penalty ? h('span.warn', `−${-v.speed_penalty} ${v.speed_penalty === -1 ? 'die' : 'dice'} on Handling tests and attacks (Speed Interval ${it.speed_interval})`) : null,
+          v.moved != null ? h('span.hint', `moved ${v.moved} m this round`) : null,
+          h('button.small', { type: 'button', title: `Slow down by ${accel} m (its Acceleration)`, onclick: () => act('vehicle_speed', { uid: it.uid, change: -accel }, { quiet: true }) }, `− ${accel}`),
+          h('button.small', { type: 'button', title: `Speed up by ${accel} m (its Acceleration)`, onclick: () => act('vehicle_speed', { uid: it.uid, change: accel }, { quiet: true }) }, `+ ${accel}`),
+          h('button.small.ghost', { type: 'button', onclick: async () => { const x = await UI.prompt(`${it.name}: speed`, 'Meters per combat round', { type: 'number', value: v.speed, min: 0 }); if (x !== null) act('vehicle_speed', { uid: it.uid, set: +x }, { quiet: true }); } }, 'Set…')));
+      if (v.mount_slots) {
+        row.append(h('div.hint', `Weapon mounts: ${v.mount_used} of ${v.mount_slots} (Body / ${M.bodyPerMount}; a heavy mount counts 2)`));
+        for (const mt of v.mounts) {
+          const weapons = ch.inventory.filter(w => w.cat === 'Ranged' && [...M.standard, ...(mt.heavy ? M.heavy : [])].includes(w.sub) && (!w.mounted || w.mounted === mt.uid));
+          const sel = h('select', { onchange: e => act('mount_weapon', { mount: mt.uid, weapon: e.target.value || null }, { quiet: true }) },
+            option('', '(empty)'), weapons.map(w => option(w.uid, w.name, mt.weapon && mt.weapon.uid === w.uid)));
+          row.append(h('div.row.tight', h('span', mt.name), sel,
+            h('button.small.ghost', { type: 'button', title: 'Take the mount off', onclick: () => act('install_mount', { uid: mt.uid, vehicle: null }, { quiet: true }) }, '✕')));
+        }
+        const fits = spareMounts.filter(mt => v.mount_used + (mt.ref.includes('heavy') ? 2 : 1) <= v.mount_slots);
+        if (fits.length) row.append(h('div.row.tight', h('select', { onchange: e => { if (e.target.value) act('install_mount', { uid: e.target.value, vehicle: it.uid }); } },
+          option('', 'Install a mount you own…'), fits.map(mt => option(mt.uid, mt.name)))));
+        else if (v.mount_used < v.mount_slots) row.append(h('p.hint', 'Buy a Standard or Heavy Weapon Mount in the store to arm it.'));
+      } else row.append(h('div.hint', 'Too light for weapon mounts (needs Body 3).'));
+      card.append(row);
+    }
+    return card;
   }
   function gearRow(it) {
     const dv = d();
@@ -923,9 +976,11 @@ function mount(root, cfg) {
     const resist = h('input', { type: 'checkbox', checked: true });
     if (cfg.gm) {
       const sel = h('select', option('', 'Expose to…'), ['toxin', 'drug', 'disease'].map(k => h('optgroup', { label: k[0].toUpperCase() + k.slice(1) + 's' }, lib.filter(x => x.kind === k).map(x => option(x.id, `${x.name} (Power ${x.power})`)))));
-      card.append(h('div.row.tight.mt', sel, h('label.check', resist, 'Resists'), h('button.small', { type: 'button', onclick: async () => {
+      const doses = h('input', { type: 'number', min: 1, max: 10, value: 1, title: 'Each dose after the first: Power +1', style: { width: '3.6rem' } });
+      const prot = h('input', { type: 'number', min: 0, max: 12, value: 0, title: 'Rating of protective gear (gas mask, chemical seal…), added to the resistance roll', style: { width: '3.6rem' } });
+      card.append(h('div.row.tight.mt', sel, h('label', 'Doses ', doses), h('label', 'Protection ', prot), h('label.check', resist, 'Resists'), h('button.small', { type: 'button', onclick: async () => {
         if (!sel.value) return;
-        try { const sh = await api(`/api/players/${S.sheet.player.id}/expose`, 'POST', { id: sel.value, resist: resist.checked }); set(sh); toast(sh.message, 6000); } catch (e) { toast(e.message, 5000); }
+        try { const sh = await api(`/api/players/${S.sheet.player.id}/expose`, 'POST', { id: sel.value, resist: resist.checked, doses: +doses.value || 1, protection: +prot.value || 0 }); set(sh); toast(sh.message, 6000); } catch (e) { toast(e.message, 5000); }
       } }, 'Expose')), lib.length ? null : h('p.hint', 'Add toxins and drugs on the game page (Runners › Toxins & drugs).'));
     } else {
       const drugs = lib.filter(x => x.kind === 'drug');

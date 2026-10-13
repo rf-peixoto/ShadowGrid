@@ -90,9 +90,11 @@ Overflow heals first. Each method works once per set of injuries.
 - Devices and hosts defend with their rating x 2. In the dice roller, give the target's rating and ShadowGrid rolls its defense.
 - Overwatch Score: on every illegal action the defender's hits are added (+1 when a hacking program helps). At 40 the GOD converges: the device is bricked, you are dumped (dumpshock in VR: 3 Stun cold-sim, 3 Physical hot-sim, resisted with Willpower) and your location is reported. The GM sees the score; you only know it after Check Overwatch Score.
 - A device's Matrix condition monitor is 8 + Device Rating/2; every 3 boxes is −1 die on Matrix actions; full, it's bricked. A technomancer's living persona takes Matrix damage on the Stun track.
-- Data Spike: half your Attack (round up) + net hits Matrix damage, resisted with Firewall. Tarpit: 1 + net hits.
+- Data Spike: half your Attack Rating (round up) + net hits Matrix damage. Matrix damage isn't resisted, unless Biofeedback Filter runs (then Device Rating or Body). Tarpit: 1 + net hits.
 - IC uses the host rating x 2 for its tests and Defense. See the IC topics.
-- Noise: −1 per point (distance, walls, jamming).""",
+- Noise: −1 per point on Matrix tests (distance, walls, jamming, spam zones). Above your Device Rating you can't reach the Matrix at all. Set it in the Matrix section of your sheet.
+- Reconfigure Matrix Attribute (Minor): swap two of your persona's ratings. With Configurator running, save a setup and switch to it at once.
+- Programs: Toolbox +1 Data Processing; Armor +2 Matrix Defense Rating; Overclock +2 dice, one of them the Wild Die; Encryption +2 on Encrypt File, Decryption +2 on Crack File; Browse, Edit, Stealth and Trace give 1 Edge for Matrix Search, Edit File, Hide and Trace Icon (spend it on that roll or lose it); Signal Scrubber −2 noise; Virtual Machine +2 program slots, but 1 extra box when you're hit; Exploit −2 to your target's Defense Rating; Fork hits two targets without splitting the pool; Lockdown link-locks whoever you damage; Baby Monitor shows your Overwatch Score; Defuse lets you resist a Data Bomb.""",
     "Technomancers": """**Technomancers**
 - Living persona: Attack = Charisma, Sleaze = Intuition, Data Processing = Logic, Firewall = Willpower.
 - Threading a complex form: Electronics + Resonance (Resonance Spike uses Cracking). Fading: resist the form's Fade Value with Willpower + Logic; Physical if it exceeds Resonance.
@@ -100,12 +102,14 @@ Overflow heals first. Each method works once per set of injuries.
 - Submersion: 10 + new grade Karma; each grade raises the Resonance maximum and gives an echo.""",
     "Rigging and vehicles": """**Rigging and vehicles**
 - Vehicles and drones have Handling, Acceleration, Speed Interval, Top Speed, Body, Armor, Pilot and Sensor.
-- Control: at the controls Piloting + Reaction; by remote (commlink or RCC) Piloting + Logic; jumped in (control rig) Piloting + Intuition + the rig's rating, which also lowers every vehicle test's threshold by its rating.
-- A drone on its own rolls Pilot + the matching autosoft (Maneuvering, Targeting, Clearsight, Evasion, Stealth, Electronic Warfare).
-- Mounted weapons use Engineering (Gunnery): + Agility by hand, + Logic by remote or jumped in.
-- A vehicle's condition monitor is 8 + Body/2 (one track); every 3 boxes is −1 on its tests.
+- Control: at the controls Piloting + Reaction; jumped in (control rig) Piloting + Intuition + the rig's rating. Handling tests have the vehicle's Handling as threshold.
+- A drone on its own rolls its autosoft with Sensor (Clearsight, Electronic Warfare, Targeting) or Pilot (Maneuvering, Evasion, Stealth), and 4D6 initiative.
+- Speed: track it in meters per combat round; change it by at most the Acceleration each round. Distance this round = the speed at the start ± half the change. Every Speed Interval passed is −1 die (cumulative) on Handling tests and attacks from the vehicle. A crash does (speed / 10) damage to those inside.
+- Weapon mounts: Body / 3 (round down). A standard mount takes an assault rifle or smaller; a heavy mount (machine guns, sniper rifles, launchers) counts as two. Buy the mounts in the store and install them from your sheet.
+- Firing a mounted weapon: Engineering + Logic (jumped in or at a gunner's station). A drone firing on its own: Targeting autosoft + Sensor (Sensor − 1 without the autosoft).
+- A vehicle's condition monitor is 8 + Body/2 (one track); every 3 boxes of damage raise its Handling by 1.
 - Defense Rating: the driver's Piloting (a drone's Pilot) + Armor. Damage is resisted with Body. Stun with a DV up to the Body does nothing; stronger Stun counts as Physical.
-- Ramming uses the vehicle as a weapon: Piloting test, DV = its Body + net hits.
+- Ramming: Attack Rating Piloting + Sensor; DV = Body / 2 (round up) + 1 per current Speed Interval + net hits, Physical. A soft target does its Body / 4 back.
 - On the map: every vehicle and drone is an NPC template, and a runner's own vehicle can be placed as a marker that shares its damage with their sheet.""",
     "Toxins, drugs and diseases": """**Toxins, drugs and diseases**
 - Exposure: resist with Body + Willpower; each hit lowers the Power by 1. Whatever Power is left applies.
@@ -132,6 +136,22 @@ Overflow heals first. Each method works once per set of injuries.
 - Spell, ritual or complex form 5.
 - Initiation / submersion: 10 + the new grade.
 - Karma can be traded for nuyen at 2,000¥ each (5,000¥ with In Debt).""",
+    "Grappling": """**Grappling**
+- An unarmed Close Combat + Agility attack. On a hit, instead of damage: Strength + net hits vs the target's Strength. More hits and they're restrained.
+- Restrained: they can only try to break free (spells and complex forms still work), take −4 on Defense tests, and every attacker gains 1 Edge on them. An attack that misses them may hit the one holding them (who defends against the same roll).
+- The grappler, each as a Major Action with the unarmed Attack Rating: Restrain (Close Combat + Strength vs Close Combat + Strength, −4 for them; fail and they're free), Squeeze (vs Strength + Reaction, −4: Strength/2 + net hits Stun), Tackle (vs Body + Strength: they go Prone and take your Body + net hits Stun, resisted with Body).
+- The one held: Break free (Close Combat + Strength vs the grappler's, no −4).
+- In ShadowGrid: tick Grapple in the attack dialog; the follow-ups are in the combatant's menu on the initiative strip.""",
+    "Edge actions in combat": """**Edge actions in combat**
+They cost Edge, not actions, and count as your one Edge expenditure of the round.
+- Shank (1, melee blade): the called shot at −2 instead of −4.
+- Tumble (1, melee): damage above the target's Body knocks them Prone.
+- Tactical Roll (1, with Hit the Dirt): no Prone penalty on your melee attacks this round, and no −2 from Prone against Close or Near attacks until the end of the next round.
+- Knockout Blow (2, melee): damage above the target's Willpower fills their Stun track.
+- Fire from Cover (2, ranged, from Cover IV): no −2 for attacking from full cover.
+- Wrest (2, with a successful Block): Close Combat + Agility, threshold the attacker's Strength: equal, their weapon falls; more, you take it.
+- Anticipation (4, ranged Multiple Attacks): the full pool against every target.
+- Called shot: Vitals (5): +3 DV. Disarm (5): no damage, the weapon goes flying.""",
     "Lifestyles": "**Lifestyles**\nMonthly cost, charged by the GM at the start of each month:\n" + "\n".join(f"- {k}: {v:,}¥" for k, v in K.LIFESTYLES.items())
                   + "\n- SINner adds 10%; a suprathyroid gland adds 25%.\nNuyen can go negative: you're in debt.",
 }
@@ -149,7 +169,9 @@ ACTION_NOTES = {
     "Block": "Add Close Combat to one melee defense test.", "Dodge": "Add Athletics to one defense test.",
     "Full Defense": "Add Willpower to every defense test until your next combat round.",
     "Hit the Dirt": "+2 dice on the defense test, then you're Prone (-2 on active skills until you stand up).",
-    "Take Aim": "+1 die on your next attack; once per round, carries over while you keep aiming.",
+    "Take Aim": "+1 die on your next attack with a firearm, bow or other ranged weapon; once per round, up to your Willpower. It carries over to later rounds, and is lost on a turn where you neither aim nor attack.",
+    "Trip": "Melee, with the attack: −2 to the base DV; on a hit the target rolls Athletics + Agility with the DV as threshold, or goes Prone.",
+    "Counterspell": "Sorcery + Magic. Boosted defense: the hits add to the Defense of everyone protected against spells, for Magic rounds. Dispelling: against a sustained spell, vs Drain Value × 2; each net hit cancels one of the spell's hits.",
     "Call a Shot": "With an attack: -4 dice for +2 DV.", "Multiple Attacks": "Split your pool between several targets.",
     "Intercept": "Interrupt: a melee attack on an enemy moving through your reach. Counts as your Attack Major Action.",
     "Reload Weapon": "Reload a weapon (Major). Reload Smartgun does it as a Minor.",
@@ -232,9 +254,9 @@ def build():
     tree.append({"title": "Matrix", "children": [{"title": "Matrix actions", "children": mx_kids}, {"title": "IC", "children": ic_kids},
                                                   {"title": "Matrix Edge actions", "children": []}]})
     soft_kids = []
-    for name, d in RIG.AUTOSOFTS.items():
+    for name, (d, attr) in RIG.AUTOSOFTS.items():
         t = f"{name} (autosoft)"
-        topics[t] = f"**{name} autosoft**\nRating 1-{RIG.AUTOSOFT_RATING[1]}.\n- {d}"
+        topics[t] = f"**{name} autosoft**\nRating 1-{RIG.AUTOSOFT_RATING[1]}, rolled with the drone's {attr}.\n- {d}"
         soft_kids.append({"title": t, "children": []})
     tree.append({"title": "Rigging", "children": [{"title": "Autosofts", "children": soft_kids}]})
     # characters

@@ -174,21 +174,20 @@ def spirit_npc(kind, force):
 
 
 def ic_npc(kind, rating):
-    """IC for a host of this rating: Host Rating x 2 for its pools and Defense (errata), the host's Attack Rating."""
+    """IC for a host of this rating (p. 186): Host Rating x 2 for its attack rolls, Attack Rating and Condition
+    Monitor; (Data Processing x 2) + 3D6 Initiative. Its Defense Rating is the host's (rating x 2)."""
     r = max(1, min(12, _int(rating, 3)))
+    t = MX.IC_TYPES[kind]
     attrs = {a: r for a in K.PHYSICAL + K.MENTAL}
-    weapons = []
-    if kind in MX.IC_DAMAGING:
-        weapons.append({"name": f"{kind} attack", "skill": "Cracking", "dv": (r + 1) // 2, "type": "M", "element": "",
-                        "ar": [r * 2] * 5, "modes": [], "count": 1, "category": "IC", "matrix": True,
-                        "biofeedback": MX.IC_BIOFEEDBACK.get(kind), "pool": r * 2, "pool_label": "Host rating × 2"})
-    else:
-        weapons.append({"name": f"{kind} test", "skill": "Cracking", "dv": 0, "type": "M", "element": "", "ar": [r * 2] * 5,
-                        "modes": [], "count": 1, "category": "IC", "matrix": True, "pool": r * 2, "pool_label": "Host rating × 2"})
-    pm = 8 + (r + 1) // 2
+    weapons = [{"name": f"{kind} attack", "skill": "Cracking", "dv": r if t["damage"] else 0, "type": "M", "element": "",
+                "ar": [r * 2] * 5, "modes": [], "count": 1, "category": "IC", "matrix": True, "ic": kind,
+                "biofeedback": "sim" if t["damage"] in ("both", "bio") else None,
+                "pool": r * 2, "pool_label": "Host rating × 2"}]
+    pm = r * MX.IC_CM_PER_RATING
+    dfn = " + ".join(t["defense"]) if t["defense"] else "no test"
     return {"template": f"{kind} (host rating {r})", "kind": "IC", "pr": None, "attrs": attrs, "dr": r * 2, "init": r * 2,
-            "init_dice": 4, "grunt": False, "edge": 0, "skills": {"Cracking": r, "Electronics": r}, "specs": {}, "move": "—",
-            "weapons": weapons, "notes": f"{kind}: {MX.IC[kind]}\nInitiative: Host Rating x 2 + 4D6 (hot-sim speed).",
+            "init_dice": MX.IC_INIT_DICE, "grunt": False, "edge": 0, "skills": {"Cracking": r, "Electronics": r}, "specs": {}, "move": "—",
+            "weapons": weapons, "notes": f"{kind}: {t['effect']}\nThe target defends with {dfn}.\nInitiative: (Data Processing x 2) + 3D6.",
             "pm": pm, "sm": 0, "force": r, "matrix": {"rating": r}}
 
 
@@ -204,16 +203,19 @@ def vehicle_npc(v, name=None, link=None):
     attrs = {a: max(1, pilot) for a in K.PHYSICAL + K.MENTAL}
     attrs["Body"] = max(1, body)
     attrs["Strength"] = max(1, body)
-    ram = {"name": RIG.RAM["name"], "skill": "Piloting", "dv": body, "type": "P", "element": "",
-           "ar": [body + pilot, None, None, None, None], "modes": [], "count": 1, "category": "Ram"}
+    sensor = _int(v.get("sensor"))
+    ram = {"name": RIG.RAM["name"], "skill": "Piloting", "dv": (body + 1) // 2, "type": "P", "element": "",
+           "ar": [pilot + sensor, None, None, None, None], "modes": [], "count": 1, "category": "Ram",
+           "pool": pilot * 2, "pool_label": "Pilot + Maneuvering (set the dice for a driver's Piloting + Reaction)"}
     return {"template": name or v.get("name"), "kind": "Drone" if drone else "Vehicle", "pr": None, "attrs": attrs,
-            "dr": pilot + armor, "init": pilot * 2, "init_dice": 4 if drone else 1, "grunt": False, "edge": 0,
+            "dr": pilot + armor, "init": pilot * 2, "init_dice": RIG.DRONE_INIT_DICE if drone else 1, "grunt": False, "edge": 0,
             "skills": {"Piloting": pilot, "Perception": _int(v.get("sensor"))}, "specs": {},
             "move": f"Speed {v.get('speed_interval')}/{v.get('top_speed')} · Accel {v.get('accel')}",
             "weapons": [ram],
             "notes": (f"{v.get('sub', '')}. Handling {v.get('handling')}, Sensor {v.get('sensor')}, Seats {v.get('seats', '—')}.\n"
                       "Stun damage with a DV up to its Body does nothing; above that it counts as Physical. "
-                      "A rigger driving it uses their own Piloting for Defense Rating (Piloting + Armor): adjust DR if needed."),
+                      "Damage raises its Handling by 1 per 3 boxes. Ram: add +1 DV per current Speed Interval (Extra DV). "
+                      "A driver uses their own Piloting for Defense Rating (Piloting + Armor) and ramming (Piloting + Sensor)."),
             "pm": RIG.MONITOR_BASE + (body + 1) // 2, "sm": 0, "force": None,
             "matrix": {"rating": max(1, pilot)},
             "vehicle": {k: str(v.get(k, "")) for k in ("handling", "accel", "speed_interval", "top_speed", "body", "armor", "pilot", "sensor", "seats")},
@@ -270,7 +272,8 @@ def clean_npc(v):
                         "blast": str(w.get("blast") or "")[:8], "count": max(0, min(99, _int(w.get("count"), 1))),
                         "category": str(w.get("category") or "")[:30],
                         "matrix": bool(w.get("matrix")), "biofeedback": w.get("biofeedback") if w.get("biofeedback") in ("S", "P", "sim") else None,
-                        "pool": max(0, min(60, _int(w.get("pool")))) or None, "pool_label": str(w.get("pool_label") or "")[:40] or None})
+                        "pool": max(0, min(60, _int(w.get("pool")))) or None, "pool_label": str(w.get("pool_label") or "")[:40] or None,
+                        "mount": w.get("mount") if w.get("mount") in ("standard", "heavy") else None})
     skills = {}
     for k, r in (v.get("skills") or {}).items():
         if isinstance(k, str) and len(k) <= 40:
@@ -284,7 +287,7 @@ def clean_npc(v):
             "dr": max(0, min(60, _int(v.get("dr")))), "init": max(0, min(60, _int(v.get("init")))),
             "init_dice": max(1, min(5, _int(v.get("init_dice"), 1))), "grunt": bool(v.get("grunt")),
             "edge": max(0, min(10, _int(v.get("edge")))), "skills": skills, "specs": specs,
-            "move": str(v.get("move") or "")[:20], "weapons": weapons, "notes": str(v.get("notes") or "")[:4000],
+            "move": str(v.get("move") or "")[:48], "weapons": weapons, "notes": str(v.get("notes") or "")[:4000],
             "force": _int(v.get("force")) or None,
             "matrix": {"rating": max(0, min(12, _int((v.get("matrix") or {}).get("rating"))))} if isinstance(v.get("matrix"), dict) else None,
             "vehicle": _clean_vehicle(v.get("vehicle")),
@@ -294,8 +297,62 @@ def clean_npc(v):
 def _clean_vehicle(v):
     if not isinstance(v, dict):
         return None
-    keys = ("handling", "accel", "speed_interval", "top_speed", "body", "armor", "pilot", "sensor", "seats")
+    keys = ("handling", "accel", "speed_interval", "top_speed", "body", "armor", "pilot", "sensor", "seats", "speed")
     return {k: str(v.get(k) or "")[:12] for k in keys}
+
+
+# ---- vehicles in combat: speed and mounted weapons
+def marker_speed_penalty(npc, owner_item=None):
+    """Speed Interval dice penalty of a vehicle marker (a runner's own vehicle: from their sheet)."""
+    if owner_item is not None:
+        return R.speed_penalty(owner_item)
+    v = (npc or {}).get("vehicle") or {}
+    return R.speed_penalty({"speed": _int(v.get("speed")), "speed_interval": _int(v.get("speed_interval"))})
+
+
+def catalog_mount_weapon(e, sensor, autosoft_rating):
+    """A store weapon mounted on an NPC vehicle or drone: it fires with Sensor + Targeting autosoft
+    (Sensor − 1 without the autosoft), the weapon's own DV, Attack Rating and firing modes."""
+    dvs = str(e.get("dv") or "0P")
+    m = re.match(r"^(\d+)\s*([PS])?", dvs)
+    dv, typ = (int(m.group(1)), m.group(2) or "P") if m else (0, "P")
+    rating = max(0, _int(autosoft_rating))
+    pool = max(0, _int(sensor) + rating) if rating else max(0, _int(sensor) - 1)
+    label = f"Sensor + Targeting {rating}" if rating else "Sensor − 1 (no Targeting autosoft)"
+    return {"name": e["name"], "skill": e.get("skill") or "Firearms", "dv": dv, "type": typ,
+            "element": "Electricity" if "(e)" in dvs else "", "ar": CAT.parse_ar(e.get("ar")),
+            "modes": CAT.modes_list(e.get("modes")), "count": 1, "category": "Mounted " + (e.get("sub") or ""),
+            "pool": pool, "pool_label": label, "mount": "heavy" if e.get("sub") in RIG.HEAVY_MOUNT_WEAPONS else "standard"}
+
+
+def mount_profile(owner_c, wuid, mode, rng, gunner, gunner_c=None):
+    """A runner's weapon in a mount on their vehicle or drone. gunner=True: fired by a person (a jumped-in
+    rigger or someone at the controls): Engineering + Logic. Otherwise the drone fires it on its own:
+    [Weapon] Targeting autosoft + Sensor (Sensor − 1 without the autosoft). Speed Interval penalties apply."""
+    w = R.find_item(owner_c, wuid)
+    mnt, v = R.mount_vehicle(owner_c, w)
+    if not v:
+        raise R.RuleError(f"The {w['name']} isn't in a weapon mount.")
+    d = R.derive(owner_c)
+    p = R.weapon_profile(owner_c, d, dict(w, equipped=True), mode, rng)
+    if not p:
+        raise R.RuleError(f"The {w['name']} can't be fired from the mount.")
+    if gunner:
+        gc = gunner_c if gunner_c is not None else owner_c
+        sk, attr = RIG.GUNNERY["manual"]
+        parts = R._skill_parts(gc, R.derive(gc), sk, attr=attr) or [[attr, R.derive(gc)["attributes"][attr]], [f"{sk} (untrained)", -1]]
+        who = "gunner"
+    else:
+        rating, sensor = R.autosoft(owner_c, "Targeting"), _int(v.get("sensor"))
+        parts = [["Sensor", sensor], ["Targeting autosoft", rating]] if rating else [["Sensor", sensor], ["No Targeting autosoft", -1]]
+        who = "drone"
+    parts = [list(x) for x in parts]
+    pen = R.speed_penalty(v)
+    if pen:
+        parts.append([f"Speed {_int(v.get('speed'))} m/round", pen])
+    return {"name": f"{w['name']} ({v['name']} mount)", "parts": parts, "ar": p["ar"], "dv": p["dv"], "type": p["type"],
+            "element": p["element"], "mode": p["mode"], "uid": w["uid"], "melee": False, "mounted": who,
+            **_shot_kind(w["name"], p["skill"])}
 
 
 def npc_cm(npc):
@@ -446,15 +503,50 @@ class Fighter:
             raise R.RuleError(f"{self.name} has no Matrix presence (give it an IC or device template).")
         return [["Rating × 2", r * 2]]
 
+    def matrix_pool(self, names):
+        """Defense pool named by attributes, e.g. ["Intuition", "Firewall"] (IC defenses)."""
+        keys = {"Attack": "attack", "Sleaze": "sleaze", "Data Processing": "data_processing", "Firewall": "firewall",
+                "Device Rating": "device_rating"}
+        parts = []
+        for n in names:
+            if n in keys:
+                if self.char is not None:
+                    mx = self.d["matrix"]
+                    if not mx.get("device"):
+                        raise R.RuleError(f"{self.name} isn't on the Matrix (no active device).")
+                    parts.append([n, _int(mx.get(keys[n]))])
+                else:
+                    parts.append([n, self.matrix_rating()])
+            else:
+                parts.append([n, _int(self.attrs.get(n), 1)])
+        return parts
+
     def matrix_dr(self):
         if self.char is not None:
             return self.d["matrix"].get("dr", 0)
         return self.matrix_rating() * 2
 
-    def matrix_soak(self):
+    def astral_dr(self):
+        """Astral Defense Rating: Intuition (+ a spirit's Force as innate armor)."""
+        dr = _int(self.attrs.get(ACT.ASTRAL["dr"]), 1)
+        if self.npc and self.npc.get("kind") == "Spirit":
+            dr += _int(self.npc.get("force"))
+        return dr
+
+    def matrix_firewall(self):
         if self.char is not None:
-            return [["Firewall", self.d["matrix"].get("firewall", 0)]]
-        return [["Rating", self.matrix_rating()]]
+            return self.d["matrix"].get("firewall", 0)
+        return self.matrix_rating()
+
+    def matrix_soak(self):
+        """Matrix damage isn't resisted (core p. 179) unless the Biofeedback Filter program runs:
+        then roll Device Rating or Body, whichever is higher."""
+        if self.char is not None and R.program_running(self.d, "Biofeedback Filter"):
+            mx = self.d["matrix"]
+            body = _int(self.attrs.get("Body"), 1)
+            dr = _int(mx.get("device_rating"))
+            return [["Biofeedback Filter: Body", body]] if body >= dr else [["Biofeedback Filter: Device Rating", dr]]
+        return []
 
     def defense_pool(self):
         parts = [["Reaction", self.attrs.get("Reaction", 1)], ["Intuition", self.attrs.get("Intuition", 1)]]
@@ -554,7 +646,11 @@ def resolve_attack(att, weapon, target, opts):
     ``weapon``: {"name", "parts", "ar" (list), "dv", "type", "element", "mode", "direct", "spell", "melee", "astral"}
     ``opts``: range, attack_mod, defense_mod, soak_mod, wild, extra_dv, unopposed,
               defense (interrupt key), full_defense (bool, already active), cover (0-4), called (key),
-              split (number of targets sharing the pool), counterspell ([name, dice]), dirt (attacker penalty)
+              split (number of targets sharing the pool), counterspell ([name, hits] protecting the target),
+              dirt (attacker penalty), att_cover (attacker's Cover level), edge_action (key of ACT.EDGE_ACTIONS),
+              astral_type ("P"/"S", the attacker's choice in astral combat), aim (Take Aim dice), trip (bool),
+              grapple (bool: hold instead of damage), tactical_att / tactical_def (Tactical Roll on the attacker /
+              the target), attack_roll (reuse this attack roll: a missed attack on a restrained target hitting the grappler)
     """
     rng = opts.get("range") if opts.get("range") in G.RANGES else "Near"
     ri = G.RANGES.index(rng)
@@ -565,6 +661,8 @@ def resolve_attack(att, weapon, target, opts):
     melee = bool(weapon.get("melee"))
     ranged = not melee and not weapon.get("astral")
     called = ACT.CALLED_SHOTS.get(opts.get("called") or "")
+    eact = ACT.EDGE_ACTIONS.get(opts.get("edge_action") or "")
+    astral = bool(weapon.get("astral"))
 
     # ---- attack pool
     a_parts = [list(p) for p in weapon["parts"]]
@@ -573,6 +671,15 @@ def resolve_attack(att, weapon, target, opts):
     a_parts += sustain_parts(att, physical=any(p[0] in K.PHYSICAL for p in a_parts)) + status_parts(att, "attack", ranged)
     if opts.get("dirt"):
         a_parts.append(["Hit the Dirt", ACT.HIT_THE_DIRT_PENALTY])
+    physical_attack = not astral and not weapon.get("matrix") and not weapon.get("spell")
+    if att.status("Prone") and physical_attack and (melee or weapon.get("bow")) and not (melee and opts.get("tactical_att")):
+        a_parts.append(["Prone (melee or bow)", ACT.PRONE["melee_or_bow"]])
+    aim = _int(opts.get("aim"))
+    if aim and ranged and physical_attack:
+        a_parts.append(["Take Aim", aim])
+    att_cover = max(0, min(4, _int(opts.get("att_cover"))))
+    if att_cover == 4 and not (eact and opts.get("edge_action") == "fire_from_cover") and not astral and not weapon.get("matrix"):
+        a_parts.append(["Attacking from Cover IV", ACT.COVER_ATTACK["full_cover_dice"]])
     if called:
         a_parts.append([called["name"], called["dice"]])
     if _int(opts.get("attack_mod")):
@@ -581,27 +688,39 @@ def resolve_attack(att, weapon, target, opts):
     if split > 1:
         whole = _total(a_parts)
         a_parts.append([f"Split among {split} targets", (whole // split) - whole])
-    a_roll = DICE.new_roll(max(1, _total(a_parts)), wild=bool(opts.get("wild")))
+    a_roll = opts.get("attack_roll") or DICE.new_roll(max(1, _total(a_parts)), wild=bool(opts.get("wild")) or bool(weapon.get("wild")))
     if ar is not None:
         for name, v in status_parts(att, "ar", ranged):
             ar = max(0, ar + v)
+        if att.status("Prone") and physical_attack and weapon.get("firearm") and not weapon.get("bow"):
+            ar += ACT.PRONE["firearm_ar"]
 
     # ---- Defense Rating (cover, statuses; the Matrix has neither)
     matrix = bool(weapon.get("matrix"))
     cover = 0 if matrix else max(0, min(4, _int(opts.get("cover"))))
-    dr = target.matrix_dr() if matrix else target.dr + cover + sum(v for _, v in status_parts(target, "dr"))
+    if matrix:
+        dr = target.matrix_dr() + (MX.EXPLOIT_DR if weapon.get("exploit") else 0)   # Exploit: −2 to the target's DR
+    elif astral:
+        dr = target.astral_dr()
+    else:
+        dr = target.dr + cover + sum(v for _, v in status_parts(target, "dr"))
     out = {"attacker": att.name, "target": target.name, "weapon": weapon["name"], "range": rng,
            "mode": weapon.get("mode"), "ar": ar, "dr": dr, "cover": cover, "melee": melee,
            "called": called["name"] if called else None, "split": split,
            "attack": {"parts": a_parts, "dice": a_roll["dice"], "hits": a_roll["hits"], "glitch": a_roll["glitch"],
                       "critical": a_roll["critical"]}}
-    if ar is not None and not weapon.get("astral"):
-        diff = ar - dr
+    if ar is not None:
+        diff = ar - _int(opts.get("edge_dr"), dr)      # several targets: compare with the highest Defense Rating
         out["edge_hint"] = ("attacker" if diff >= ACT.EDGE_HINT_MARGIN else "defender" if diff <= -ACT.EDGE_HINT_MARGIN else None)
+        if out["edge_hint"] == "attacker" and att_cover:
+            out["edge_hint"] = None                     # no Edge for attacking from Cover
 
     # ---- defense pool
     A = target.attrs
-    if matrix:
+    ic = MX.IC_TYPES.get(weapon.get("ic") or "")
+    if matrix and ic:
+        d_parts = target.matrix_pool(ic["defense"]) if ic["defense"] else []
+    elif matrix:
         d_parts = target.matrix_defense()
     elif weapon.get("astral"):
         d_parts = [[x, _int(A.get(x), 1)] for x in ACT.ASTRAL["defense"]]
@@ -618,10 +737,13 @@ def resolve_attack(att, weapon, target, opts):
     d_parts += sustain_parts(target, physical=any(p[0] in K.PHYSICAL for p in d_parts)) + status_parts(target, "defense", ranged)
     if target.status("Prone") and not matrix and not weapon.get("astral") and not (weapon.get("spell") and weapon.get("direct")):
         far = ranged and rng in ACT.PRONE["far_ranges"]
-        d_parts.append(["Prone", ACT.PRONE["defense_far"] if far else ACT.PRONE["defense_near"]])
+        if far:
+            d_parts.append(["Prone", ACT.PRONE["defense_far"]])
+        elif not opts.get("tactical_def"):
+            d_parts.append(["Prone", ACT.PRONE["defense_near"]])
     if cover:
         d_parts.append([f"Cover {'I II III IV'.split()[cover - 1]}", cover])
-    fd_label, fd_dice = ("Full Matrix Defense (Firewall)", target.matrix_soak()[0][1]) if matrix else ("Full Defense (Willpower)", _int(A.get("Willpower"), 1))
+    fd_label, fd_dice = ("Full Matrix Defense (Firewall)", target.matrix_firewall()) if matrix else ("Full Defense (Willpower)", _int(A.get("Willpower"), 1))
     if opts.get("full_defense"):
         d_parts.append([fd_label, fd_dice])
     dkey = opts.get("defense")
@@ -631,10 +753,13 @@ def resolve_attack(att, weapon, target, opts):
         d_parts.append([fd_label, fd_dice])
     if opts.get("counterspell") and weapon.get("spell"):
         name, dice = opts["counterspell"]
-        d_parts.append([f"Counterspelling ({name})", _int(dice)])
+        d_parts.append([f"Counterspell ({name})", _int(dice)])
     if _int(opts.get("defense_mod")):
         d_parts.append(["Modifier", _int(opts["defense_mod"])])
     unopposed = bool(opts.get("unopposed"))
+    if target.status("Stilled"):
+        unopposed = True                                # Stilled: no Defense tests at all
+        d_parts = [["Stilled: can't defend", 0]]
     d_hits, d_roll = 0, None
     if not unopposed:
         d_roll = DICE.new_roll(max(1, _total(d_parts))) if _total(d_parts) > 0 else {"hits": 0, "dice": [], "glitch": False, "critical": False}
@@ -651,9 +776,34 @@ def resolve_attack(att, weapon, target, opts):
         out["summary"] = f"{att.name} misses {target.name} ({a_roll['hits']} vs {d_hits} hits)."
         return out
 
+    if ic and not ic["damage"]:
+        out["damage"] = 0
+        out["effects"] = []
+        out["ic"] = {"kind": weapon["ic"], "reduce": ic.get("reduce"), "by": max(1, net), "linklock": bool(ic.get("linklock"))}
+        what = (f"{ic['reduce'].replace('_', ' ').title()} −{max(1, net)}" if ic.get("reduce") else ic["effect"])
+        out["summary"] = f"{weapon['ic']} hits {target.name}: {what}"
+        return out
+
+    # ---- grapple: Strength + net hits vs the target's Strength instead of damage
+    if opts.get("grapple"):
+        g_att = [["Strength", _int(att.attrs.get("Strength"), 1)], ["Net hits", max(0, net)]]
+        g_def = [["Strength", _int(target.attrs.get("Strength"), 1)]]
+        ga, gd = DICE.new_roll(max(1, _total(g_att))), DICE.new_roll(max(1, _total(g_def)))
+        held = ga["hits"] > gd["hits"]
+        out.update({"damage": 0, "effects": [["Restrained", None]] if held else [],
+                    "grapple": {"held": held, "attack": {"parts": g_att, "dice": ga["dice"], "hits": ga["hits"]},
+                                "defense": {"parts": g_def, "dice": gd["dice"], "hits": gd["hits"]}},
+                    "summary": f"{att.name} grabs {target.name}: Strength {ga['hits']} vs {gd['hits']} hits → "
+                               + (f"{target.name} is restrained." if held else f"{target.name} slips free.")})
+        return out
+
     # ---- damage and soak
     dtype = weapon.get("type") or "P"
+    if astral and opts.get("astral_type") in ("P", "S"):
+        dtype = opts["astral_type"]
     extra = _int(opts.get("extra_dv")) + (called["dv"] if called else 0)
+    if opts.get("trip"):
+        extra += max(ACT.TRIP["dv"], -_int(weapon.get("dv")))     # −2 to the base DV, not below 0
     soak_parts = []
     if weapon.get("spell") and weapon.get("direct"):
         dv = max(0, net) + _int(weapon.get("dv")) + extra
@@ -674,36 +824,67 @@ def resolve_attack(att, weapon, target, opts):
         s_hits = s_roll["hits"]
         out["soak"] = {"parts": soak_parts, "dice": s_roll["dice"], "hits": s_hits}
     dmg = max(0, dv - s_hits)
+    if called and called.get("no_damage"):
+        dmg = 0                                         # Disarm: the weapon goes flying, nobody is hurt
     out["dv"] = dv
     out["type"] = dtype
     out["damage"] = dmg
     out["track"] = "matrix" if matrix else "stun" if dtype == "S" else "physical"
+    if ic:
+        out["ic"] = {"kind": weapon["ic"], "damage": ic["damage"], "linklock": bool(ic.get("linklock"))}
     effects = []
     if dmg and weapon.get("element") in ELEMENT_STATUS:
         effects.append(ELEMENT_STATUS[weapon["element"]])
-    if dmg > target.attrs.get("Body", 1) and not weapon.get("astral") and not matrix:
+    if dmg > target.attrs.get("Body", 1) and not astral and not matrix:
         effects.append(("Prone", None))
+    elif eact and opts.get("edge_action") == "tumble" and dv > target.attrs.get("Body", 1):
+        effects.append(("Prone", None))
+    if eact and opts.get("edge_action") == "knockout" and dmg > _int(target.attrs.get("Willpower"), 1):
+        out["knockout"] = True
+    if opts.get("trip") and not any(e[0] == "Prone" for e in effects):
+        sk, attr = ACT.TRIP["test"]
+        t_parts = [[sk, target.rank(sk)], [attr, _int(target.attrs.get(attr), 1)]]
+        t_roll = DICE.new_roll(max(1, _total(t_parts)))
+        stays = t_roll["hits"] >= dv
+        out["trip"] = {"parts": t_parts, "dice": t_roll["dice"], "hits": t_roll["hits"], "threshold": dv, "prone": not stays}
+        if not stays:
+            effects.append(("Prone", None))
     out["effects"] = [[e[0], e[1]] for e in effects]
     out["disarmed"] = bool(called and called.get("disarm"))
     word = "Matrix damage" if matrix else "Physical" if dtype == "P" else "Stun"
     out["summary"] = (f"{att.name} hits {target.name} with {weapon['name']}: DV {dv}{dtype}"
                       + (f", soaked {s_hits}" if soak_parts else "") + f" → {dmg} {word}"
                       + (f" ({', '.join(e[0] for e in effects)})" if effects else "")
-                      + (f"; {target.name} drops their weapon" if out["disarmed"] else "") + ".")
+                      + ("; knocked out" if out.get("knockout") else "")
+                      + (f"; {target.name} drops their weapon" if out["disarmed"] else "")
+                      + (f"; trip: {out['trip']['hits']} hits vs {dv} → " + ("Prone" if out["trip"]["prone"] else "keeps their feet") if out.get("trip") else "") + ".")
     return out
 
 
+def tradition_attr(f):
+    """Logic for hermetic magicians, Charisma for shamans (and NPCs, spirits)."""
+    if f.char is not None:
+        return M.TRADITIONS.get(f.char.get("tradition") or "") or "Charisma"
+    return "Charisma"
+
+
 def astral_profile(f):
-    """Astral combat attack for a runner or an NPC (dual-natured critters, spirits, projecting magicians)."""
+    """Astral combat for a runner or an NPC (dual-natured critters, spirits, projecting magicians):
+    Astral + Willpower, Attack Rating Magic + tradition attribute, DV tradition attribute / 2."""
     skill, attr = ACT.ASTRAL["attack"]
     rank = f.rank(skill)
     parts = [[attr, _int(f.attrs.get(attr), 1)], [skill, rank] if rank else [f"{skill} (untrained)", -1]]
-    dv_base = _int(f.attrs.get(ACT.ASTRAL["dv_attr"]), 1)
+    trad = tradition_attr(f)
+    magic = _int(f.attrs.get("Magic"))
     if f.npc and f.npc.get("kind") == "Spirit":
-        dv_base = _int(f.npc.get("force"), dv_base)
+        magic = _int(f.npc.get("force"), magic)
+    dv_base = _int(f.attrs.get(trad), 1)
+    if f.npc and f.npc.get("kind") == "Spirit":
+        dv_base = max(dv_base, _int(f.npc.get("force"), dv_base))
     dv = (dv_base + 1) // 2 if ACT.ASTRAL["dv_half"] else dv_base
-    return {"name": "Astral combat", "parts": parts, "ar": [None] * 5, "dv": dv, "type": ACT.ASTRAL["type"],
-            "element": "", "mode": None, "astral": True, "melee": True}
+    ar = magic + _int(f.attrs.get(trad), 1)
+    return {"name": "Astral combat", "parts": parts, "ar": [ar] * 5, "dv": dv, "type": ACT.ASTRAL["type"],
+            "element": "", "mode": None, "astral": True, "melee": True, "tradition": trad}
 
 
 def npc_weapon_profile(f, w, mode=None):
@@ -719,7 +900,7 @@ def npc_weapon_profile(f, w, mode=None):
     return {"name": w.get("name") or "Attack", "parts": parts, "ar": ar, "dv": dv,
             "type": w.get("type") or "P", "element": w.get("element") or "", "mode": mode,
             "matrix": bool(w.get("matrix")), "biofeedback": w.get("biofeedback"),
-            "melee": (w.get("skill") or "Close Combat") == "Close Combat"}
+            "melee": (w.get("skill") or "Close Combat") == "Close Combat", **_shot_kind(w.get("name"), w.get("skill"))}
 
 
 def char_weapon_profile(f, key, mode, rng, amp=0):
@@ -739,16 +920,20 @@ def char_weapon_profile(f, key, mode, rng, amp=0):
         if not mx.get("device"):
             raise R.RuleError(f"{f.name} has no active Matrix device.")
         pool = R.pool_by_key(c, key, d)
-        dv = (mx["attack"] + 1) // 2 if act == "data_spike" else 1
+        dv = (mx["ar"] + 1) // 2 if act == "data_spike" else 1          # Data Spike: Attack Rating / 2, rounded up
+        bio = "sim" if R.program_running(d, "Biofeedback") else ("S" if R.program_running(d, "Blackout") else None)
         return {"name": MX.MATRIX_ACTIONS[act]["name"], "parts": [list(p) for p in pool["parts"]], "ar": [mx["ar"]] * 5, "dv": dv,
-                "type": "M", "element": "", "mode": None, "matrix": True, "illegal": True, "tarpit": act == "tarpit"}
+                "type": "M", "element": "", "mode": None, "matrix": True, "illegal": True, "tarpit": act == "tarpit",
+                "biofeedback": bio, "wild": R.program_running(d, "Overclock"), "exploit": R.program_running(d, "Exploit"),
+                "fork": R.program_running(d, "Fork"), "lockdown": R.program_running(d, "Lockdown")}
     if key.startswith("weapon:"):
         it = R.find_item(c, key[7:])
         p = R.weapon_profile(c, d, it, mode, rng)
         if not p:
             raise R.RuleError(f"{f.name} can't use the {it['name']} (untrained exotic weapon).")
         return {"name": it["name"], "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
-                "element": p["element"], "mode": p["mode"], "uid": it["uid"], "melee": p["skill"] == "Close Combat"}
+                "element": p["element"], "mode": p["mode"], "uid": it["uid"], "melee": p["skill"] == "Close Combat",
+                **_shot_kind(it["name"], p["skill"])}
     if key.startswith("natural:"):
         nws = d.get("natural_weapons") or []
         i = _int(key[8:], -1)
@@ -771,6 +956,21 @@ def char_weapon_profile(f, key, mode, rng, amp=0):
         return {"name": sp["name"], "parts": p["parts"], "ar": p["ar"], "dv": p["dv"], "type": p["type"],
                 "element": p["element"], "mode": None, "spell": sp, "direct": p["direct"], "drain": p["drain"]}
     raise R.RuleError("Pick a weapon.")
+
+
+def add_status(st, name, val=True):
+    """Set a status, applying cancellations: Wet or Chilled put out Burning, Burning dries Wet and Chilled."""
+    for other in ACT.STATUS_CANCELS.get(name, ()):
+        st.pop(other, None)
+    st[name] = val if val else True
+    return st
+
+
+def _shot_kind(name, skill):
+    """Bows and firearms matter for Prone attackers (bows −4, firearms +2 Attack Rating)."""
+    n = (name or "").lower()
+    bow = "bow" in n and "crossbow" not in n
+    return {"bow": bow, "firearm": not bow and skill in ("Firearms", "Exotic Weapons")}
 
 
 def initiative_roll(score, dice):

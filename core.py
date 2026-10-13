@@ -25,6 +25,8 @@ for _d in (os.path.dirname(DB_PATH) or ".", UPLOAD_DIR, BACKUP_DIR):
     os.makedirs(_d, mode=0o700, exist_ok=True)
 HTTPS = os.environ.get("SHADOWGRID_HTTPS") == "1"
 INVITE_DAYS = 7
+SESSION_HOURS = max(4.0, float(os.environ.get("SHADOWGRID_SESSION_HOURS", "12")))
+SESSION_MAX_HOURS = max(SESSION_HOURS, float(os.environ.get("SHADOWGRID_SESSION_MAX_HOURS", "24")))
 
 app = Flask(__name__)
 app.config.update(
@@ -33,10 +35,19 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=HTTPS,
     SESSION_COOKIE_NAME="sg_session",
-    PERMANENT_SESSION_LIFETIME=timedelta(days=14),
+    # a sign-in lasts SESSION_HOURS after the last request (open pages keep it alive), and never longer than
+    # SESSION_MAX_HOURS after signing in; then the gate and the sign-in page come back
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=SESSION_HOURS),
     JSON_SORT_KEYS=False,
 )
 app.json.sort_keys = False
+
+
+@app.before_request
+def _session_age_limit():
+    t0 = session.get("t0")
+    if t0 and time.time() - t0 > SESSION_MAX_HOURS * 3600:
+        session.clear()
 app.json.compact = True
 app.after_request(apply_security_headers)
 
@@ -208,6 +219,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
   title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', started_at REAL NOT NULL, ended_at REAL,
   recap TEXT, shared INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS music (
+  id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, status TEXT NOT NULL, error TEXT, src_ext TEXT, src_size INTEGER, duration REAL,
+  opus_size INTEGER, aac_size INTEGER, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS music_state (
+  campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
+  track_id TEXT NOT NULL REFERENCES music(id) ON DELETE CASCADE,
+  started_at REAL NOT NULL, loop INTEGER NOT NULL DEFAULT 1, updated_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_music_campaign ON music(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_rolls_campaign ON rolls(campaign_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_handouts_campaign ON handouts(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_campaign ON sessions(campaign_id, started_at);

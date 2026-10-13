@@ -595,6 +595,11 @@ def gamemaster_update_marker(map_id):
         d = b["damage"] if isinstance(b["damage"], dict) else {}
         if d.get("track") in ("physical", "stun"):
             cm_damage(mk["cm"], d["track"], clamp_int(d.get("amount"), -99, 99, 0))
+    if ("vehicleSpeed" in b or "mount" in b or "unmount" in b) and (mk.get("npc") or {}).get("kind") in ("Vehicle", "Drone"):
+        problem = vehicle_marker_update(m, mk, b)
+        if problem:
+            get_db().rollback()
+            return err(problem)
     if (mk.get("npc") or {}).get("link") and ("damage" in b or "cm" in b):
         cache = {}
         fight.sync_vehicle(get_db(), mk, cache)
@@ -603,6 +608,54 @@ def gamemaster_update_marker(map_id):
     save_map_data(map_id, m["data"])
     get_db().commit()
     return jsonify({"marker": mk, "version": campaign_version(m["campaignId"], map_id)})
+
+
+def vehicle_marker_update(m, mk, b):
+    """Speed and weapon mounts of a vehicle or drone marker. A runner's own vehicle keeps its speed and mounts on
+    their sheet; an NPC vehicle keeps them on the marker. Returns an error text or None."""
+    npc = mk["npc"]
+    link = npc.get("link") or {}
+    if link.get("pid"):
+        if "mount" in b or "unmount" in b:
+            return "Mount weapons on a runner's own vehicle from their character sheet."
+        row = get_db().execute("SELECT * FROM players WHERE id=?", (link["pid"],)).fetchone()
+        if not row:
+            return "The vehicle's owner is gone."
+        c = load_char(row)
+        try:
+            R.a_vehicle_speed(c, {"uid": link.get("uid"), **(b["vehicleSpeed"] if isinstance(b.get("vehicleSpeed"), dict) else {})},
+                              R.Ctx(True, True))
+        except R.RuleError as e:
+            return str(e)
+        save_char(row["id"], c)
+        return None
+    veh = npc.setdefault("vehicle", {})
+    if isinstance(b.get("vehicleSpeed"), dict):
+        vs = b["vehicleSpeed"]
+        old, top = R._int(veh.get("speed")), R._int(veh.get("top_speed")) or 999
+        new = R._int(vs["set"]) if "set" in vs else old + R._int(vs.get("change"))
+        veh["speed"] = str(max(0, min(top, new)))
+    if isinstance(b.get("mount"), dict):
+        from sr import catalog as CAT
+        from sr import rigging6e as RIG
+        e = CAT.BY_ID.get(str(b["mount"].get("ref") or ""))
+        if not e or e.get("cat") != "Ranged" or (e.get("sub") or "") not in RIG.STANDARD_MOUNT_WEAPONS | RIG.HEAVY_MOUNT_WEAPONS:
+            return "Pick a firearm, launcher or other ranged weapon that fits a weapon mount."
+        w = X.catalog_mount_weapon(e, R._int(veh.get("sensor")), clamp_int(b["mount"].get("autosoft"), 0, 9, 0))
+        room = R._int(veh.get("body")) // RIG.MOUNT_BODY_DIVISOR
+        used = sum(RIG.MOUNTS["vehicles-heavy-weapon-mount" if x.get("mount") == "heavy" else "vehicles-standard-weapon-mount"]["slots"]
+                   for x in npc.get("weapons") or [] if x.get("mount"))
+        need = 2 if w["mount"] == "heavy" else 1
+        if used + need > room:
+            return f"Room for {room} weapon mount{'s' if room != 1 else ''} (Body / 3), {used} used; the {e['name']} needs a {w['mount']} mount ({need})."
+        npc.setdefault("weapons", []).append(w)
+    if "unmount" in b:
+        i = clamp_int(b["unmount"], -1, len(npc.get("weapons") or []) - 1, -1)
+        if i < 0 or not npc["weapons"][i].get("mount"):
+            return "That weapon isn't in a mount."
+        npc["weapons"].pop(i)
+    mk["npc"] = X.clean_npc(npc)
+    return None
 
 
 @app.route("/api/maps/<map_id>/return-link", methods=["POST"])

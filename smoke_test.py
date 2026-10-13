@@ -11,6 +11,8 @@ os.environ["SHADOWGRID_DATA"] = tmp
 os.environ["SHADOWGRID_DB"] = os.path.join(tmp, "test.db")
 os.environ["SHADOWGRID_GAMEMASTER_PASSWORD"] = "gm-password-123"
 os.environ["SHADOWGRID_LOGIN_POW_BITS"] = "6"
+os.environ["SHADOWGRID_GATE_BITS"] = "8"
+os.environ["SHADOWGRID_GATE_PUZZLES"] = "4"
 
 import app as appmod  # noqa: E402
 from security import leading_zero_bits  # noqa: E402
@@ -27,8 +29,29 @@ def check(cond, msg):
         FAILS.append(msg)
 
 
+def gate_counters(ch):
+    out = []
+    for i in range(ch["puzzles"]):
+        n = 0
+        while leading_zero_bits(hashlib.sha256(f"{ch['challenge']}:{i}:{n}".encode()).digest()) < ch["bits"]:
+            n += 1
+        out.append(n)
+    return out
+
+
+def gate_solve(cl):
+    import security
+    security._buckets.clear()
+    ch = cl.get("/api/gate/challenge").get_json()
+    return cl.post("/api/gate", json={"challenge": ch["challenge"], "counters": gate_counters(ch)}, headers=H)
+
+
 def pow_solve(cl):
-    ch = cl.get("/api/login/challenge").get_json()
+    r = cl.get("/api/login/challenge")
+    if r.status_code == 403:
+        gate_solve(cl)
+        r = cl.get("/api/login/challenge")
+    ch = r.get_json()
     n = 0
     while leading_zero_bits(hashlib.sha256(f"{ch['challenge']}:{n}".encode()).digest()) < ch["bits"]:
         n += 1
@@ -59,6 +82,37 @@ def register(token, user):
     return cl, r
 
 
+print("Gate")
+import security  # noqa: E402
+gt = A.test_client()
+r = gt.get("/login")
+check(r.status_code == 302 and r.headers["Location"].startswith("/gate?next=/login"), "the sign-in page sends a new browser to the gate")
+check(gt.get("/api/login/challenge").status_code == 403 and j(gt.post("/api/login", json={}, headers=H))["gate"], "sign-in API refused without the gate")
+check(gt.get("/gate").status_code == 200, "gate page opens")
+ch = j(gt.get("/api/gate/challenge"))
+check(ch["bits"] == 8 and ch["puzzles"] == 4, "gate difficulty from the environment")
+cs = gate_counters(ch)
+check(gt.post("/api/gate", json={"challenge": ch["challenge"], "counters": cs[:-1] + ["x"]}, headers=H).status_code == 400, "a wrong answer fails")
+check(gt.post("/api/gate", json={"challenge": ch["challenge"], "counters": cs}, headers=H).status_code == 400, "a challenge is single use")
+security._buckets.clear()
+ch = j(gt.get("/api/gate/challenge")); cs = gate_counters(ch)
+r = gt.post("/api/gate", json={"challenge": ch["challenge"], "counters": cs, "next": "//evil.com"}, headers=H)
+check(r.status_code == 200 and j(r)["next"] == "/login", "the gate opens and refuses foreign redirects")
+check(gt.get("/login").status_code == 200 and gt.get("/gate").status_code == 302, "after the gate the sign-in page opens")
+for _ in range(security.GATE_MAX_FAILS):
+    login(gt, "gamemaster", "wrong")
+check(gt.get("/login").status_code == 302, "too many wrong passwords close the gate again")
+gate_solve(gt)
+check(login(gt, "gamemaster", "gm-password-123").status_code == 200 and gt.get("/").status_code == 200, "GM signs in after the gate")
+check(gt.get("/gate").status_code == 302, "signed in: no gate")
+gt.post("/logout", headers=H)
+check(gt.get("/login").status_code == 302, "signing out needs the gate again")
+gate_solve(gt); login(gt, "gamemaster", "gm-password-123")
+with gt.session_transaction() as sess:
+    sess["t0"] -= 25 * 3600
+check(gt.get("/").status_code == 302, "a sign-in older than SESSION_MAX_HOURS ends")
+check(A.permanent_session_lifetime.total_seconds() == 12 * 3600, "sessions last 12 idle hours by default")
+
 gm = A.test_client()
 print("GM")
 check(login(gm, "gamemaster", "nope").status_code == 401, "wrong GM password rejected")
@@ -77,7 +131,9 @@ check("/invite/" in inv["url"], "invite link created")
 
 print("Invite")
 pl = A.test_client()
-check(pl.get(f"/invite/{inv['token']}").status_code == 200, "invite page opens")
+check(pl.get(f"/invite/{inv['token']}").status_code == 302, "the invite page sends a new browser to the gate")
+gate_solve(pl)
+check(pl.get(f"/invite/{inv['token']}").status_code == 200, "invite page opens after the gate")
 ch, n = pow_solve(pl)
 r = pl.post(f"/api/invite/{inv['token']}", json={"username": "gamemaster", "password": "longenough", "challenge": ch, "counter": n}, headers=H)
 check(r.status_code == 400, "reserved username refused")
@@ -547,10 +603,10 @@ dact(action="set_skill", skill="Cracking", rank=6)
 dact(action="set_skill", skill="Electronics", rank=5)
 r = dact(action="buy", ref="cyberdecks-software-erika-mcd-6")
 dsh = j(r)
-check(any(p_["key"] == "matrix:hack_on_the_fly" for p_ in dsh["pools"]), "a deck gives Matrix action pools")
+check(any(p_["key"] == "matrix:brute_force" for p_ in dsh["pools"]), "a deck gives Matrix action pools")
 deck = item(dsh, "Erika MCD-6")
 dact(action="set_matrix", device=deck["uid"], mode="VR (hot sim)")
-r = dk.post("/api/me/roll", json={"key": "matrix:hack_on_the_fly", "targetRating": 5}, headers=H)
+r = dk.post("/api/me/roll", json={"key": "matrix:brute_force", "targetRating": 5}, headers=H)
 res = next(x for x in j(r)["rolls"] if x["id"] == j(r)["rollId"])["data"]
 check(r.status_code == 200 and res["defense"]["pool"] == 10, "an illegal action rolls the target's rating × 2 in defense")
 gsh = j(gm.get(f"/api/players/{dkid}/sheet"))
@@ -567,7 +623,7 @@ gm.post(f"/api/players/{dkid}/sheet/action", json={"action": "set_matrix", "mode
 gm.post(f"/api/players/{dkid}/place", json={"mapId": arena, "c": 2, "r": 0}, headers=H)
 j(gm.post(f"/api/maps/{arena}/marker", json={"id": "d0", "template": "ic:Killer", "force": 4}, headers=H))
 ic = next(m for m in j(gm.get(f"/api/maps/{arena}"))["data"]["markers"] if m["id"] == "d0")
-check(ic["npc"]["kind"] == "IC" and ic["npc"]["matrix"]["rating"] == 4 and ic["cm"]["pm"] == 10, "IC templates by host rating")
+check(ic["npc"]["kind"] == "IC" and ic["npc"]["matrix"]["rating"] == 4 and ic["cm"]["pm"] == 8, "IC templates by host rating (monitor = rating x 2)")
 DK = {"kind": "player", "id": dkid}
 opts = j(gm.post(f"/api/maps/{arena}/attack-options", json={"who": DK}, headers=H))["options"]
 check(any(o["key"] == "matrix:data_spike" for o in opts), "Data Spike is an attack option for the decker")
@@ -595,7 +651,8 @@ for ref_ in ("drones-gm-nissan-doberman", "cyberdecks-software-scratch-built-jun
 rsh = j(ract(action="buy", ref="cyberware-control-rig", rating=2))
 dob = item(rsh, "GM-Nissan Doberman")
 keys = {p_["key"] for p_ in rsh["pools"]}
-check(f"vehicle:{dob['uid']}:manual" in keys and f"vehicle:{dob['uid']}:remote" in keys, "piloting pools at the controls and by remote")
+check(f"vehicle:{dob['uid']}:manual" in keys and f"vehicle:{dob['uid']}:remote" not in keys and f"drone:{dob['uid']}:Targeting" in keys,
+      "piloting pools at the controls, and the drone's own Targeting pool")
 jp = next(p_ for p_ in rsh["pools"] if p_["key"] == f"vehicle:{dob['uid']}:jumped")
 check(any(x[0] == "Control rig 2" and x[1] == 2 for x in jp["parts"]), "jumped in: the control rig adds its rating")
 soft = item(j(ract(action="buy", ref="cyberdecks-software-autosoft", rating=4)), "Autosoft")
@@ -775,10 +832,285 @@ check(r.headers.get("Content-Encoding") == "gzip" and r.headers.get("ETag"), "th
 check(pl.get("/api/catalog", headers={"If-None-Match": r.headers["ETag"]}).status_code == 304, "and is not sent again when unchanged")
 r = pl.get("/api/me/sheet", headers={"Accept-Encoding": "gzip"})
 check(r.headers.get("Content-Encoding") == "gzip", "API answers are compressed")
-page = pl.get("/play").data.decode()
+shell = pl.get("/play")
+check(b"data-shell" in shell.data and b'id="app"' in shell.data and "Sec-Fetch-Dest" in shell.headers.get("Vary", ""),
+      "a top-level visit gets the persistent frame that keeps the music playing")
+check(b"play.js" in pl.get("/play", headers={"Sec-Fetch-Dest": "iframe"}).data, "the frame loads the screen itself")
+check(pl.get("/play").headers["X-Frame-Options"] == "SAMEORIGIN" and "frame-ancestors 'self'" in pl.get("/play").headers["Content-Security-Policy"],
+      "only the app itself may frame its pages")
+page = pl.get("/play?embed=1").data.decode()
 check("/static/play.js?v=" in page and 'name="sg-catalog"' in page, "pages link versioned scripts")
 r = pl.get(page.split('src="')[1].split('"')[0] if 'src="/static/' in page else "/static/api.js?v=x")
 check("immutable" in r.headers.get("Cache-Control", ""), "versioned scripts are cached for good")
+
+print("Combat options: Take Aim, Trip, Wrest, Tactical Roll, grappling, dispelling")
+security._buckets.clear()
+gun = f"weapon:{pred['uid']}"
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+for m_ in ("g1", "g2"):
+    gm.post(f"/api/maps/{arena}/marker", json={"id": m_, "template": "t:6", "relabel": False}, headers=H)
+    gm.post(f"/api/maps/{arena}/marker", json={"id": m_, "statuses": {}}, headers=H)
+for st_ in list(j(pl.get("/api/me/state"))["me"]["statuses"]):
+    gm.post(f"/api/maps/{arena}/status", json={"target": P, "status": st_, "on": False}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_ammo", "uid": pred["uid"], "rounds": 15}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_damage", "physical": 0, "stun": 0}, headers=H)
+gm.post(f"/api/players/{pid}/place", json={"mapId": arena, "c": 3, "r": 1}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "start", "players": [pid, mpid], "mapId": arena, "markers": ["g1", "g2"], "roll": True}, headers=H)
+cop = lambda **kw: gm.post(f"/api/games/{cid}/combat", json=kw, headers=H)  # noqa: E731
+r = cop(op="aim", id=entry(pid)["id"])
+check(r.status_code == 200 and entry(pid)["aim"] == 1, "Take Aim: +1 die, a Minor Action")
+check(cop(op="aim", id=entry(pid)["id"]).status_code == 400, "only once per round")
+cop(op="round")
+cop(op="aim", id=entry(pid)["id"])
+check(entry(pid)["aim"] == 2, "the aim builds up over rounds")
+r = atk(attacker=P, weapon=gun, targets=[G2], ignoreSight=True)
+check(any(p_ == ["Take Aim", 2] for p_ in j(r)["result"]["attack"]["parts"]) and entry(pid)["aim"] == 0, "the next ranged attack uses it up")
+cop(op="aim", id=entry(pid)["id"], force=True)
+cop(op="round")
+cop(op="turn", id=entry(pid)["id"])
+cop(op="next")
+check(entry(pid)["aim"] == 0, "a turn with neither Take Aim nor an attack loses it")
+r = atk(attacker=P, weapon=gun, targets=[G1], trip=True, ignoreSight=True, ignoreActions=True)
+check(r.status_code == 400 and "melee" in j(r)["error"], "Trip is for melee attacks")
+tripped = None
+for _ in range(8):
+    cop(op="round")
+    r = atk(attacker=P, weapon="weapon:unarmed", targets=[G1], range="Close", trip=True, attackMod=25, soakMod=40, ignoreSight=True, ignoreActions=True)
+    if j(r)["result"].get("trip"):
+        tripped = j(r)["result"]
+        break
+check(tripped and tripped["trip"]["threshold"] == tripped["dv"] and tripped["trip"]["prone"] == (tripped["trip"]["hits"] < tripped["dv"]),
+      "Trip: on a hit the target rolls Athletics + Agility against the DV or goes Prone")
+unarmed_dv = next(o for o in j(gm.post(f"/api/maps/{arena}/attack-options", json={"who": P}, headers=H))["options"] if o["key"] == "weapon:unarmed")["dv"]
+check(tripped and tripped["dv"] == max(0, int(unarmed_dv[:-1]) - 2) + max(0, tripped["net"]), "and the base DV is 2 lower")
+gm.post(f"/api/maps/{arena}/marker", json={"id": "g1", "statuses": {}}, headers=H)
+cop(op="round")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "current_edge": 5}, headers=H)
+check(atk(attacker=G1, weapon="-1", targets=[P], range="Close", wrest={f"player:{pid}": True}, ignoreSight=True).status_code == 400,
+      "Wrest needs a Block")
+r = atk(attacker=G1, weapon="-1", targets=[P], range="Close", defenses={f"player:{pid}": "block"}, wrest={f"player:{pid}": True},
+        defenseMod=30, ignoreSight=True, ignoreActions=True)
+w_ = j(r).get("result", {}).get("wrest")
+check(r.status_code == 200 and w_ and w_["threshold"] >= 1 and any("Wrest" in n_ or "wrests" in n_ for n_ in j(r)["result"]["notes"]),
+      "Wrest after a successful Block: Close Combat + Agility vs Strength, 2 Edge")
+r = atk(attacker=G2, weapon="0", targets=[P], defenses={f"player:{pid}": "hit_the_dirt"}, tactical={f"player:{pid}": True}, ignoreSight=True)
+check(r.status_code == 400 and "Edge" in j(r)["error"], "one Edge expenditure per round (Wrest already spent it)")
+cop(op="round")
+r = atk(attacker=G2, weapon="0", targets=[P], defenses={f"player:{pid}": "hit_the_dirt"}, tactical={f"player:{pid}": True}, ignoreSight=True, ignoreActions=True)
+check(r.status_code == 200 and entry(pid)["troll"] == j(gm.get(f"/api/games/{cid}/combat"))["tracker"]["round"], "Tactical Roll with Hit the Dirt (1 Edge)")
+r = atk(attacker=P, weapon="weapon:unarmed", targets=[G1], range="Close", ignoreSight=True, ignoreActions=True)
+check(not any(p_[0].startswith("Prone") for p_ in j(r)["result"]["attack"]["parts"]), "Tactical Roll: no Prone penalty on a melee attack that round")
+r = atk(attacker=G1, weapon="-1", targets=[P], range="Close", ignoreSight=True, ignoreActions=True)
+check(not any(p_[0] == "Prone" for p_ in j(r)["result"]["defense"]["parts"]), "nor the −2 against Close attacks while Prone")
+gm.post(f"/api/maps/{arena}/status", json={"target": P, "status": "Prone", "on": False}, headers=H)
+gm.post(f"/api/maps/{arena}/marker", json={"id": "g1", "statuses": {}}, headers=H)
+check(atk(attacker=P, weapon=gun, targets=[G1], grapple=True, ignoreSight=True, ignoreActions=True).status_code == 400, "grappling is unarmed")
+held = None
+for _ in range(10):
+    cop(op="round")
+    r = atk(attacker=P, weapon="weapon:unarmed", targets=[G1], range="Close", grapple=True, attackMod=30, ignoreSight=True, ignoreActions=True)
+    if (j(r)["result"].get("grapple") or {}).get("held"):
+        held = j(r)["result"]
+        break
+g1m = lambda: next(m for m in j(gm.get(f"/api/maps/{arena}"))["data"]["markers"] if m["id"] == "g1")  # noqa: E731
+check(held and held["damage"] == 0 and g1m()["statuses"].get("Restrained") and j(pl.get("/api/me/state"))["me"]["statuses"].get("Grappling")
+      and entry(pid)["grapple"]["role"] == "grappler" and entry("g1")["grapple"]["role"] == "held",
+      "grapple: Strength + net hits vs Strength instead of damage; Restrained and Grappling")
+e0 = R_edge = next(m for m in j(gm.get(f"/api/maps/{arena}"))["data"]["markers"] if m["id"] == "g2").get("edge_cur")
+r = atk(attacker=G2, weapon="0", targets=[G1], ignoreSight=True, ignoreActions=True, attackMod=10)
+rr = j(r)["results"]
+check(any(p_ == ["Restrained", -4] for p_ in rr[0]["defense"]["parts"]), "a restrained target defends at −4")
+check(any("against a restrained target" in n_ for n_ in rr[0]["notes"]), "and the attacker gains Edge on them")
+stray = None
+for _ in range(10):
+    r = atk(attacker=G2, weapon="0", targets=[G1], ignoreSight=True, ignoreActions=True, attackMod=-30)
+    rr = j(r)["results"]
+    if not rr[0]["hit"]:
+        stray = rr[1] if len(rr) > 1 else None
+        break
+check(stray and stray.get("stray") and stray["target"] == j(pl.get("/api/me/state"))["me"]["name"] and stray["attack"]["dice"] == rr[0]["attack"]["dice"],
+      "a missed attack on a restrained target goes at the grappler with the same roll")
+r = cop(op="grapple", id=entry(pid)["id"], action="damage", force=True)
+check(r.status_code == 200 and "Squeeze" in j(gm.get(f"/api/games/{cid}"))["rolls"][0]["data"]["text"], "grapple follow-ups are Major Actions")
+check(cop(op="grapple", id=entry(pid)["id"], action="break").status_code == 400, "only the one held can break free")
+cop(op="end")
+check(not g1m().get("statuses", {}).get("Restrained") and not j(pl.get("/api/me/state"))["me"]["statuses"].get("Grappling"), "the grapple ends with the fight")
+
+# dispelling a sustained spell
+mage = j(gm.get(f"/api/players/{mpid}/sheet"))
+sp_ = next((s_ for s_ in mage["char"]["spells"] if s_.get("duration") == "S"), None)
+gm.post(f"/api/players/{mpid}/sheet/action", json={"action": "sustain", "name": sp_["name"], "hits": 2}, headers=H)
+lst = j(gm.get(f"/api/games/{cid}/sustained"))["spells"]
+check(lst and lst[0]["name"] == sp_["name"] and lst[0]["dv"] >= 1 and lst[0]["hits"] == 2, "the GM sees every sustained spell, with its hits and Drain Value")
+cop(op="start", players=[pid, mpid], mapId=arena, markers=[], roll=True)
+gone = False
+for _ in range(12):
+    cop(op="dispel", id=entry(mpid)["id"], target={"pid": mpid, "index": 0}, force=True)
+    now_ = j(gm.get(f"/api/players/{mpid}/sheet"))["char"]["sustained"]
+    if not now_ or now_[0]["hits"] < 2:
+        gone = True
+        break
+check(gone, "dispelling: Sorcery + Magic vs Drain Value × 2, net hits cancel the spell's hits")
+r = cop(op="dispel", id=entry(mpid)["id"], target={"name": "Enemy Mana Barrier", "dv": 4, "hits": 3}, force=True)
+check(r.status_code == 200 and "Enemy Mana Barrier" in j(gm.get(f"/api/games/{cid}"))["rolls"][0]["data"]["text"], "dispel a spell the GM describes")
+check(cop(op="dispel", id=entry(pid)["id"], target={"name": "x", "dv": 3, "hits": 1}).status_code == 400, "only magicians dispel")
+cop(op="end")
+
+print("Rigging: speed, weapon mounts, drones firing")
+security._buckets.clear()
+for name_ in ("Standard Weapon Mount", "Heavy Weapon Mount", "HK-227", "Panther XXL"):
+    gm.post(f"/api/players/{rgid}/sheet/action", json={"action": "give", "ref": ref(name_)}, headers=H)
+rsh = j(rg.get("/api/me/sheet"))
+dob, smt, hmt = item(rsh, "GM-Nissan Doberman"), item(rsh, "Standard Weapon Mount"), item(rsh, "Heavy Weapon Mount")
+hk, pan = item(rsh, "HK-227"), item(rsh, "Panther XXL")
+r = ract(action="install_mount", uid=hmt["uid"], vehicle=dob["uid"])
+check(r.status_code == 400 and "room for 1" in j(r)["error"], "Body 4: one weapon mount, a heavy one needs two")
+check(ract(action="install_mount", uid=smt["uid"], vehicle=dob["uid"]).status_code == 200, "a standard mount goes on the drone")
+r = ract(action="mount_weapon", mount=smt["uid"], weapon=pan["uid"])
+check(r.status_code == 400 and "heavy" in j(r)["error"], "a standard mount takes an assault rifle or smaller")
+r = ract(action="mount_weapon", mount=smt["uid"], weapon=hk["uid"])
+keys = {p_["key"] for p_ in j(r)["pools"]}
+check(r.status_code == 200 and f"vgun:{hk['uid']}:gunner" in keys and not any(k.endswith(hk["uid"]) and k.startswith("weapon:") for k in keys),
+      "a mounted gun: fired by a gunner (Engineering + Logic), no longer carried")
+r = ract(action="vehicle_speed", uid=dob["uid"], change=20)
+check(r.status_code == 400 and "Acceleration" in j(r)["error"], "speed changes by at most the Acceleration per round")
+r = ract(action="vehicle_speed", uid=dob["uid"], change=10)
+check(item(j(r), "GM-Nissan Doberman")["speed"] == 10 and item(j(r), "GM-Nissan Doberman")["moved"] == 5, "distance = speed at the start + half the change")
+r = ract(action="vehicle_speed", uid=dob["uid"], set=31)
+mp = next(p_ for p_ in j(r)["pools"] if p_["key"] == f"vehicle:{dob['uid']}:manual")
+check(any(p_[0].startswith("Speed 31") and p_[1] == -2 for p_ in mp["parts"]), "−1 die per Speed Interval passed (31 m with interval 15: −2)")
+gm.post(f"/api/players/{rgid}/sheet/action", json={"action": "set_ammo", "uid": hk["uid"], "rounds": 30}, headers=H)
+hk_rounds = item(j(rg.get("/api/me/sheet")), "HK-227")["loaded"]["rounds"]
+gm.post(f"/api/maps/{arena}/marker", json={"id": "g3", "template": f"pv:{rgid}:{dob['uid']}"}, headers=H)
+opts = j(gm.post(f"/api/maps/{arena}/attack-options", json={"who": G3}, headers=H))["options"]
+check(any(o["key"] == f"mount:{hk['uid']}" for o in opts), "the drone on the map can fire its mounted gun")
+r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": G3, "weapon": f"mount:{hk['uid']}", "mode": "SA", "range": "Near", "targets": [G1],
+                                               "ignoreSight": True, "ignoreActions": True}, headers=H)
+pp = j(r)["result"]["attack"]["parts"]
+check(r.status_code == 200 and pp[0] == ["Sensor", 3] and any(p_[0] == "No Targeting autosoft" for p_ in pp) and any(p_[0].startswith("Speed 31") for p_ in pp),
+      "the drone fires with Sensor (− 1 without a Targeting autosoft) and the speed penalty")
+check(item(j(rg.get("/api/me/sheet")), "HK-227")["loaded"]["rounds"] == hk_rounds - 2, "and uses the owner's ammo")
+r = gm.post(f"/api/maps/{arena}/marker", json={"id": "g2", "template": "v:drones-gm-nissan-doberman"}, headers=H)
+r = gm.post(f"/api/maps/{arena}/marker", json={"id": "g2", "mount": {"ref": "ranged-hk-227", "autosoft": 3}}, headers=H)
+mw = j(r)["marker"]["npc"]["weapons"][-1]
+check(r.status_code == 200 and mw["name"] == "HK-227" and mw["pool"] == 6 and mw["mount"] == "standard", "an NPC drone gets a mounted HK-227: Sensor 3 + Targeting 3")
+r = gm.post(f"/api/maps/{arena}/marker", json={"id": "g2", "mount": {"ref": "ranged-hk-227", "autosoft": 3}}, headers=H)
+check(r.status_code == 400 and "Room for 1" in j(r)["error"], "and no more than Body / 3 mounts")
+gm.post(f"/api/maps/{arena}/marker", json={"id": "g2", "vehicleSpeed": {"set": 30}}, headers=H)
+r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": G2, "weapon": "0", "targets": [G1], "range": "Close", "ignoreSight": True, "ignoreActions": True}, headers=H)
+check(j(r)["result"]["weapon"] == "Ram" and any(p_ == ["Speed Intervals", -2] for p_ in j(r)["result"]["attack"]["parts"])
+      and any("+2 DV" in n_ for n_ in j(r)["result"]["notes"]), "ramming at speed: −2 dice and +2 DV at two Speed Intervals")
+
+print("Matrix programs")
+security._buckets.clear()
+for kind_ in ("basic", "basic", "hacking", "hacking", "hacking"):
+    dact(action="buy", ref=f"cyberdecks-software-cyberprogram-{kind_}")
+progs = [it_ for it_ in j(dk.get("/api/me/sheet"))["char"]["inventory"] if (it_.get("ref") or "").startswith("cyberdecks-software-cyberprogram")]
+basics = [p_ for p_ in progs if "basic" in p_["ref"]]
+hacks = [p_ for p_ in progs if "hacking" in p_["ref"]]
+dact(action="set_program", uid=basics[-2]["uid"], choice="Browse", running=True)
+r = dact(action="set_program", uid=hacks[-2]["uid"], choice="Decryption", running=True)
+pools_ = {p_["key"]: p_ for p_ in j(r)["pools"]}
+check(any(p_[0] == "Decryption" and p_[1] == 2 for p_ in pools_["matrix:crack_file"]["parts"]), "Decryption: +2 dice on Crack File")
+r = dk.post("/api/me/roll", json={"key": "matrix:matrix_search"}, headers=H)
+rr = j(r)["rolls"][0]
+check(rr["data"].get("free_edge") == 1, "Browse: 1 Edge for that Matrix Search only")
+edge0 = j(dk.get("/api/me/state"))["me"]["edge"]["cur"]
+r = dk.post(f"/api/me/rolls/{rr['id']}/boost", json={"boost": "reroll", "dice": [0]}, headers=H)
+check(r.status_code == 200 and j(dk.get("/api/me/state"))["me"]["edge"]["cur"] == edge0, "the program's Edge pays for a boost on that roll")
+dact(action="set_program", uid=hacks[-2]["uid"], running=False)
+r = dact(action="set_program", uid=hacks[-3]["uid"], choice="Overclock", running=True)
+check(next(p_ for p_ in j(r)["pools"] if p_["key"] == "matrix:brute_force").get("wild"), "Overclock: one of its dice is the Wild Die")
+r = dk.post("/api/me/roll", json={"key": "matrix:brute_force"}, headers=H)
+check(any(d_.get("w") for d_ in j(r)["rolls"][0]["data"]["dice"]), "and the roll has it")
+dact(action="set_program", uid=hacks[-3]["uid"], running=False)
+dact(action="set_matrix", noise=5)
+p5 = next(p_ for p_ in j(dk.get("/api/me/sheet"))["pools"] if p_["key"] == "matrix:brute_force")
+check(any(p_ == ["Noise", -5] for p_ in p5["parts"]), "noise: −1 per point on Matrix tests")
+r = dact(action="set_program", uid=basics[-1]["uid"], choice="Signal Scrubber", running=True)
+p3 = next(p_ for p_ in j(r)["pools"] if p_["key"] == "matrix:brute_force")
+check(any(p_ == ["Noise", -3] for p_ in p3["parts"]), "Signal Scrubber: noise −2")
+dact(action="set_program", uid=basics[-1]["uid"], running=False)
+dact(action="set_matrix", noise=0)
+dm = j(dk.get("/api/me/sheet"))["derived"]["matrix"]
+r = dact(action="set_matrix", swap=["attack", "firewall"])
+dm2 = j(r)["derived"]["matrix"]
+check(dm2["attack"] == dm["firewall"] and dm2["firewall"] == dm["attack"], "Reconfigure: swap two Matrix attributes")
+check(dact(action="set_matrix", config="save").status_code == 400, "saving a setup needs Configurator")
+dact(action="set_matrix", config="reset")
+gm.post(f"/api/players/{dkid}/sheet/action", json={"action": "set_os", "os": 7}, headers=H)
+check(j(dk.get("/api/me/sheet"))["derived"]["matrix"]["os"] != 7, "the Overwatch Score stays secret")
+dact(action="set_program", uid=basics[-2]["uid"], choice="Baby Monitor", running=True)
+check(j(dk.get("/api/me/sheet"))["derived"]["matrix"]["os"] == 7, "Baby Monitor shows it")
+
+print("Music")
+import subprocess, time as _t  # noqa: E402,E401
+import music as MU  # noqa: E402
+ff = MU.find_ffmpeg()
+check(ff, "ffmpeg with Opus found")
+tone = os.path.join(tmp, "theme.mp3")
+subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=12", "-f", "lavfi", "-i", "anoisesrc=d=12:a=0.05",
+                "-filter_complex", "amix=inputs=2", "-ac", "2", "-b:a", "192k", tone], check=True)
+with open(tone, "rb") as f:
+    mp3 = f.read()
+r = gm.post(f"/api/games/{cid}/music", data={"file": (io.BytesIO(mp3), "Club Penumbra.mp3")}, headers=H, content_type="multipart/form-data")
+check(r.status_code == 202 and j(r)["tracks"][0]["status"] == "processing", "GM uploads a track; it is compressed in the background")
+tid = j(r)["id"]
+check(pl.post(f"/api/games/{cid}/music", data={"file": (io.BytesIO(mp3), "x.mp3")}, headers=H, content_type="multipart/form-data").status_code == 401, "players can't upload music")
+r = gm.post(f"/api/games/{cid}/music", data={"file": (io.BytesIO(b"#EXTM3U\nfile:///etc/passwd\n"), "evil.m3u")}, headers=H, content_type="multipart/form-data")
+check(r.status_code == 400, "playlists and other files are refused")
+r = gm.post(f"/api/games/{cid}/music", data={"file": (io.BytesIO(b"not audio at all" * 100), "fake.mp3")}, headers=H, content_type="multipart/form-data")
+bad = j(r)["id"]
+for _ in range(200):
+    ts = {t["id"]: t for t in j(gm.get(f"/api/games/{cid}/music"))["tracks"]}
+    if ts[tid]["status"] != "processing" and ts[bad]["status"] != "processing":
+        break
+    _t.sleep(0.2)
+t = ts[tid]
+check(t["status"] == "ready" and 11 < (t["duration"] or 0) < 13, "the track is ready with its length " + (str(t) if t["status"] != "ready" else ""))
+check(t["size"] < t["srcSize"] / 2.5 and t["aacSize"], f"compressed to Opus ({t['srcSize']} -> {t['size']} bytes) with an AAC fallback")
+check(ts[bad]["status"] == "failed" and ts[bad]["error"], "a file that isn't audio fails cleanly")
+check(not any(f.startswith("upload-") for f in os.listdir(MU.MUSIC_DIR)), "originals are deleted after compressing")
+check(j(pl.get("/api/music/now"))["playing"] is None, "nothing playing yet")
+check(pl.get(f"/music/{tid}.webm").status_code == 200, "players of the game can fetch the track")
+r = gm.post(f"/api/games/{cid}/music/play", json={"track": tid, "loop": False}, headers=H)
+now_ = j(pl.get("/api/music/now"))
+check(now_["playing"]["trackId"] == tid and not now_["playing"]["loop"] and abs(now_["playing"]["startedAt"] - now_["serverNow"]) < 2,
+      "playing a track shares its start time with the players")
+r = pl.get(now_["playing"]["src"]["opus"], headers={"Range": "bytes=100-199"})
+check(r.status_code == 206 and len(r.data) == 100 and r.mimetype == "audio/webm", "audio is served in ranges (streaming and seeking)")
+check(pl.get(now_["playing"]["src"]["aac"]).mimetype == "audio/mp4", "AAC fallback for browsers without Opus")
+check(pl.post(f"/api/games/{cid}/music/stop", json={}, headers=H).status_code == 401, "players can't stop the music")
+r = gm.post(f"/api/games/{cid}/music", data={"file": (io.BytesIO(mp3), "Combat.mp3")}, headers=H, content_type="multipart/form-data")
+t2 = j(r)["id"]
+for _ in range(200):
+    if {t["id"]: t for t in j(gm.get(f"/api/games/{cid}/music"))["tracks"]}[t2]["status"] == "ready":
+        break
+    _t.sleep(0.2)
+gm.post(f"/api/games/{cid}/music/play", json={"track": t2}, headers=H)
+check(j(pl.get("/api/music/now"))["playing"]["trackId"] == t2 and j(pl.get("/api/music/now"))["playing"]["loop"], "starting another track replaces the first (one at a time)")
+gm.post(f"/api/games/{cid}/music/play", json={"loop": False}, headers=H)
+check(not j(pl.get("/api/music/now"))["playing"]["loop"] and j(pl.get("/api/music/now"))["playing"]["trackId"] == t2, "looping can be switched without restarting")
+g2 = j(gm.post("/api/campaigns", json={"name": "Other table"}, headers=H))["id"]
+inv2 = j(gm.post(f"/api/games/{g2}/invites", json={}, headers=H))
+other, r = register(inv2["token"], "outsider")
+check(other.get(f"/music/{t2}.webm").status_code == 404 and j(other.get("/api/music/now"))["playing"] is None, "players of another game can't hear it")
+check(j(gm.get(f"/api/music/now?map={mid}"))["playing"]["trackId"] == t2, "the editor finds the game's music from the map")
+bk = j(gm.post("/api/backups", json={}, headers=H))["name"]
+import zipfile  # noqa: E402
+names = zipfile.ZipFile(os.path.join(tmp, "backups", bk)).namelist()
+check(f"music/{t2}.webm" in names and f"music/{tid}.m4a" in names, "manual backups include the music")
+import backup as BK  # noqa: E402
+auto = BK.make_backup("auto")
+check(not any(n.startswith("music/") for n in zipfile.ZipFile(os.path.join(tmp, "backups", auto)).namelist()), "daily backups leave the music out")
+r = gm.post(f"/api/backups/{auto}/restore", json={}, headers=H)
+check(r.status_code == 200 and os.path.exists(os.path.join(MU.MUSIC_DIR, f"{t2}.webm")), "restoring a backup without music keeps the music files")
+gm = A.test_client(); gate_solve(gm); login(gm, "gamemaster", "gm-password-123")
+check(j(gm.get(f"/api/games/{cid}/music"))["tracks"][0]["status"] == "ready", "and the tracks still play after the restore")
+gm.post(f"/api/games/{cid}/music/play", json={"track": t2}, headers=H)
+r = gm.delete(f"/api/music/{t2}", headers=H)
+check(r.status_code == 200 and j(r)["playing"] is None and not os.path.exists(os.path.join(MU.MUSIC_DIR, f"{t2}.webm")), "deleting the playing track stops it and removes its files")
+gm.delete(f"/api/campaigns/{g2}", headers=H)
 
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "All checks passed.")

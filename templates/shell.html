@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en" data-shell>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1{% if player %}, maximum-scale=1{% endif %}">
+<title>ShadowGrid</title>
+<link rel="stylesheet" href="{{ asset('style.css') }}">
+</head>
+<body class="shell">
+<iframe id="app" title="ShadowGrid" allow="autoplay; clipboard-write; fullscreen"></iframe>
+<noscript><p class="shell-noscript">ShadowGrid needs JavaScript.</p></noscript>
+<script src="{{ asset('api.js') }}"></script>
+<script src="{{ asset('music.js') }}"></script>
+<script src="{{ asset('shell.js') }}"></script>
+</body>
+</html>

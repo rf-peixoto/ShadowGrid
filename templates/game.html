@@ -18,6 +18,7 @@
     <button data-view="store" role="tab">Store</button>
     <button data-view="handouts" role="tab">Handouts</button>
     <button data-view="maps" role="tab">Maps</button>
+    <button data-view="music" role="tab">Music <span class="badge live" id="badge-music" hidden>♪</span></button>
     <button data-view="log" role="tab">Dice &amp; log</button>
     <button data-view="sessions" role="tab">Sessions <span class="badge live" id="badge-session" hidden>●</span></button>
     <button data-view="history" role="tab">History</button>
@@ -30,11 +31,13 @@
 <section class="view" id="view-store"><div class="page"><div class="page-inner" id="store-root"></div></div></section>
 <section class="view" id="view-handouts"><div class="page"><div class="page-inner" id="handouts-root"></div></div></section>
 <section class="view" id="view-maps"><div class="page"><div class="page-inner" id="maps-root"></div></div></section>
+<section class="view" id="view-music"><div class="page"><div class="page-inner" id="music-root"></div></div></section>
 <section class="view" id="view-log"><div class="page"><div class="page-inner" id="log-root"></div></div></section>
 <section class="view" id="view-sessions"><div class="page"><div class="page-inner" id="sessions-root"></div></div></section>
 <section class="view" id="view-history"><div class="page"><div class="page-inner" id="history-root"></div></div></section>
 <section class="view" id="view-wiki"><div class="page"><div class="page-inner"><div class="wiki" id="wiki"></div></div></div></section>
 <script src="{{ asset('api.js') }}"></script>
+<script src="{{ asset('music.js') }}"></script>
 <script src="{{ asset('srui.js') }}"></script>
 <script src="{{ asset('wiki.js') }}"></script>
 <script src="{{ asset('gamepage.js') }}"></script>

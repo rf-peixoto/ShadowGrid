@@ -11,10 +11,15 @@ from core import (GM_COLOR, add_roll, app, body, clamp_int, display_name, err, g
                   roll_rows, save_char)
 from security import gamemaster_required
 from sr import actions6e as ACT
+from sr import catalog as CAT
 from sr import combat as X
 from sr import core6e as K
+from sr import dice as DICE
 from sr import gear6e as G
+from sr import matrix6e as MX
 from sr import rules as R
+
+MX_VM_EXTRA = MX.VIRTUAL_MACHINE["extra_damage"]
 
 _rng = secrets.SystemRandom()
 
@@ -88,6 +93,152 @@ def new_round(t):
         e["edgeGained"] = 0
 
 
+def _entry_fighter(db, e):
+    """Fighter for a tracker entry (runner or marker), with a saver: (fighter, save()) or (None, None)."""
+    if e.get("kind") == "player":
+        row = db.execute("SELECT * FROM players WHERE id=?", (e["ref"],)).fetchone()
+        if not row:
+            return None, None
+        c = load_char(row)
+        return X.Fighter.from_char(e["name"], c), (lambda: save_char(row["id"], c))
+    if e.get("kind") == "marker" and e.get("mapId"):
+        mrow = db.execute("SELECT data FROM maps WHERE id=?", (e["mapId"],)).fetchone()
+        if not mrow:
+            return None, None
+        data = json.loads(mrow["data"])
+        mk = next((m for m in data.get("markers", []) if m["id"] == e["ref"]), None)
+        if not mk:
+            return None, None
+        return X.Fighter.from_marker(mk), (lambda: db.execute("UPDATE maps SET data=?, updated_at=? WHERE id=?", (json.dumps(data), now(), e["mapId"])))
+    return None, None
+
+
+def _test(f, pool, threshold):
+    n = sum(R._int(f.attrs.get(a), 1) for a in pool)
+    hits = R.hits_of(n)
+    return hits, n, hits >= threshold
+
+
+def _pool_parts(f, names):
+    """Dice parts for a list of skill and attribute names."""
+    out = []
+    for n in names:
+        if n in K.PHYSICAL or n in K.MENTAL or n in ("Magic", "Resonance"):
+            out.append([n, R._int(f.attrs.get(n), 1)])
+        else:
+            out.append([n, f.rank(n)])
+    return out
+
+
+def _entry_status(db, e, name, on, value=True):
+    """Set or clear a status on a tracker entry's runner or marker (saved at once)."""
+    f, save = _entry_fighter(db, e)
+    if not f:
+        return
+    st = (f.char.setdefault("statuses", {}) if f.char is not None else f.marker.setdefault("statuses", {}))
+    if on:
+        X.add_status(st, name, value)
+    else:
+        st.pop(name, None)
+    save()
+
+
+def _entry_damage(db, e, track, amount):
+    """Damage on a tracker entry's runner or marker; returns a status line for markers."""
+    if amount <= 0:
+        return
+    f, save = _entry_fighter(db, e)
+    if not f:
+        return
+    if f.char is not None:
+        R.take_damage(f.char, track, amount)
+        R.clamp_state(f.char)
+    elif f.marker is not None and f.marker.get("cm"):
+        X.marker_damage(f.marker["cm"], track, amount)
+    save()
+
+
+def release_grapple(db, t, e, note=True):
+    """End the grapple this entry is in (both sides lose Restrained / Grappling)."""
+    g = e.get("grapple")
+    if not g:
+        return
+    other = next((x for x in t["entries"] if x["id"] == g.get("with")), None)
+    for x in (e, other):
+        if not x:
+            continue
+        role = (x.get("grapple") or {}).get("role")
+        _entry_status(db, x, "Restrained" if role == "held" else "Grappling", False)
+        x.pop("grapple", None)
+
+
+def start_grapple(db, t, att_e, tgt_e):
+    """The attacker now holds the target: statuses and the link between both tracker entries."""
+    for x in (att_e, tgt_e):
+        if x and x.get("grapple"):
+            release_grapple(db, t, x)
+    if att_e and tgt_e:
+        att_e["grapple"] = {"with": tgt_e["id"], "role": "grappler"}
+        tgt_e["grapple"] = {"with": att_e["id"], "role": "held"}
+
+
+def round_start(db, cid, t):
+    """Start of a combat round: the surprised can act again from round 2; Nauseated combatants roll
+    Body + Willpower (2): failure costs the whole round, success costs a Minor Action."""
+    lines = []
+    for e in t["entries"]:
+        if t["round"] >= 2:
+            e.pop("surprised", None)
+        if not _entry_statuses(db, e).get("Nauseated"):
+            continue
+        f, _save = _entry_fighter(db, e)
+        if not f:
+            continue
+        hits, n, ok = _test(f, ACT.NAUSEA_TEST["pool"], ACT.NAUSEA_TEST["threshold"])
+        if ok:
+            e["used"]["minor"] = _clamp0(e["used"].get("minor")) + 1
+            lines.append(f"{e['name']} fights the nausea ({hits} hits on {n} dice) and loses a Minor Action")
+        else:
+            e["used"] = {"major": 1, "minor": ACT.MAX_MINOR}
+            lines.append(f"{e['name']} is too sick to act this round ({hits} hits on {n} dice)")
+    if lines:
+        add_roll(cid, None, "GM", GM_COLOR, "note", {"text": f"round {t['round']}, Nauseated: " + "; ".join(lines) + "."})
+
+
+def surprise(db, t, ambushers):
+    """Surprise test (Reaction + Intuition (3)) for everyone but the ambushers: failures can't act or spend
+    Edge in the first round (they still defend and soak)."""
+    lines = []
+    for e in t["entries"]:
+        if e.get("kind") == "custom" or e.get("ref") in ambushers or e.get("id") in ambushers:
+            continue
+        f, _save = _entry_fighter(db, e)
+        if not f:
+            continue
+        hits, n, ok = _test(f, ACT.SURPRISE["pool"], ACT.SURPRISE["threshold"])
+        if not ok:
+            e["surprised"] = True
+            e["used"] = {"major": 1, "minor": ACT.MAX_MINOR}
+            e["edgeRound"] = t["round"]
+        lines.append(f"{e['name']} {'is surprised' if not ok else 'reacts in time'} ({hits} hits)")
+    return lines
+
+
+def trim_bonus_edge(db, t):
+    """When the confrontation ends, Edge above each runner's Edge rating goes away (p. 45)."""
+    for e in t["entries"]:
+        if e.get("kind") != "player":
+            continue
+        row = db.execute("SELECT * FROM players WHERE id=?", (e["ref"],)).fetchone()
+        if not row:
+            continue
+        c = load_char(row)
+        cap = R.derive(c)["edge_max"]
+        if c["current_edge"] > cap:
+            c["current_edge"] = cap
+            save_char(row["id"], c)
+
+
 def entry_for(t, kind, ref):
     if not t.get("active"):
         return None
@@ -114,7 +265,8 @@ def tracker_view(t, gm):
     for e in order:
         if not gm and e.get("hidden"):
             continue
-        o = {k: e.get(k) for k in ("id", "kind", "ref", "mapId", "name", "total", "dice", "color", "minor", "hidden", "used", "fd", "dirt", "edgeGained")}
+        o = {k: e.get(k) for k in ("id", "kind", "ref", "mapId", "name", "total", "dice", "color", "minor", "hidden", "used", "fd", "dirt", "edgeGained",
+                                   "surprised", "cs", "edgeRound", "aim", "aimRound", "troll", "grapple")}
         o["current"] = e["id"] == current
         o["majorLeft"], o["minorLeft"] = actions_left(e)
         entries.append(o)
@@ -207,6 +359,19 @@ def combat_get(cid):
     return jsonify({"tracker": tracker_view(load_tracker(cid), True)})
 
 
+@app.route("/api/games/<cid>/sustained")
+@gamemaster_required
+def sustained_spells(cid):
+    """Every runner's sustained spells (for dispelling)."""
+    out = []
+    for row in get_db().execute("SELECT * FROM players WHERE campaign_id=?", (cid,)).fetchall():
+        c = load_char(row)
+        for i, rec in enumerate(c.get("sustained") or []):
+            out.append({"pid": row["id"], "who": display_name(row, c), "index": i, "name": rec.get("name"),
+                        "hits": R._int(rec.get("hits")), "dv": R.sustained_dv(c, rec)})
+    return jsonify({"spells": out})
+
+
 @app.route("/api/games/<cid>/combat", methods=["POST"])
 @gamemaster_required
 def combat_op(cid):
@@ -242,10 +407,18 @@ def combat_op(cid):
                 for e in t["entries"]:
                     if e["kind"] != "player" and e.get("total") is None:
                         _roll_entry(e, _entry_statuses(db, e))
+            if b.get("op") == "start" and b.get("surprise"):
+                lines = surprise(db, t, set(str(x) for x in b.get("ambushers") or []))
+                if lines:
+                    add_roll(cid, None, "GM", GM_COLOR, "note", {"text": "Surprise (Reaction + Intuition, 3): " + "; ".join(lines) + "."},
+                             hidden=not t["visible"])
         elif op == "end":
+            for x in t["entries"]:
+                release_grapple(db, t, x)
+            trim_bonus_edge(db, t)
             t["active"] = False
             t["visible"] = False
-            msg = "Combat ended."
+            msg = "Combat ended. Edge above each runner's rating is gone."
         elif op in ("show", "hide"):
             t["visible"] = op == "show"
         elif op == "roll":
@@ -269,14 +442,22 @@ def combat_op(cid):
             if "name" in b:
                 e["name"] = str(b["name"])[:60] or e["name"]
         elif op == "remove":
+            gone = next((x for x in t["entries"] if x["id"] == b.get("id")), None)
+            if gone:
+                release_grapple(db, t, gone)
             t["entries"] = [x for x in t["entries"] if x["id"] != b.get("id")]
         elif op in ("next", "prev"):
             n = len(t["entries"])
+            if n and op == "next":
+                cur = ordered(t)[min(t.get("turn", 0), n - 1)]
+                if cur.get("aim") and cur.get("aimTouch") != t["round"]:
+                    cur["aim"] = 0                       # a turn without Take Aim or an attack: the aim is lost
             if n:
                 t["turn"] = t.get("turn", 0) + (1 if op == "next" else -1)
                 if t["turn"] >= n:
                     t["turn"] = 0
                     new_round(t)
+                    round_start(db, cid, t)
                 elif t["turn"] < 0:
                     t["turn"] = n - 1
                     t["round"] = max(1, t["round"] - 1)
@@ -286,6 +467,127 @@ def combat_op(cid):
         elif op == "round":
             t["turn"] = 0
             new_round(t)
+            round_start(db, cid, t)
+        elif op == "counterspell":
+            caster = next((x for x in t["entries"] if x["id"] == b.get("id")), None)
+            if not caster:
+                return _fail(db, "Not in the tracker.")
+            f, _save = _entry_fighter(db, caster)
+            if not f:
+                return _fail(db, "That combatant can't counterspell.")
+            sk, attr = ACT.COUNTERSPELL["pool"]
+            magic, rank = R._int(f.attrs.get(attr)), f.rank(sk)
+            if not magic or not rank:
+                return _fail(db, f"{caster['name']} needs Sorcery and Magic to counterspell.")
+            note = spend_action(caster, "major", "counterspelling", bool(b.get("force")))
+            roll = DICE.new_roll(magic + rank)
+            protect = [x for x in t["entries"] if x["id"] in (b.get("protect") or [])] or [caster]
+            for x in protect:
+                x["cs"] = {"by": caster["name"], "hits": roll["hits"], "until": t["round"] + magic - 1}
+            msg = (f"{caster['name']} counterspells: {roll['hits']} hits on {magic + rank} dice, added to "
+                   f"{', '.join(x['name'] for x in protect)}'s Defense against spells for {magic} rounds." + (f" {note}." if note else ""))
+            add_roll(cid, None, "GM", GM_COLOR, "note", {"text": msg})
+        elif op == "aim":
+            e = next((x for x in t["entries"] if x["id"] == b.get("id")), None)
+            if not e:
+                return _fail(db, "Not in the tracker.")
+            f, _save = _entry_fighter(db, e)
+            if not f:
+                return _fail(db, "That combatant can't take aim.")
+            if e.get("aimRound") == t["round"] and not b.get("force"):
+                return _fail(db, f"{e['name']} already took aim this round (once per round).")
+            note = spend_action(e, ACT.TAKE_AIM["cost"], "Take Aim", bool(b.get("force")))
+            cap = R._int(f.attrs.get(ACT.TAKE_AIM["max"]), 1)
+            e["aim"] = min(cap, _clamp0(e.get("aim")) + ACT.TAKE_AIM["dice"])
+            e["aimRound"] = e["aimTouch"] = t["round"]
+            msg = f"{e['name']} takes aim: +{e['aim']} dice on the next ranged attack (at most {cap})." + (f" {note}." if note else "")
+            add_roll(cid, None, "GM", GM_COLOR, "note", {"text": msg})
+        elif op == "dispel":
+            caster = next((x for x in t["entries"] if x["id"] == b.get("id")), None)
+            if not caster:
+                return _fail(db, "Not in the tracker.")
+            f, _save = _entry_fighter(db, caster)
+            sk, attr = ACT.DISPEL["pool"]
+            if not f or not R._int(f.attrs.get(attr)) or not f.rank(sk):
+                return _fail(db, f"{caster['name']} needs Sorcery and Magic to dispel.")
+            tg = b.get("target") or {}
+            row = c = rec = None
+            if tg.get("pid"):
+                row = db.execute("SELECT * FROM players WHERE id=? AND campaign_id=?", (str(tg["pid"]), cid)).fetchone()
+                if not row:
+                    return _fail(db, "That runner isn't in this game.")
+                c = load_char(row)
+                lst = c.get("sustained") or []
+                i = clamp_int(tg.get("index"), -1, len(lst) - 1, -1)
+                if i < 0:
+                    return _fail(db, "That spell isn't sustained any more.")
+                rec = lst[i]
+                name, hits, dv = rec["name"], R._int(rec.get("hits")), R.sustained_dv(c, rec)
+            else:
+                name = str(tg.get("name") or "the spell")[:60]
+                hits, dv = clamp_int(tg.get("hits"), 0, 30, 0), clamp_int(tg.get("dv"), 1, 30, 3)
+            note = spend_action(caster, ACT.DISPEL["action"], "dispelling", bool(b.get("force")))
+            pool = R._int(f.attrs.get(attr)) + f.rank(sk)
+            roll, resist = DICE.new_roll(pool), DICE.new_roll(max(1, dv * 2))
+            net = max(0, roll["hits"] - resist["hits"])
+            left = max(0, hits - net)
+            if rec is not None:
+                if left:
+                    rec["hits"] = left
+                else:
+                    c["sustained"].remove(rec)
+                save_char(row["id"], c)
+            msg = (f"{caster['name']} dispels {name}: {roll['hits']} hits on {pool} dice vs {resist['hits']} on {dv * 2} (Drain Value × 2), "
+                   f"{net} net → " + (f"{name} is dispelled." if not left else f"{name} keeps {left} of its {hits} hits.") + (f" {note}." if note else ""))
+            add_roll(cid, None, "GM", GM_COLOR, "note", {"text": msg})
+        elif op == "grapple":
+            e = next((x for x in t["entries"] if x["id"] == b.get("id")), None)
+            act_ = ACT.GRAPPLE["actions"].get(b.get("action") or "")
+            if not e or not act_:
+                return _fail(db, "Pick a grapple action.")
+            g = e.get("grapple") or {}
+            if not g or (g.get("role") == "held") != bool(act_.get("held")):
+                return _fail(db, f"{e['name']} isn't " + ("held" if act_.get("held") else "holding anyone") + ".")
+            other = next((x for x in t["entries"] if x["id"] == g.get("with")), None)
+            fa, _sa = _entry_fighter(db, e)
+            fo, _so = _entry_fighter(db, other) if other else (None, None)
+            if not fa or not fo:
+                release_grapple(db, t, e)
+                return _fail(db, "The other side of the grapple is gone; it's over.")
+            note = spend_action(e, "major", act_["name"], bool(b.get("force")))
+            a_parts = _pool_parts(fa, act_["attack"]) + ([["Wound modifier", fa.wound]] if fa.wound else [])
+            d_parts = _pool_parts(fo, act_["defense"]) + ([["Wound modifier", fo.wound]] if fo.wound else [])
+            if act_.get("penalty"):
+                d_parts.append(["Restrained", ACT.GRAPPLE["restrained_defense"]])
+            ar, dr_ = DICE.new_roll(max(1, X._total(a_parts))), DICE.new_roll(max(1, X._total(d_parts)))
+            net = ar["hits"] - dr_["hits"]
+            ok = ar["hits"] > 0 and net >= 0
+            line = f"{e['name']}: {act_['name']} ({ar['hits']} vs {dr_['hits']} hits)"
+            key = b.get("action")
+            if key == "restrain":
+                if not ok:
+                    release_grapple(db, t, e)
+                line += " → " + ("still holding " + other["name"] if ok else f"{other['name']} breaks loose")
+            elif key == "break":
+                if ok:
+                    release_grapple(db, t, e)
+                line += " → " + ("free" if ok else "still held")
+            elif key == "damage" and ok:
+                dv = (R._int(fa.attrs.get("Strength"), 1) + 1) // 2 + max(0, net)
+                soak = R.hits_of(X._total(fo.soak_pool()))
+                dmg = max(0, dv - soak)
+                _entry_damage(db, other, "stun", dmg)
+                line += f" → DV {dv}S, soaked {soak} → {dmg} Stun to {other['name']}"
+            elif key == "tackle" and ok:
+                dv = R._int(fa.attrs.get("Body"), 1) + max(0, net)
+                soak = R.hits_of(R._int(fo.attrs.get("Body"), 1))
+                dmg = max(0, dv - soak)
+                _entry_damage(db, other, "stun", dmg)
+                _entry_status(db, other, "Prone", True)
+                line += f" → {other['name']} goes Prone, DV {dv}S, resisted {soak} → {dmg} Stun"
+            else:
+                line += " → no effect"
+            add_roll(cid, None, "GM", GM_COLOR, "note", {"text": line + "." + (f" {note}." if note else "")})
         elif op == "use":
             e = next((x for x in t["entries"] if x["id"] == b.get("id")), None)
             if not e:
@@ -384,6 +686,44 @@ def gm_sight(map_id):
     return jsonify({"sight": res})
 
 
+def _owner_char(db, cid, att, att_ref, cache):
+    """(pid, character) owning an attacker's mounted weapons: the runner, or the owner of a linked vehicle marker."""
+    if att_ref[0] == "player":
+        return att_ref[1], cache[att_ref[1]][1]
+    link = (att.npc or {}).get("link") or {}
+    pid = link.get("pid")
+    if not pid:
+        return None, None
+    if pid not in cache:
+        row = db.execute("SELECT * FROM players WHERE id=? AND campaign_id=?", (pid, cid)).fetchone()
+        if not row:
+            return None, None
+        cache[pid] = (row, load_char(row))
+    return pid, cache[pid][1]
+
+
+def _linked_vehicle_item(db, cid, f, cache):
+    """A runner's own vehicle behind a vehicle marker (its speed and mounts live on their sheet)."""
+    link = (f.npc or {}).get("link") or {}
+    if not link.get("pid"):
+        return None
+    pid, c = _owner_char(db, cid, f, ("marker", None), cache)
+    if not c:
+        return None
+    return next((x for x in c["inventory"] if x.get("uid") == link.get("uid")), None)
+
+
+def _mounted_options(c, only_vehicle=None):
+    """[(weapon, vehicle)] for every weapon in a mount (on one vehicle, or on all of them)."""
+    out = []
+    for w in c["inventory"]:
+        if w.get("mounted"):
+            _m, v = R.mount_vehicle(c, w)
+            if v and (only_vehicle is None or v.get("uid") == only_vehicle):
+                out.append((w, v))
+    return out
+
+
 def _ref_key(ref):
     return f"{(ref or {}).get('kind')}:{(ref or {}).get('id')}"
 
@@ -426,7 +766,14 @@ def gm_attack(map_id):
         force = bool(b.get("ignoreActions"))
         notes = []
         wkey = str(b.get("weapon") or "")
-        if att_ref[0] == "player":
+        if wkey.startswith("mount:"):
+            owner_pid, owner_c = _owner_char(db, cid, att, att_ref, cache)
+            if not owner_c:
+                return _fail(db, "That weapon mount belongs to nobody in this game.")
+            weapon = X.mount_profile(owner_c, wkey[6:], mode, rng, gunner=att_ref[0] == "player",
+                                     gunner_c=att.char if att_ref[0] == "player" else None)
+            weapon["owner"] = owner_pid
+        elif att_ref[0] == "player":
             weapon = X.char_weapon_profile(att, wkey, mode, rng, clamp_int(b.get("amp"), 0, 10, 0))
         elif wkey == "astral":
             weapon = X.astral_profile(att)
@@ -443,11 +790,43 @@ def gm_attack(map_id):
             weapon = X.npc_weapon_profile(att, w, mode)
             if b.get("dice") not in (None, ""):
                 weapon["parts"] = [["Dice", clamp_int(b.get("dice"), 0, 60, 0)]]
+            if (att.npc or {}).get("kind") in ("Vehicle", "Drone"):
+                pen = X.marker_speed_penalty(att.npc, _linked_vehicle_item(db, cid, att, cache))
+                if pen:
+                    weapon["parts"].append(["Speed Intervals", pen])
+                    if w.get("category") == "Ram":
+                        weapon["dv"] -= pen                # +1 DV per current Speed Interval
+                        notes.append(f"ram at speed: +{-pen} DV")
         n = len(targets)
         called = ACT.CALLED_SHOTS.get(b.get("called") or "")
         if called and called.get("melee") and not weapon.get("melee"):
             return _fail(db, f"{called['name']} is for melee attacks.")
+        eact_key = b.get("edgeAction") if b.get("edgeAction") in ACT.EDGE_ACTIONS else None
+        eact = ACT.EDGE_ACTIONS.get(eact_key or "")
+        att_cover = att.status("Cover") if not weapon.get("astral") and not weapon.get("matrix") else 0
+        if eact and eact.get("melee") and not weapon.get("melee"):
+            return _fail(db, f"{eact['name']} is for melee attacks.")
+        if eact and eact.get("ranged") and weapon.get("melee"):
+            return _fail(db, f"{eact['name']} is for ranged attacks.")
+        if eact and eact.get("cover") and att_cover < eact["cover"]:
+            return _fail(db, f"{eact['name']} needs the attacker in Cover IV.")
+        trip = bool(b.get("trip"))
+        if trip and not weapon.get("melee"):
+            return _fail(db, "Trip is a melee attack.")
+        grapple = bool(b.get("grapple"))
+        if grapple and (not weapon.get("melee") or "unarmed" not in (str(weapon.get("uid") or "") + weapon["name"].lower())):
+            return _fail(db, "Grappling is an unarmed melee attack.")
+        if grapple and n > 1:
+            return _fail(db, "Grapple one opponent at a time.")
+        physical_ranged = not weapon.get("melee") and not weapon.get("spell") and not weapon.get("astral") and not weapon.get("matrix")
+        aim_now = bool(b.get("aimNow"))
+        if aim_now and not physical_ranged:
+            return _fail(db, "Take Aim is for firearms, bows and other ranged weapons.")
         anticipation = bool(b.get("anticipation")) and n > 1
+        if anticipation and weapon.get("melee"):
+            return _fail(db, "Anticipation is for ranged Multiple Attacks.")
+        if b.get("intercept") and not weapon.get("melee"):
+            return _fail(db, "Intercept is a melee attack.")
 
         # line of sight (not needed in astral combat or when the GM says so)
         sights = {}
@@ -457,21 +836,75 @@ def gm_attack(map_id):
             if sg and not sg["los"] and not weapon.get("astral") and not weapon.get("matrix") and not b.get("ignoreSight"):
                 return _fail(db, f"{att.name} has no line of sight to {f.name} (walls or a closed door). Tick “Ignore line of sight” for indirect fire.")
 
-        # actions and Edge
-        what = "the Intercept" if b.get("intercept") else "the attack"
-        for cost, label in [("major", what)] + ([("minor", "Multiple Attacks")] if n > 1 else []) + ([("minor", "the called shot")] if called else []):
+        # actions (Intercept: Minor + the Attack Major; full auto splits without Multiple Attacks; attacking
+        # from Cover needs an extra Minor) and Edge (one expenditure per combat round)
+        costs = [("major", "the attack")]
+        if b.get("intercept"):
+            costs.append(("minor", "Intercept"))
+        fork = bool(weapon.get("matrix") and weapon.get("fork") and n == 2)    # Fork: two targets, no split
+        if n > 1 and weapon.get("mode") != "FA" and not fork:
+            costs.append(("minor", "Multiple Attacks"))
+        if called and called.get("minor"):
+            costs.append(("minor", "the called shot"))
+        if att_cover:
+            costs.append(("minor", "getting clear of cover"))
+        if trip:
+            costs.append(("minor", "Trip"))
+        if aim_now:
+            costs.append(("minor", "Take Aim"))
+        for cost, label in costs:
             note = spend_action(att.entry, cost, label, force)
             if note:
                 notes.append(note)
-        edge_cost = (called["edge"] if called else 0) + (ACT.ANTICIPATION["edge"] if anticipation else 0)
+        edge_cost = (called["edge"] if called else 0) + (ACT.ANTICIPATION["edge"] if anticipation else 0) + (eact["edge"] if eact else 0)
+        if edge_cost:
+            edge_once(t, att.entry, att.name, force)
         att.spend_edge(edge_cost, "this attack")
         if edge_cost:
             notes.append(f"{att.name} spends {edge_cost} Edge")
 
+        # Take Aim: the bonus built up in the tracker (+1 now with "Take Aim first"); used up by this attack
+        aim_dice = 0
+        rnd = t.get("round") if t.get("active") else None
+        if att.entry is not None and t.get("active"):
+            if aim_now:
+                if att.entry.get("aimRound") == rnd and not force:
+                    return _fail(db, f"{att.name} already took aim this round (once per round).")
+                att.entry["aim"] = min(R._int(att.attrs.get(ACT.TAKE_AIM["max"]), 1), _clamp0(att.entry.get("aim")) + 1)
+                att.entry["aimRound"] = rnd
+            if physical_ranged:
+                aim_dice = _clamp0(att.entry.get("aim"))
+                att.entry["aim"] = 0
+            att.entry["aimTouch"] = rnd
+        elif aim_now:
+            aim_dice = 1
+        if aim_dice:
+            notes.append(f"Take Aim +{aim_dice}")
+        tactical_att = bool(att.entry and att.entry.get("troll") == rnd and rnd is not None)
+
+        wrests = b.get("wrest") if isinstance(b.get("wrest"), dict) else {}
+        rolls_ = b.get("tactical") if isinstance(b.get("tactical"), dict) else {}
+        for ref, tgt, tref in targets:
+            k = _ref_key(ref)
+            dk = (b.get("defenses") or {}).get(k)
+            if wrests.get(k) and (dk != "block" or not weapon.get("melee")):
+                return _fail(db, "Wrest goes with a Block against a melee attack.")
+            if wrests.get(k) and tgt.edge() < ACT.DEFENSE_EDGE_ACTIONS["wrest"]["edge"]:
+                return _fail(db, f"{tgt.name} needs {ACT.DEFENSE_EDGE_ACTIONS['wrest']['edge']} Edge to Wrest (has {tgt.edge()}).")
+            if rolls_.get(k):
+                if dk != "hit_the_dirt":
+                    return _fail(db, "Tactical Roll goes with Hit the Dirt.")
+                edge_once(t, tgt.entry, tgt.name, force)
+                tgt.spend_edge(ACT.DEFENSE_EDGE_ACTIONS["tactical_roll"]["edge"], "Tactical Roll")
+                if tgt.entry is not None:
+                    tgt.entry["troll"] = rnd
+                notes.append(f"{tgt.name} spends 1 Edge on a Tactical Roll")
+
         # ammo: each target takes the firing mode's rounds, full auto is one burst for everyone
-        if att_ref[0] == "player" and weapon.get("uid") not in (None, "unarmed") and not weapon.get("spell") and not weapon.get("astral"):
+        ammo_c = cache[weapon["owner"]][1] if weapon.get("owner") else (att.char if att_ref[0] == "player" else None)
+        if ammo_c is not None and weapon.get("uid") not in (None, "unarmed") and not weapon.get("spell") and not weapon.get("astral"):
             for k in range(1 if weapon.get("mode") == "FA" else n):
-                note = R.consume_attack(att.char, weapon["uid"], weapon.get("mode"))
+                note = R.consume_attack(ammo_c, weapon["uid"], weapon.get("mode"))
                 if note and k == 0:
                     notes.append(note)
 
@@ -494,17 +927,43 @@ def gm_attack(map_id):
             chosen = covers.get(k, "auto")
             cover = auto_cover if chosen in (None, "auto") else clamp_int(chosen, 0, 4, 0)
             cover = max(cover, tgt.status("Cover"))
-            cs = None
-            if weapon.get("spell") and b.get("counterspell"):
-                prot, _ = _fighter(db, cid, data, b["counterspell"], cache)
-                cs = [prot.name, prot.rank(ACT.COUNTERSPELL["skill"])]
+            cs = counterspell_on(t, tgt.entry) if weapon.get("spell") else None
             opts = {"range": rng, "attack_mod": b.get("attackMod"), "defense_mod": b.get("defenseMod"),
                     "soak_mod": b.get("soakMod"), "wild": b.get("wild"), "extra_dv": b.get("extraDv"),
                     "unopposed": bool(b.get("unopposed")), "defense": dkey, "cover": cover,
                     "full_defense": bool(tgt.entry and tgt.entry.get("fd")), "called": b.get("called") or None,
-                    "split": 1 if anticipation else n, "counterspell": cs, "dirt": bool(att.entry and att.entry.get("dirt"))}
+                    "split": 1 if anticipation or fork else n, "counterspell": cs, "dirt": bool(att.entry and att.entry.get("dirt")),
+                    "att_cover": att_cover, "edge_action": eact_key, "astral_type": b.get("astralType"),
+                    "aim": aim_dice, "trip": trip, "grapple": grapple, "tactical_att": tactical_att,
+                    "tactical_def": bool(tgt.entry and rnd is not None and tgt.entry.get("troll") is not None and rnd <= tgt.entry["troll"] + 1)}
+            restrained = bool(tgt.status("Restrained"))
+            stray_item = None
             res = X.resolve_attack(att, weapon, tgt, opts)
             res["sight"] = sg
+            if restrained:
+                res["restrained"] = True
+            # Wrest: after a successful Block, Close Combat + Agility with the attacker's Strength as threshold
+            if wrests.get(k) and not res.get("hit"):
+                wa = ACT.DEFENSE_EDGE_ACTIONS["wrest"]
+                edge_once(t, tgt.entry, tgt.name, force)
+                tgt.spend_edge(wa["edge"], "Wrest")
+                w_parts = _pool_parts(tgt, wa["test"])
+                w_roll = DICE.new_roll(max(1, X._total(w_parts)))
+                thr = R._int(att.attrs.get(wa["threshold"]), 1)
+                got = "takes it" if w_roll["hits"] > thr else "knocks it to the ground" if w_roll["hits"] == thr else "can't get hold of it"
+                res["wrest"] = {"parts": w_parts, "dice": w_roll["dice"], "hits": w_roll["hits"], "threshold": thr, "outcome": got}
+                notes.append(f"{tgt.name} wrests at {att.name}'s {weapon['name']} ({w_roll['hits']} hits vs Strength {thr}): {got}")
+            # a missed attack on a restrained character may hit the one holding them
+            if restrained and not res.get("hit") and tgt.entry and (tgt.entry.get("grapple") or {}).get("with") != (att.entry or {}).get("id"):
+                ge = next((x for x in t["entries"] if x["id"] == (tgt.entry.get("grapple") or {}).get("with")), None)
+                if ge and (ge.get("kind") == "player" or ge.get("mapId") == map_id):
+                    gref = {"kind": ge["kind"], "id": ge["ref"]}
+                    gf, gtref = _fighter(db, cid, data, gref, cache)
+                    gf.entry = ge
+                    stray = X.resolve_attack(att, weapon, gf, dict(opts, defense=None, cover=0, attack_roll={
+                        "dice": res["attack"]["dice"], "hits": res["attack"]["hits"], "glitch": res["attack"]["glitch"], "critical": res["attack"]["critical"]}))
+                    stray["stray"] = f"missed {tgt.name} and went at {gf.name}, who holds them"
+                    stray_item = (stray, gf, gtref)
             if dkey == "full_defense" and tgt.entry:
                 tgt.entry["fd"] = True
             if dkey == "hit_the_dirt":
@@ -512,7 +971,23 @@ def gm_attack(map_id):
                 if tgt.entry:
                     tgt.entry["dirt"] = True
                 res.setdefault("effects", []).append(["Prone", None])
+            if res.get("grapple", {}).get("held"):
+                start_grapple(db, t, att.entry, tgt.entry)
+                ast = att.char.setdefault("statuses", {}) if att.char is not None else (att.marker.setdefault("statuses", {}) if att.marker is not None else {})
+                X.add_status(ast, "Grappling")
             results.append((res, tgt, tref))
+            if stray_item:
+                results.append(stray_item)
+
+        if len(results) > 1 and results[0][0].get("ar") is not None:
+            top = max(range(len(results)), key=lambda i: results[i][0]["dr"])
+            diff = results[0][0]["ar"] - results[top][0]["dr"]
+            for i, (res, _, _) in enumerate(results):
+                res["edge_hint"] = None
+            if diff >= ACT.EDGE_HINT_MARGIN and not att_cover:
+                results[0][0]["edge_hint"] = "attacker"
+            elif diff <= -ACT.EDGE_HINT_MARGIN:
+                results[top][0]["edge_hint"] = "defender"
 
         if weapon.get("illegal") and att_ref[0] == "player":
             os_add = sum(res["defense"]["hits"] for res, _, _ in results)
@@ -529,22 +1004,38 @@ def gm_attack(map_id):
         apply = b.get("apply", True)
         auto_edge = b.get("autoEdge", True)
         for res, tgt, tref in results:
+            icr = res.get("ic") or {}
+            if apply and res.get("hit") and icr.get("reduce") and tref[0] == "player":
+                c = cache[tref[1]][1]
+                mods = c.setdefault("matrix_state", {}).setdefault("ic_mods", {})
+                mods[icr["reduce"]] = R._int(mods.get(icr["reduce"])) - icr["by"]
+                notes.append(f"{tgt.name}: {icr['reduce'].replace('_', ' ').title()} −{icr['by']} until they leave the host")
+            if res.get("hit") and icr.get("linklock"):
+                notes.append(f"{tgt.name} is link-locked")
+            if res.get("damage") and res.get("track") == "matrix" and weapon.get("lockdown"):
+                notes.append(f"{tgt.name} is link-locked (Lockdown)")
+            if apply and res.get("damage") and res.get("track") == "matrix" and tref[0] == "player" \
+                    and R.program_running(tgt.d, "Virtual Machine"):
+                res["damage"] += MX_VM_EXTRA
+                notes.append(f"{tgt.name}: +1 box from running a Virtual Machine")
             if apply and res.get("damage") and res["track"] == "matrix":
                 if tref[0] == "player":
                     c = cache[tref[1]][1]
-                    note = R.matrix_damage(c, res["damage"])
-                    if note:
-                        notes.append(f"{tgt.name}: {note}")
+                    if icr.get("damage") != "bio":
+                        note = R.matrix_damage(c, res["damage"])
+                        if note:
+                            notes.append(f"{tgt.name}: {note}")
                     bio = weapon.get("biofeedback")
                     mode = (c.get("matrix") or {}).get("mode", "AR")
-                    if bio and mode.startswith("VR"):
+                    # IC biofeedback hits whoever it reaches; the Biofeedback program needs a VR target
+                    if bio and (mode.startswith("VR") or icr):
                         hot = "hot" in mode
-                        kind = "P" if (bio == "P" and hot) or (bio == "sim" and hot) else "S"
+                        kind = "P" if (bio in ("P", "sim") and hot) else "S"
                         res_hits = R.hits_of(R._int(tgt.attrs.get("Willpower"), 1))
                         bdmg = max(0, res["damage"] - res_hits)
                         if bdmg:
                             R.take_damage(c, "physical" if kind == "P" else "stun", bdmg)
-                        notes.append(f"{tgt.name}: biofeedback {res['damage']}{kind}, resisted {res_hits} → {bdmg}")
+                        notes.append(f"{tgt.name}: biofeedback {res['damage']}{kind}, resisted {res_hits} (Willpower) → {bdmg}")
                 else:
                     X.marker_damage(tref[1]["cm"], "physical", res["damage"])
                     sync_vehicle(db, tref[1], cache)
@@ -553,8 +1044,10 @@ def gm_attack(map_id):
                 if tref[0] == "player":
                     c = cache[tref[1]][1]
                     R.take_damage(c, res["track"], res["damage"])
+                    if res.get("knockout"):
+                        c["stun_damage"] = R.derive(c)["stun_boxes"]
                     for name, val in res.get("effects") or []:
-                        c.setdefault("statuses", {})[name] = val if val else True
+                        X.add_status(c.setdefault("statuses", {}), name, val)
                 else:
                     mk = tref[1]
                     track, dmg = vehicle_hit(mk, res)
@@ -562,16 +1055,21 @@ def gm_attack(map_id):
                         notes.append(res["note_vehicle"])
                         res["damage"] = 0
                     X.marker_damage(mk["cm"], track, dmg)
+                    if res.get("knockout") and mk.get("cm"):
+                        if mk["cm"].get("grunt"):
+                            mk["cm"]["p"] = max(mk["cm"]["p"], mk["cm"]["pm"])
+                        else:
+                            mk["cm"]["s"] = mk["cm"].get("sm", 0)
                     sync_vehicle(db, mk, cache)
                     for name, val in res.get("effects") or []:
                         if (mk.get("npc") or {}).get("kind") in ("Vehicle", "Drone") and name == "Prone":
                             continue
-                        mk.setdefault("statuses", {})[name] = val if val else True
+                        X.add_status(mk.setdefault("statuses", {}), name, val)
                     res["targetStatus"] = X.marker_status(mk["cm"], mk.get("npc"))
             elif res.get("effects"):
                 st = cache[tref[1]][1].setdefault("statuses", {}) if tref[0] == "player" else tref[1].setdefault("statuses", {})
                 for name, val in res["effects"]:
-                    st[name] = val if val else True
+                    X.add_status(st, name, val)
             if auto_edge and res.get("edge_hint"):
                 who = att if res["edge_hint"] == "attacker" else tgt
                 e = who.entry
@@ -582,6 +1080,14 @@ def gm_attack(map_id):
                             e["edgeGained"] = _clamp0(e.get("edgeGained")) + got
                         res["edge_awarded"] = who.name
                         notes.append(f"{who.name} gains 1 Edge (AR vs DR)")
+            if res.get("restrained") and not res.get("stray"):
+                e = att.entry
+                if e is None or _clamp0(e.get("edgeGained")) < ACT.EDGE_GAIN_CAP:
+                    got = att.gain_edge(ACT.GRAPPLE["edge_on_restrained"])
+                    if got:
+                        if e is not None:
+                            e["edgeGained"] = _clamp0(e.get("edgeGained")) + got
+                        notes.append(f"{att.name} gains 1 Edge against a restrained target")
             res["applied"] = bool(apply)
         for pid, (row, c) in cache.items():
             R.clamp_state(c)
@@ -605,6 +1111,33 @@ def gm_attack(map_id):
         db.rollback()
         raise
     return jsonify({"result": out[0], "results": out, "rolls": roll_rows(cid, gamemaster=True) if cid else []})
+
+
+def edge_once(t, entry, name, force=False):
+    """One Edge expenditure per combat round (core p. 45)."""
+    if not t.get("active") or entry is None:
+        return
+    if entry.get("edgeRound") == t.get("round") and not force:
+        raise R.RuleError(f"{name} already spent Edge this combat round (one expenditure per round).")
+    entry["edgeRound"] = t.get("round")
+
+
+def player_edge_round(cid, pid):
+    """A runner in an active combat makes at most one Edge expenditure per combat round."""
+    t = load_tracker(cid)
+    e = entry_for(t, "player", pid)
+    if not e:
+        return
+    edge_once(t, e, e["name"])
+    save_tracker(cid, t)
+
+
+def counterspell_on(t, entry):
+    """[caster, hits] when this combatant is under a counterspelling boost that still lasts."""
+    cs = (entry or {}).get("cs")
+    if cs and t.get("active") and _clamp0(t.get("round")) <= _clamp0(cs.get("until")):
+        return [cs.get("by") or "counterspell", _clamp0(cs.get("hits"))]
+    return None
 
 
 def resolve_ongoing(db, cid, t):
@@ -718,13 +1251,21 @@ def gm_attack_options(map_id):
             for mk_ in ("data_spike", "tarpit"):
                 pool = next((x for x in R.pools(c, d) if x["key"] == f"matrix:{mk_}"), None)
                 if pool:
-                    dv = (d["matrix"]["attack"] + 1) // 2 if mk_ == "data_spike" else 1
+                    dv = (d["matrix"]["ar"] + 1) // 2 if mk_ == "data_spike" else 1
                     out.append({"key": f"matrix:{mk_}", "name": f"{pool['label']} (Matrix)", "pool": pool["value"], "dv": f"{dv}+net Matrix",
                                 "ar": [d["matrix"]["ar"]] * 5, "modes": [], "matrix": True})
         if d.get("awakened") and (c.get("skills") or {}).get("Astral"):
             a = X.astral_profile(f)
-            out.append({"key": "astral", "name": "Astral combat", "pool": X._total(a["parts"]), "dv": f"{a['dv']}{a['type']}",
-                        "ar": [None] * 5, "modes": [], "astral": True, "melee": True})
+            out.append({"key": "astral", "name": "Astral combat", "pool": X._total(a["parts"]), "dv": f"{a['dv']} (P or S)",
+                        "ar": a["ar"], "modes": [], "astral": True, "melee": True})
+        for w, v in _mounted_options(c):
+            try:
+                p = X.mount_profile(c, w["uid"], None, None, gunner=True)
+            except R.RuleError:
+                continue
+            out.append({"key": f"mount:{w['uid']}", "name": f"{w['name']} on the {v['name']} (gunner)", "pool": X._total(p["parts"]),
+                        "dv": f"{p['dv']}{p['type']}", "ar": p["ar"], "modes": CAT.modes_list(w.get("modes")),
+                        "loaded": w.get("loaded"), "clip": w.get("clip"), "mounted": True})
     else:
         for i, w in enumerate((f.npc or {}).get("weapons") or []):
             p = X.npc_weapon_profile(f, w)
@@ -733,10 +1274,22 @@ def gm_attack_options(map_id):
         ua = f.attrs.get("Strength", 1)
         out.append({"key": "-1", "name": "Unarmed", "pool": f.attrs.get("Agility", 1) + R._int((f.skills or {}).get("Close Combat")),
                     "dv": f"{(ua + 1) // 2}S", "ar": [f.attrs.get("Reaction", 1) + ua, None, None, None, None], "modes": [], "melee": True})
+        link = (f.npc or {}).get("link") or {}
+        if link.get("pid"):
+            cache = {}
+            pid, oc = _owner_char(db, mrow["campaign_id"], f, ref, cache)
+            for w, v in (_mounted_options(oc, link.get("uid")) if oc else []):
+                try:
+                    p = X.mount_profile(oc, w["uid"], None, None, gunner=False)
+                except R.RuleError:
+                    continue
+                out.append({"key": f"mount:{w['uid']}", "name": f"{w['name']} (the drone fires)", "pool": X._total(p["parts"]),
+                            "dv": f"{p['dv']}{p['type']}", "ar": p["ar"], "modes": CAT.modes_list(w.get("modes")),
+                            "loaded": w.get("loaded"), "clip": w.get("clip"), "mounted": True})
         if (f.npc or {}).get("kind") == "Spirit" or f.rank("Astral"):
             a = X.astral_profile(f)
-            out.append({"key": "astral", "name": "Astral combat", "pool": X._total(a["parts"]), "dv": f"{a['dv']}{a['type']}",
-                        "ar": [None] * 5, "modes": [], "astral": True, "melee": True})
+            out.append({"key": "astral", "name": "Astral combat", "pool": X._total(a["parts"]), "dv": f"{a['dv']} (P or S)",
+                        "ar": a["ar"], "modes": [], "astral": True, "melee": True})
     cid = mrow["campaign_id"]
     e = entry_for(load_tracker(cid), ref[0], ref[1] if ref[0] == "player" else ref[1]["id"]) if cid else None
     major, minor = actions_left(e) if e else (None, None)
@@ -746,9 +1299,17 @@ def gm_attack_options(map_id):
         mdr = f.matrix_dr()
     except R.RuleError:
         mdr = None
-    return jsonify({"options": out, "dr": f.dr, "matrixDr": mdr, "name": f.name, "edge": f.edge(), "defense": defense,
+    t = load_tracker(cid) if cid else {"active": False}
+    return jsonify({"options": out, "dr": f.dr, "matrixDr": mdr, "astralDr": f.astral_dr(), "name": f.name, "edge": f.edge(), "defense": defense,
                     "inCombat": e is not None, "majorLeft": major, "minorLeft": minor, "fullDefense": bool(e and e.get("fd")),
-                    "dirt": bool(e and e.get("dirt")), "statuses": f.statuses})
+                    "dirt": bool(e and e.get("dirt")), "statuses": f.statuses, "cover": f.status("Cover"),
+                    "counterspell": counterspell_on(t, e), "edgeSpent": bool(e and e.get("edgeRound") == t.get("round")),
+                    "canCounterspell": bool(R._int(f.attrs.get("Magic")) and f.rank("Sorcery")),
+                    "aim": _clamp0((e or {}).get("aim")), "aimedThisRound": bool(e and t.get("active") and e.get("aimRound") == t.get("round")),
+                    "aimMax": R._int(f.attrs.get(ACT.TAKE_AIM["max"]), 1),
+                    "tacticalRoll": bool(e and t.get("active") and e.get("troll") is not None and t.get("round", 0) <= e["troll"] + 1),
+                    "restrained": bool(f.status("Restrained")), "grapple": (e or {}).get("grapple"),
+                    "wrestAgility": f.rank("Close Combat") + R._int(f.attrs.get("Agility"), 1), "strength": R._int(f.attrs.get("Strength"), 1)})
 
 
 # ====================================================================== statuses
@@ -774,7 +1335,7 @@ def gm_status(map_id):
             c = load_char(row)
             st = c.setdefault("statuses", {})
             if on:
-                st[name] = val
+                X.add_status(st, name, val)
             else:
                 st.pop(name, None)
             save_char(row["id"], c)
@@ -789,7 +1350,7 @@ def gm_status(map_id):
                 return _fail(db, "Marker not found.")
             st = mk.setdefault("statuses", {})
             if on:
-                st[name] = val
+                X.add_status(st, name, val)
             else:
                 st.pop(name, None)
             if not st:

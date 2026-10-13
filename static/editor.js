@@ -764,7 +764,43 @@ function markerNpc(m) {
     h('div.hint', `DR ${n.dr} · Init ${n.init} + ${n.init_dice}D6 · ${n.grunt ? `Grunt, PR ${n.pr} (group Edge ${n.edge})` : n.kind}` + (n.move ? ` · Move ${n.move}` : '')),
     n.weapons.length ? h('div.hint', 'Weapons: ' + n.weapons.map(w => `${w.name} ${w.dv}${w.type}${w.grenade ? '' : ' AR ' + SR.arText(w.ar)}`).join('; ')) : null,
     h('details', h('summary.hint', 'Skills & notes'), h('div.hint', Object.entries(n.skills || {}).map(([k, v]) => `${k} ${v}`).join(', ')), h('pre.hint', { style: { whiteSpace: 'pre-wrap' } }, n.notes || '')));
+  if (n.kind === 'Vehicle' || n.kind === 'Drone') box.append(vehicleBox(m));
   return box;
+}
+/* A vehicle or drone marker: speed (Speed Interval penalties, ramming DV) and weapon mounts */
+function vehicleBox(m) {
+  const n = m.npc, v = n.vehicle || {}, linked = !!n.link;
+  const accel = +v.accel || 0, interval = +v.speed_interval || 0, speed = +v.speed || 0;
+  const send = async body => {
+    try { const r = await api(`/api/maps/${MAP_ID}/marker`, 'POST', { id: m.id, ...body }); Object.assign(m, r.marker); invalidate(); renderInspector(); if (linked) reloadContext(); }
+    catch (e) { toast(e.message); }
+  };
+  const box = h('div.vehicle-box');
+  const pen = interval ? Math.floor(speed / interval) : 0;
+  box.append(h('div.row.tight', h('b', 'Speed'),
+    linked ? h('span.hint', 'kept on the owner’s sheet') : h('span', `${speed} m/round`, pen ? h('span.warn', ` · −${pen} dice, +${pen} ram DV`) : null),
+    h('button.small', { type: 'button', title: `Slow down by up to ${accel} m (Acceleration)`, onclick: () => send({ vehicleSpeed: { change: -accel } }) }, `−${accel}`),
+    h('button.small', { type: 'button', title: `Speed up by up to ${accel} m (Acceleration)`, onclick: () => send({ vehicleSpeed: { change: accel } }) }, `+${accel}`),
+    h('button.small.ghost', { type: 'button', onclick: () => send({ vehicleSpeed: { set: 0 } }) }, 'Stop')),
+    h('div.hint', `Speed Interval ${interval || '—'}, top speed ${v.top_speed || '—'}: −1 die per interval on Handling tests and attacks from it.`));
+  if (linked) { box.append(h('div.hint', 'Its weapon mounts are on the owner’s sheet; the drone fires them from the attack dialog.')); return box; }
+  const room = Math.floor((+v.body || 0) / SR.CAT.combat.mounts.bodyPerMount);
+  const mounted = (n.weapons || []).map((w, i) => [w, i]).filter(([w]) => w.mount);
+  const used = mounted.reduce((a, [w]) => a + (w.mount === 'heavy' ? 2 : 1), 0);
+  box.append(h('div.row.tight.mt', h('b', 'Weapon mounts'), h('span.hint', `${used} of ${room} used (Body / 3; heavy counts 2)`),
+    used < room ? h('button.small', { type: 'button', onclick: () => mountDialog(m, send, room - used) }, 'Mount a weapon…') : null));
+  for (const [w, i] of mounted) box.append(h('div.row.tight', h('span.grow', `${w.name} (${w.mount}) · ${w.pool} dice: ${w.pool_label}`),
+    h('button.small.ghost', { type: 'button', title: 'Remove it', onclick: () => send({ unmount: i }) }, '✕')));
+  return box;
+}
+async function mountDialog(m, send, free) {
+  const M = SR.CAT.combat.mounts, ok_ = new Set(free >= 2 ? [...M.standard, ...M.heavy] : M.standard);
+  const items = SR.CAT.store.items.filter(e => e.cat === 'Ranged' && ok_.has(e.sub)).sort((a, b) => a.name.localeCompare(b.name));
+  const sel = h('select', items.map(e => option(e.id, `${e.name} (${e.sub}${M.heavy.includes(e.sub) ? ', heavy mount' : ''}) · DV ${e.dv}`)));
+  const rating = h('input', { type: 'number', min: 0, max: 9, value: 3, style: { width: '4.5rem' } });
+  const ok = await UI.modal('Mount a weapon', h('div', h('p.hint', 'The drone fires it with Sensor + its Targeting autosoft (Sensor − 1 without one). Standard mounts take an assault rifle or smaller; machine guns, sniper rifles and launchers need a heavy mount (two of the vehicle’s mounts).'),
+    h('label.stack', 'Weapon', sel), h('label', 'Targeting autosoft rating (0 = none)', rating)), { ok: 'Mount', narrow: true });
+  if (ok) send({ mount: { ref: sel.value, autosoft: +rating.value || 0 } });
 }
 async function pickTemplate(m) {
   const sel = h('select', option('', 'Pick a template…'));
@@ -829,7 +865,11 @@ function renderCombat() {
       { type: 'button', role: 'listitem', title: `${e.name}: ${e.total == null ? 'no initiative yet' : 'initiative ' + e.total}${e.minor ? ` · 1 Major + ${e.minor} Minor` : ''}${e.hidden ? ' · hidden from players' : ''}. Click for options.`,
         onclick: ev => chipMenu(e, ev.currentTarget) },
       h('span.dot', { style: { background: e.color } }), h('span.nm', e.name),
-      h('b.sc', e.total == null ? '–' : e.total), SR.actionPips(e), e.hidden ? h('span.eye', { title: 'Hidden from players' }, '◌') : null);
+      h('b.sc', e.total == null ? '–' : e.total), SR.actionPips(e), e.hidden ? h('span.eye', { title: 'Hidden from players' }, '◌') : null,
+      e.surprised ? h('span.flag', { title: 'Surprised: no actions or Edge this round' }, '!') : null,
+      e.cs && e.cs.until >= t.round ? h('span.flag.cs', { title: `Counterspell by ${e.cs.by}: +${e.cs.hits} vs spells until round ${e.cs.until}` }, '✦') : null,
+      e.aim ? h('span.flag', { title: `Taking aim: +${e.aim} on the next ranged attack` }, `🎯${e.aim}`) : null,
+      e.grapple ? h('span.flag', { title: e.grapple.role === 'held' ? 'Restrained in a grapple' : 'Holding someone in a grapple' }, e.grapple.role === 'held' ? '🤼' : '✊') : null);
     order.append(chip);
   }
   if (!t.entries.length) order.append(h('span.strip-idle', 'Nobody in the order yet. Use + Add.'));
@@ -867,6 +907,13 @@ function chipMenu(e, anchor) {
     h('button', { type: 'button', onclick: act(() => trackerOp('roll', { id: e.id })) }, 'Roll initiative'),
     e.kind !== 'custom' ? h('button', { type: 'button', onclick: act(() => attackDialog({ kind: e.kind, id: e.ref })) }, '⚔ Attack with them…') : null,
     e.kind !== 'custom' ? h('button', { type: 'button', onclick: act(() => attackDialog(null, { kind: e.kind, id: e.ref })) }, 'Attack them…') : null,
+    e.kind !== 'custom' ? h('button', { type: 'button', title: SR.CAT.combat.takeAim.desc, disabled: e.aimRound === (S.tracker || {}).round,
+      onclick: act(() => trackerOp('aim', { id: e.id })) }, `🎯 Take Aim${e.aim ? ` (+${e.aim} now)` : ''}`) : null,
+    e.kind !== 'custom' ? h('button', { type: 'button', title: SR.CAT.combat.counterspell.desc, onclick: act(() => counterspellDialog(e)) }, '✦ Counterspell…') : null,
+    e.kind !== 'custom' ? h('button', { type: 'button', title: SR.CAT.combat.dispel.desc, onclick: act(() => dispelDialog(e)) }, '✦ Dispel a spell…') : null,
+    e.grapple ? h('div.cm-grapple', h('span.hint', e.grapple.role === 'held' ? 'Restrained:' : 'Grappling:'),
+      Object.entries(SR.CAT.combat.grapple).filter(([, g]) => g.held === (e.grapple.role === 'held')).map(([k, g]) =>
+        h('button.small', { type: 'button', title: g.desc, onclick: act(async () => { await trackerOp('grapple', { id: e.id, action: k }); await reloadContext(); }) }, g.name))) : null,
     e.kind !== 'player' ? h('button', { type: 'button', onclick: act(() => trackerOp('set', { id: e.id, hidden: !e.hidden })) }, e.hidden ? 'Reveal to players' : 'Hide from players') : null,
     h('button.danger', { type: 'button', onclick: act(() => trackerOp('remove', { id: e.id })) }, 'Remove from combat'));
   document.body.append(menu);
@@ -887,13 +934,51 @@ function combatantPicker(list, checkedFn) {
 async function startCombat() {
   const list = combatants();
   const picker = combatantPicker(list, () => true);
-  const roll = h('input', { type: 'checkbox', checked: true }), vis = h('input', { type: 'checkbox' });
+  const roll = h('input', { type: 'checkbox', checked: true }), vis = h('input', { type: 'checkbox' }), surp = h('input', { type: 'checkbox' });
+  const amb = combatantPicker(list, () => false);
+  const ambBox = h('div.mt', { hidden: true }, h('p.hint', 'Who set up the ambush? They don’t roll.'), amb);
+  surp.onchange = () => { ambBox.hidden = !surp.checked; };
   const ok = await UI.modal('Start combat', h('div', list.length ? picker : h('p.hint', 'No tokens or enemy markers on this map. You can still add combatants later.'),
     h('label.check.mt', roll, 'Roll initiative for the NPCs now'), h('label.check', vis, 'Show the order to players right away'),
+    h('label.check', { title: 'Reaction + Intuition (3): whoever fails can’t act or spend Edge in the first round' }, surp, 'Surprise test for everyone but the ambushers'), ambBox,
     h('p.hint', 'Players roll their own initiative from their dice panel; it lands here.')), { ok: 'Start' });
   if (!ok) return;
   const sel = [...picker.querySelectorAll('input:checked')].map(i => i.dataset);
-  await trackerOp('start', { players: sel.filter(x => x.kind === 'player').map(x => x.id), mapId: MAP_ID, markers: sel.filter(x => x.kind === 'marker').map(x => x.id), roll: roll.checked, visible: vis.checked });
+  const ambushers = [...amb.querySelectorAll('input:checked')].map(i => i.dataset.id);
+  await trackerOp('start', { players: sel.filter(x => x.kind === 'player').map(x => x.id), mapId: MAP_ID, markers: sel.filter(x => x.kind === 'marker').map(x => x.id),
+    roll: roll.checked, visible: vis.checked, surprise: surp.checked, ambushers });
+}
+/* Counterspelling (boosted defense): a Major Action; Sorcery + Magic hits protect the chosen combatants against spells */
+async function counterspellDialog(e) {
+  const others = (S.tracker.entries || []);
+  const picker = h('div.check-grid', others.map(x => h('label.check', h('input', { type: 'checkbox', checked: x.id === e.id || x.kind === e.kind, dataset: { id: x.id } }),
+    h('span.dot', { style: { background: x.color } }), x.name)));
+  const force = h('input', { type: 'checkbox' });
+  const ok = await UI.modal(`${e.name}: counterspell`, h('div', h('p.hint', SR.CAT.combat.counterspell.desc + ' Everyone within a 2 m radius (more with reagents) can be protected.'),
+    picker, h('label.check.mt', force, 'Ignore action limits')), { ok: 'Roll Sorcery + Magic' });
+  if (!ok) return;
+  await trackerOp('counterspell', { id: e.id, protect: [...picker.querySelectorAll('input:checked')].map(i => i.dataset.id), force: force.checked });
+}
+/* Dispelling: a Counterspell Major Action against a sustained spell, a runner's or one the GM describes */
+async function dispelDialog(e) {
+  let spells = [];
+  try { spells = (await api(`/api/games/${S.ctx.campaign.id}/sustained`)).spells; } catch (err) { toast(err.message); }
+  const name = h('input', { placeholder: 'e.g. Mana Barrier on the guards' }), dv = h('input', { type: 'number', min: 1, max: 30, value: 4, style: { width: '4.5rem' } }),
+    hits = h('input', { type: 'number', min: 0, max: 30, value: 2, style: { width: '4.5rem' } });
+  const radios = spells.map((s, i) => h('label.check', h('input', { type: 'radio', name: 'dispel-target', value: String(i), checked: i === 0 }),
+    `${s.name} (${s.who}): ${s.hits} hit${s.hits === 1 ? '' : 's'}, Drain Value ${s.dv}`));
+  const other = h('label.check', h('input', { type: 'radio', name: 'dispel-target', value: 'other', checked: !spells.length }), 'Another spell:');
+  const force = h('input', { type: 'checkbox' });
+  const ok = await UI.modal(`${e.name}: dispel`, h('div', h('p.hint', SR.CAT.combat.dispel.desc),
+    radios.length ? h('div.col', radios) : h('p.hint', 'No runner is sustaining a spell.'),
+    h('div.row.tight.mt', other, name, h('label', 'Drain Value', dv), h('label', 'Its hits', hits)),
+    h('label.check.mt', force, 'Ignore action limits')), { ok: 'Roll Sorcery + Magic' });
+  if (!ok) return;
+  const pick = (document.querySelector('input[name=dispel-target]:checked') || {}).value;
+  const target = pick === 'other' || pick == null ? { name: name.value.trim() || 'the spell', dv: +dv.value || 3, hits: +hits.value || 0 }
+    : { pid: spells[+pick].pid, index: spells[+pick].index };
+  await trackerOp('dispel', { id: e.id, target, force: force.checked });
+  await reloadContext();
 }
 async function addToCombat() {
   const inT = new Set((S.tracker.entries || []).map(e => e.ref));
@@ -942,8 +1027,12 @@ async function attackDialog(attacker, target) {
   const amp = h('input', { type: 'number', min: 0, max: 10, value: 0 }), xdv = h('input', { type: 'number', value: 0 }), dice = h('input', { type: 'number', min: 0, placeholder: 'auto' });
   const chk = (on, title) => h('input', { type: 'checkbox', checked: !!on, title });
   const wild = chk(), hidden = chk(), unopp = chk(), apply = chk(true), autoEdge = chk(true), ignoreSight = chk(), ignoreActions = chk(), intercept = chk(), anticip = chk();
+  const aimNow = chk(false, RULES.takeAim.desc), trip = chk(false, RULES.trip.desc), grapple = chk(false, 'Unarmed: on a hit, Strength + net hits vs their Strength to hold them (no damage)');
+  const aimInfo = h('span.hint');
   const called = h('select', option('', 'No called shot'), Object.entries(RULES.calledShots).map(([k, v]) => option(k, `${v.name}${v.edge ? ` · ${v.edge} Edge` : ''}`)));
-  const counter = h('select', option('', 'No counterspelling'));
+  const eaSel = h('select', option('', 'No Edge action'), Object.entries(RULES.edgeActions || {}).map(([k, v]) => h('option', { value: k, title: v.desc }, `${v.name} · ${v.edge} Edge`)));
+  const astType = h('select', { title: 'In astral combat the attacker chooses' }, option('S', 'Stun'), option('P', 'Physical'));
+  const astLabel = h('label', { hidden: true }, 'Astral damage', astType);
   const tgtBox = h('div.attack-targets');
   const addSel = h('select', { 'aria-label': 'Add a target' });
   let options = [], attOpts = {};
@@ -962,8 +1051,6 @@ async function attackDialog(attacker, target) {
     weapon.innerHTML = '';
     options.forEach(o => weapon.append(option(o.key, `${o.name} · ${o.pool} dice · DV ${o.dv}`)));
     picked = false;
-    counter.innerHTML = ''; counter.append(option('', 'No counterspelling'));
-    for (const c of list) if (optKey(c) !== attSel.value) counter.append(option(optKey(c), c.name));
     for (const t of targets) await loadTarget(t);
     drawModes(); suggestRange(); pickReachable(); drawTargets();
   }
@@ -1020,18 +1107,26 @@ async function attackDialog(attacker, target) {
     const o = cur();
     targets.forEach((t, i) => {
       const c = pos(t.key);
-      const def = h('select', { onchange: e => { t.defense = e.target.value; describe(); } }, defenseOptions(t));
+      const def = h('select', { onchange: e => { t.defense = e.target.value; drawTargets(); } }, defenseOptions(t));
       def.value = t.defense; if (def.value !== t.defense) t.defense = '';
       const cov = h('select', { title: 'Cover: from the map, or set it yourself', onchange: e => { t.cover = e.target.value; describe(); } },
         option('auto', 'Cover: auto'), option('0', 'No cover'), ['I', 'II', 'III', 'IV'].map((r, j) => option(String(j + 1), `Cover ${r}`)));
       cov.value = t.cover;
       const st = t.info && t.info.statuses ? Object.keys(t.info.statuses) : [];
+      const DEA = RULES.defenseEdgeActions || {};
+      const dea = Object.entries(DEA).find(([, a]) => a.with === t.defense);
+      if (!dea) t.edgeAction = '';
+      const deaBox = dea ? h('label.check', { title: dea[1].desc }, h('input', { type: 'checkbox', checked: t.edgeAction === dea[0],
+        onchange: ev => { t.edgeAction = ev.target.checked ? dea[0] : ''; describe(); } }), `${dea[1].name} (${dea[1].edge} Edge${t.info ? `, has ${t.info.edge}` : ''})`) : null;
       tgtBox.append(h('div.attack-target',
         h('div.at-name', h('span.dot', { style: { background: c ? c.color : '#888' } }), h('b', c ? c.name : t.key),
-          h('span.hint', ` DR ${t.info ? t.info.dr : '–'}`), t.info && t.info.fullDefense ? h('span.tag', 'Full Defense') : null,
+          h('span.hint', ` DR ${t.info ? (o.astral ? t.info.astralDr : o.matrix ? t.info.matrixDr : t.info.dr) : '–'}`), t.info && t.info.fullDefense ? h('span.tag', 'Full Defense') : null,
+          t.info && t.info.counterspell && o.spell ? h('span.tag', { title: `Counterspell by ${t.info.counterspell[0]}` }, `+${t.info.counterspell[1]} vs spells`) : null,
+          t.info && t.info.restrained ? h('span.tag', { title: 'Restrained: −4 on Defense tests; you gain Edge; a miss may hit whoever holds them' }, 'Restrained') : null,
+          t.info && t.info.tacticalRoll ? h('span.tag', { title: 'Tactical Roll: no −2 from Prone against Close or Near attacks' }, 'Tactical Roll') : null,
           st.length ? h('span.hint', ' · ' + st.join(', ')) : null),
         h('div.at-sight', o.astral ? h('span.hint', 'astral: no line of sight needed') : o.matrix ? h('span.hint', 'Matrix: no line of sight needed') : sightText(t.sight)),
-        def, o.astral || o.matrix ? null : cov,
+        h('div.at-def', def, deaBox), o.astral || o.matrix ? null : cov,
         targets.length > 1 ? h('button.small.ghost', { type: 'button', title: 'Remove this target', onclick: () => { targets.splice(i, 1); drawTargets(); describe(); } }, '✕') : null));
     });
     addSel.innerHTML = '';
@@ -1047,9 +1142,18 @@ async function attackDialog(attacker, target) {
     (o.modes || []).forEach(m => mode.append(option(m, `${m} · ${SR.CAT.store.firingModes[m].name}`)));
     mode.disabled = !(o.modes || []).length;
     amp.disabled = !o.spell;
-    counter.disabled = !o.spell;
+    astType.disabled = !o.astral; astLabel.hidden = !o.astral;
+    for (const opt of eaSel.options) { const ea = (RULES.edgeActions || {})[opt.value]; if (ea) opt.disabled = (ea.melee && !o.melee) || (ea.ranged && o.melee) || (ea.cover && (attOpts.cover || 0) < ea.cover); }
+    if (eaSel.selectedOptions[0] && eaSel.selectedOptions[0].disabled) eaSel.value = '';
+    anticip.title = RULES.anticipation.desc;
     intercept.disabled = !o.melee;
     if (!o.melee) intercept.checked = false;
+    const ranged = !o.melee && !o.spell && !o.astral && !o.matrix;
+    aimNow.disabled = !ranged || !!attOpts.aimedThisRound; if (aimNow.disabled) aimNow.checked = false;
+    aimInfo.textContent = ranged ? (attOpts.aim ? `Aiming: +${attOpts.aim} (up to ${attOpts.aimMax})` : '') + (attOpts.aimedThisRound ? ' · already aimed this round' : '') : '';
+    trip.disabled = !o.melee; if (!o.melee) trip.checked = false;
+    const unarmed = !!o.melee && /unarmed/i.test(o.key + ' ' + o.name) && !o.astral;
+    grapple.disabled = !unarmed; if (!unarmed) grapple.checked = false;
     drawTargets();
   }
   function describe() {
@@ -1060,30 +1164,44 @@ async function attackDialog(attacker, target) {
     const cs = RULES.calledShots[called.value];
     const n = targets.length || 1;
     let pool = o.pool + (cs ? cs.dice : 0);
+    const ranged = !o.melee && !o.spell && !o.astral && !o.matrix;
+    const aim = ranged ? Math.min(attOpts.aimMax || 1, (attOpts.aim || 0) + (aimNow.checked ? 1 : 0)) : 0;
+    pool += aim;
     if (n > 1 && !anticip.checked) pool = Math.floor(pool / n);
-    const edge = (cs ? cs.edge : 0) + (n > 1 && anticip.checked ? RULES.anticipation.edge : 0);
-    const acts = ['1 Major'].concat(n > 1 ? ['1 Minor (Multiple Attacks)'] : [], cs ? ['1 Minor (called shot)'] : []);
+    const ea = (RULES.edgeActions || {})[eaSel.value];
+    const edge = (cs ? cs.edge : 0) + (n > 1 && anticip.checked ? RULES.anticipation.edge : 0) + (ea ? ea.edge : 0);
+    const acts = ['1 Major'].concat(intercept.checked ? ['1 Minor (Intercept)'] : [], n > 1 && mode.value !== 'FA' ? ['1 Minor (Multiple Attacks)'] : [],
+      cs && cs.minor ? ['1 Minor (called shot)'] : [], attOpts.cover && !o.astral && !o.matrix ? ['1 Minor (out of cover)'] : [],
+      trip.checked ? ['1 Minor (Trip)'] : [], aimNow.checked ? ['1 Minor (Take Aim)'] : []);
+    if (attOpts.cover === 4 && !o.astral && !o.matrix && eaSel.value !== 'fire_from_cover') pool -= 2;
     const rounds = fm ? (mode.value === 'FA' ? fm.rounds : fm.rounds * n) : 0;
     const parts = [];
-    if (o.astral) parts.push('Astral combat: no Attack Rating; defense Intuition + Logic');
-    else if (ar == null && !o.spell) parts.push(`Can’t attack at ${range.value} range with this.`);
+    if (o.astral && targets[0] && targets[0].info) {
+      const dr = targets[0].info.astralDr, diff = ar - dr;
+      parts.push(`Astral: AR ${ar} vs DR ${dr}` + (diff >= 4 ? ' → attacker gains 1 Edge' : diff <= -4 ? ' → defender gains 1 Edge' : '') + '; defense Intuition + Logic');
+    } else if (ar == null && !o.spell) parts.push(`Can’t attack at ${range.value} range with this.`);
     else if (targets[0] && targets[0].info) {
       const t0 = targets[0], cov = o.matrix ? 0 : t0.cover === 'auto' ? (t0.sight ? t0.sight.cover : 0) : +t0.cover;
       const dr = (o.matrix ? (t0.info.matrixDr || 0) : t0.info.dr) + cov, diff = ar - dr;
-      parts.push(`AR ${ar} vs DR ${dr}${cov ? ` (cover +${cov})` : ''}` + (diff >= 4 ? ' → attacker gains 1 Edge' : diff <= -4 ? ' → defender gains 1 Edge' : ''));
+      parts.push(`AR ${ar} vs DR ${dr}${cov ? ` (cover +${cov})` : ''}` + (diff >= 4 && !attOpts.cover ? ' → attacker gains 1 Edge' : diff <= -4 ? ' → defender gains 1 Edge' : ''));
     }
     parts.push(`${pool} dice${n > 1 ? ` per target (${n} targets)` : ''}`);
     if (o.clip) parts.push(`${o.loaded}/${o.clip} loaded${rounds ? `, uses ${rounds}` : ''}`);
     else if (o.qty) parts.push(`${o.qty} left`);
     if (o.spell) parts.push(`drain ${o.drain}${+amp.value ? ' + ' + 2 * amp.value : ''}`);
-    if (edge) parts.push(`costs ${edge} Edge (has ${attOpts.edge ?? '?'})`);
+    if (edge) parts.push(`costs ${edge} Edge (has ${attOpts.edge ?? '?'})` + (attOpts.edgeSpent ? ' · already spent Edge this round' : ''));
     if (attOpts.inCombat) parts.push(`uses ${acts.join(' + ')} · ${attOpts.majorLeft} Major / ${attOpts.minorLeft} Minor left`);
     if (attOpts.dirt) parts.push('−2 dice (Hit the Dirt)');
+    if (aim) parts.push(`+${aim} Take Aim`);
+    if (trip.checked) parts.push('Trip: −2 DV; on a hit they test Athletics + Agility or fall');
+    if (grapple.checked) parts.push('Grapple: no damage; Strength + net hits vs Strength to hold them');
+    const defEdge = targets.filter(t => t.edgeAction).map(t => `${(pos(t.key) || {}).name}: ${RULES.defenseEdgeActions[t.edgeAction].name}`);
+    if (defEdge.length) parts.push(defEdge.join(', '));
     info.textContent = parts.join(' · ');
   }
   attSel.onchange = () => { const k = attSel.value; const i = targets.findIndex(t => t.key === k); if (i >= 0) targets.splice(i, 1); loadAttacker(); };
   weapon.onchange = () => { picked = true; drawModes(); };
-  for (const el of [mode, range, amp, called, anticip]) el.addEventListener('change', describe);
+  for (const el of [mode, range, amp, called, anticip, eaSel, intercept, aimNow, trip, grapple]) el.addEventListener('change', describe);
   ignoreActions.onchange = drawTargets;
   const body = h('div',
     h('div.form-grid', h('label', 'Attacker', attSel), h('label', 'Weapon / spell', weapon), h('label', 'Firing mode', mode),
@@ -1091,28 +1209,35 @@ async function attackDialog(attacker, target) {
     attInfo,
     h('h3.mt', 'Targets'), tgtBox, addSel,
     info,
-    h('div.form-grid.mt', h('label', 'Called shot', called), h('label', 'Counterspelling (spells)', counter)),
+    h('div.form-grid.mt', h('label', 'Called shot', called), h('label', 'Edge action', eaSel), astLabel),
     h('div.row', h('label.check', { title: RULES.anticipation.desc }, anticip, `Anticipation (${RULES.anticipation.edge} Edge)`),
-      h('label.check', { title: RULES.intercept.desc }, intercept, 'Intercept (out of turn)')),
+      h('label.check', { title: RULES.intercept.desc }, intercept, 'Intercept (out of turn)'),
+      h('label.check', { title: RULES.takeAim.desc }, aimNow, 'Take Aim first (Minor)'), aimInfo,
+      h('label.check', { title: RULES.trip.desc }, trip, 'Trip (Minor)'),
+      h('label.check', { title: 'Unarmed: on a hit, Strength + net hits vs their Strength to hold them (no damage)' }, grapple, 'Grapple')),
     h('details', h('summary', 'Modifiers'), h('div.form-grid', h('label', 'Attack dice ±', amod), h('label', 'Defense dice ±', dmod), h('label', 'Soak dice ±', smod),
       h('label', 'Extra DV', xdv), h('label', 'Amp Up (spells)', amp), h('label', 'NPC dice (override)', dice), h('label', 'Meters per cell', meters))),
     h('div.row', h('label.check', wild, 'Wild Die'), h('label.check', { title: 'Optional rule for grunts below PR 3: they don’t roll to defend' }, unopp, 'Unopposed (grunt)'),
       h('label.check', hidden, 'Hidden roll'), h('label.check', apply, 'Apply damage'),
-      h('label.check', { title: 'Give 1 Edge to whoever wins AR vs DR by 4+, at most 2 per round' }, autoEdge, 'Award Edge'),
+      h('label.check', { title: 'Give 1 Edge to whoever wins AR vs DR by 4+ (the highest DR with several targets), at most 2 per round; none when attacking from cover' }, autoEdge, 'Award Edge'),
       h('label.check', { title: 'Indirect fire, scent, sound…' }, ignoreSight, 'Ignore line of sight'),
       h('label.check', { title: 'Allow the attack even without actions left this round' }, ignoreActions, 'Ignore action limits')));
   const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: async () => { if (firstTarget) await addTarget(firstTarget); await loadAttacker(); } });
   if (!await okP) return;
   if (!targets.length) { toast('Pick a target.'); return; }
-  const defenses = {}, cover = {};
-  for (const t of targets) { if (t.defense) defenses[t.key] = t.defense; cover[t.key] = t.cover === 'auto' ? 'auto' : +t.cover; }
+  const defenses = {}, cover = {}, wrest = {}, tactical = {};
+  for (const t of targets) {
+    if (t.defense) defenses[t.key] = t.defense; cover[t.key] = t.cover === 'auto' ? 'auto' : +t.cover;
+    if (t.edgeAction === 'wrest') wrest[t.key] = true;
+    if (t.edgeAction === 'tactical_roll') tactical[t.key] = true;
+  }
   try {
     const r = await api(`/api/maps/${MAP_ID}/attack`, 'POST', { attacker: refOf(attSel.value), targets: targets.map(t => refOf(t.key)), weapon: weapon.value,
       mode: mode.disabled ? null : mode.value, range: range.value, attackMod: +amod.value || 0, defenseMod: +dmod.value || 0, soakMod: +smod.value || 0,
       extraDv: +xdv.value || 0, amp: +amp.value || 0, dice: dice.value === '' ? null : +dice.value, wild: wild.checked, hidden: hidden.checked,
       unopposed: unopp.checked, apply: apply.checked, defenses, cover, called: called.value || null, anticipation: anticip.checked,
-      intercept: intercept.checked, counterspell: counter.value ? refOf(counter.value) : null, autoEdge: autoEdge.checked,
-      ignoreSight: ignoreSight.checked, ignoreActions: ignoreActions.checked });
+      intercept: intercept.checked, edgeAction: eaSel.value || null, astralType: astType.value, autoEdge: autoEdge.checked,
+      ignoreSight: ignoreSight.checked, ignoreActions: ignoreActions.checked, aimNow: aimNow.checked, trip: trip.checked, grapple: grapple.checked, wrest, tactical });
     toast(r.results.map(x => x.summary).join(' '), 7000);
     renderRolls(r.rolls);
     await reloadContext();
@@ -1272,6 +1397,7 @@ async function poll() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 Live.on(() => poll());
+Music.mount({ gm: true, map: MAP_ID, host: document.querySelector('.topbar-actions') });
 
 // ------------------------------------------------------------ boot
 async function boot() {
