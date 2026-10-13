@@ -164,6 +164,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <li class="sub"><a href="#play">Run the session</a></li>
       <li class="sub"><a href="#combat">Combat</a></li>
       <li class="sub"><a href="#contracts">Give out runs</a></li>
+      <li class="sub"><a href="#stock">Store stock</a></li>
       <li class="sub"><a href="#gm-handouts">Handouts</a></li>
       <li class="sub"><a href="#sessions">Sessions</a></li>
       <li class="sub"><a href="#substances">Toxins and drugs</a></li>
@@ -229,7 +230,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <p>Qualities that change numbers are applied for you, Companion ones included: Augmentation Acclimation and Cyborg (more Essence room), Cyber Psychosis, Cyberjack Maximization, Favored Weapon, Injury Prone, Polyglot, Twitchy, All Business and Trust Issues (Loyalty capped at 3), and the metagenic qualities: Bark, Granite and Rhino (armor), Shiva Arms (extra arms and Minor actions), Celerity and Satyr Legs (movement), Neoteny, and claws, horns, fangs, quills and tails as natural weapons. Racial-only traits can't be picked by other metatypes.</p>
       <p>Derived values are calculated for you: Composure, Judge Intentions, Memory, Lift/Carry, movement, Initiative (plus Matrix and astral initiative), condition monitors, wound modifiers and Defense Rating.</p>
       <div class="note warn">
-        <p><strong>After approval</strong> you improve with Karma: an attribute or skill costs the new rating × 5, a specialization or expertise 5, a knowledge skill 3, a spell or complex form 5, and a positive quality twice its cost. Purchases are final. Metatype, magic type, tradition and aspect can only be changed by the GM.</p>
+        <p><strong>After approval</strong> you improve with Karma: an attribute or skill costs the new rating × 5, a specialization or expertise 5, a knowledge skill 3, a spell or complex form 5, and a positive quality twice its cost. Purchases are final. Negative qualities can still be taken (a new Addiction, a SINner record…), but they give no Karma after approval, and the GM sees them in the table log. Metatype, magic type, tradition and aspect can only be changed by the GM.</p>
       </div>
 
 
@@ -292,6 +293,11 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <figure>
         <a class="shot" href="img/player-store-locked.png"><img src="img/player-store-locked.png" width="1440" height="900" alt="Cyberware cards locked with the reason: needs a contact for Cyberware with a higher Connection" loading="lazy"></a>
         <figcaption>Locked items name the contact they need. Trolls pay 10% more for everything, dwarfs for armor. Bark and Fitted Gear change these markups.</figcaption>
+      </figure>
+      <p>When the sellers run dry, the GM marks items <strong>out of stock</strong>: they stay in the store, greyed out, until they're back. A PACK with an out-of-stock item inside is out of stock too.</p>
+      <figure>
+        <a class="shot" href="img/player-store-stock.png"><img src="img/player-store-stock.png" width="1440" height="640" alt="Store search for Ares: the Ares Light Fire 70 and Ares Predator VI marked Out of stock with disabled buttons, other pistols on sale" loading="lazy"></a>
+        <figcaption>Out of stock right now. The page updates on its own when the GM restocks.</figcaption>
       </figure>
       <p>Your items appear in the <strong>Gear</strong> section of your sheet, grouped by category:</p>
       <ul>
@@ -380,11 +386,16 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <a class="shot" href="img/player-strip.png"><img src="img/player-strip.png" width="1140" height="55" alt="Initiative strip: round 1, Ganger acting, Lieutenant, Ana (you) with her actions left, and Cass Wandering Horse" loading="lazy"></a>
         <figcaption>The strip. Enemies the GM keeps hidden aren't listed.</figcaption>
       </figure>
+      <figure>
+        <a class="shot" href="img/player-details.png"><img src="img/player-details.png" width="774" height="342" alt="Isometric map with a details card next to a loot marker: Crate, Loot / item, and the GM's description: a battered Ares case, still locked" loading="lazy"></a>
+        <figcaption>Right-click a marker for its details card.</figcaption>
+      </figure>
       <ul>
         <li><strong>Move</strong>: drag your token, click any room you can reach (a dotted line shows the path), or use the arrow keys.</li>
         <li><strong>Doors</strong>: the buttons in the sidebar open the doors next to you, or click a door on your own cell. Locked doors need the GM.</li>
         <li><strong>Travel</strong>: standing on a stairway or portal shows a <span class="ui">Travel</span> button to the next map.</li>
         <li><strong>Ping</strong>: double-click a cell to flash it for the whole table.</li>
+        <li><strong>Details</strong>: hover over a marker or a runner for its name, or right-click it for a card with what you can tell: what it is, how hurt it looks, its statuses, where a portal leads, and anything the GM wrote about it. <kbd>Esc</kbd> closes it.</li>
         <li><strong>View</strong>: <span class="ui">Isometric view</span> switches between the tilted view and a flat one.</li>
       </ul>
 
@@ -407,7 +418,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <figcaption>Condition monitors (Physical shows the overflow boxes), healing, drugs and toxins, Edge, combat values and the statuses the GM has set. Statuses also change your dice.</figcaption>
       </figure>
       <p><strong>Healing</strong> follows the book, and every method is in the dice roller's <em>Healing</em> group: pick it, choose the patient (yourself or an ally) and roll; the healing is applied right away. First aid and medkits roll Biotech + Logic against 5 − the patient's Essence; a Heal spell rolls Sorcery + Magic. First aid without a medkit is −2 dice and can't use Edge; a medkit adds +1 (wireless) and uses one set of Medkit Supplies, which you need to have. Each works once per set of injuries and never heals drain. Rest rolls Body + Willpower per hour for Stun and Body + Body per day for Physical, with +2 when someone trained in Biotech looks after you.</p>
-      <p><strong>Drugs and toxins</strong>: drugs you carry can be taken from the <em>Drugs and toxins</em> card. You resist with Body + Willpower (untick <span class="ui">Resist</span> to take the full effect); each hit lowers the Power by 1. What's left applies: damage, statuses and the drug's bonuses while it lasts, then its crash. Some substances call for an addiction test. The GM exposes you to toxins the same way.</p>
+      <p><strong>Drugs and toxins</strong>: the store sells the core book's drugs and toxins by the dose (Medical). Drugs you carry can be taken from the <em>Drugs and toxins</em> card. You resist with Body + Willpower (untick <span class="ui">Resist</span> to take the full effect); each hit lowers the Power by 1. What's left applies: damage, statuses and the drug's bonuses while it lasts, then its crash. Statuses a toxin causes end when it wears off. Some substances call for an addiction test. The GM exposes you to toxins the same way.</p>
       <figure>
           <a class="shot narrow" href="img/player-heal-roller.png"><img src="img/player-heal-roller.png" width="267" height="289" alt="Dice roller with the Medkit pool selected, an ally picked as the patient, 4 supplies and the button Heal: 6 dice" loading="lazy"></a>
           <figcaption>Healing an ally with a medkit from the roller.</figcaption>
@@ -557,14 +568,18 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h3 id="play">Run the session</h3>
       <p>Switch the map editor to <strong>Play</strong> mode during the game. It opens in the isometric view; toggle it with <kbd>I</kbd>.</p>
       <ul>
-        <li><strong>Viewing as</strong>: <span class="ui">GM view</span> shows everything. Pick a runner to see exactly what they see.</li>
+        <li><strong>See the map as</strong>: <span class="ui">GM view</span> shows everything. Pick a runner at the top of the <span class="ui">Map</span> tab, or click <span class="ui">See as</span> next to them on the <span class="ui">Runners</span> tab, to see exactly what they see (click again for the GM view). <kbd>Tab</kbd> cycles through them.</li>
         <li><strong>Reveal</strong> and <strong>Hide</strong>: paint a runner's fog with a brush, or reveal a whole room. The same buttons exist under <em>Everyone</em> for the whole party.</li>
         <li><strong>Doors</strong>: click to open or close, and <kbd>Shift</kbd>+click to lock.</li>
         <li><strong>Token</strong>: place or move the selected runner's token.</li>
-        <li><strong>Markers</strong> and <strong>Select</strong>: click an enemy to open its inspector in the <span class="ui">Selected</span> tab: its NPC stat block, its condition monitor, its statuses and attack buttons.</li>
+        <li><strong>Select</strong> (the tool Play mode starts with) and <strong>Markers</strong>: drag a marker to move it, in either view (grab the icon itself in the isometric view). Click one to open its inspector in the <span class="ui">Selected</span> tab: its NPC stat block, its condition monitor, its statuses, attack buttons, and a description players read when they right-click it.</li>
         <li><strong>Statuses</strong>: under each runner in the Runners tab and in a marker's inspector, add Prone, Burning, Zapped, Cover and the rest. Their icons appear on the map for everyone. Only you can set and clear them.</li>
         <li><strong>Snapshots</strong>: save and restore the whole game state (positions, exploration and doors).</li>
       </ul>
+      <figure>
+        <a class="shot" href="img/gm-see-as.png"><img src="img/gm-see-as.png" width="1440" height="900" alt="GM Play mode with the Runners tab: See as is active for Bobby Tables, and the map shows what he has explored" loading="lazy"></a>
+        <figcaption>See as on the Runners tab: the map as that runner sees it.</figcaption>
+      </figure>
       <figure>
         <a class="shot" href="img/gm-npc-marker.png"><img src="img/gm-npc-marker.png" width="1440" height="900" alt="Selected tab with an Eye-Fiver Go-ganger marker: stat block, weapons, a condition monitor with 5 of 9 boxes, a May flee warning, Prone status and attack buttons" loading="lazy"></a>
         <figcaption>An NPC from the templates in the Selected tab. Grunts have a single monitor, take −1 die per 2 boxes and may flee once their damage exceeds their Professional Rating.</figcaption>
@@ -620,6 +635,13 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       </figure>
       <p>Tick tasks as they happen. The payout scales with the share of tasks done, and every mandatory task must be ticked before the run can be completed. <span class="ui">Complete &amp; pay…</span> suggests the payout (you can change it) and pays it to <strong>each</strong> assigned runner.</p>
 
+      <h3 id="stock">Store stock</h3>
+      <p>The <span class="ui">Store</span> tab lists everything the store sells, PACKs included. Untick an item when the sellers run out: players see it out of stock and can't buy it. Tick it again when it's back. Search, filter by category or by stock, and mark everything shown in or out of stock at once. You can still give out-of-stock items from a sheet.</p>
+      <figure>
+        <a class="shot" href="img/gm-store.png"><img src="img/gm-store.png" width="1440" height="640" alt="Store tab searched for Ares: two pistols unticked and marked Out of stock, the rest in stock, with category and stock filters" loading="lazy"></a>
+        <figcaption>Three items out of stock.</figcaption>
+      </figure>
+
       <h3 id="gm-handouts">Handouts</h3>
       <p>The <span class="ui">Handouts</span> tab holds notes, dossiers, maps and pictures for the players. <span class="ui">New handout</span> asks for a title, the text in Markdown (headings, bold, lists, quotes and links, with a live preview), an image and who gets it: everyone or chosen runners. Untick <span class="ui">Show it to them now</span> to prepare a handout before the session and reveal it later.</p>
       <figure>
@@ -635,9 +657,16 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       </figure>
 
       <h3 id="substances">Toxins and drugs</h3>
-      <p><span class="ui">Toxins &amp; drugs…</span> in the <em>Between runs</em> bar opens the game's library. The Companion's Renfield and HMHVV strains are built in; add the core book's toxins and drugs (or your own) with their Power, damage, effects (nausea, disorientation, paralysis, ongoing damage), attribute bonuses, duration, crash and addiction threshold. Expose a runner from the <em>Drugs and toxins</em> card in the Combat section of their sheet.</p>
+      <p><span class="ui">Toxins &amp; drugs…</span> in the <em>Between runs</em> bar opens the game's library. Built in are the core rulebook's toxins (CS/Tear Gas, Gamma-Scopolamine, Narcoject, Nausea Gas, Neuro-Stun VIII to X, Pepper Punch, Seven-7) and drugs (Alcohol, Bliss, Cram, Deepweed, Jazz, Kamikaze, Long Haul, Nitro, Novacoke, Psyche, Zen), plus the Companion's Renfield and HMHVV strains. Their effects are applied, not just described:</p>
+      <ul>
+        <li>damage equal to the Power left after resisting, and statuses (Dazed, Nauseated, Blinded I, Immobilized…) that end when the effect wears off;</li>
+        <li>attribute changes, Initiative Dice, Perception, High Pain Tolerance, dice on all tests or on Physical tests, Psyche's lighter penalty for sustained spells;</li>
+        <li>crashes: unresisted damage, statuses, and penalties that last on their own (Nitro's −2 dice, Novacoke's Charisma and Willpower at 0).</li>
+      </ul>
+      <p>Add your own substances with the same fields, or <span class="ui">Copy</span> a built-in one to change it for your table. Expose a runner from the <em>Drugs and toxins</em> card in the Combat section of their sheet; the effect stays listed there until you click <span class="ui">Wears off</span>.</p>
       <figure>
-        <a class="shot" href="img/gm-substances.png"><img src="img/gm-substances.png" width="1000" height="398" alt="Toxins and drugs library with Renfield and three HMHVV strains built in and a button for a new toxin, drug or disease" loading="lazy"></a>
+        <a class="shot" href="img/gm-substances.png"><img src="img/gm-substances.png" width="1440" height="900" alt="Toxins and drugs library: a house copy of Kamikaze under Your substances, and the built-in list folded" loading="lazy"></a>
+        <figcaption>Your substances first; the 24 built-in ones are folded below.</figcaption>
       </figure>
 
       <h3 id="rewards">Money, Karma and Edge</h3>
@@ -725,7 +754,9 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
       <h4>Toxins and drugs</h4>
       <ul>
         <li>Resist with Body + Willpower: each hit lowers the Power by 1, and what's left applies.</li>
-        <li>Nausea gives Nauseated, disorientation Dazed, paralysis Immobilized, and ongoing damage Poisoned.</li>
+        <li>Damage equals the Power left. Statuses last until the effect wears off.</li>
+        <li>A drug's crash applies when it wears off: unresisted damage, statuses, or penalties for a while.</li>
+        <li>After approval, a negative quality gives no Karma.</li>
       </ul>
       <h4>Condition monitors</h4>
       <ul>
