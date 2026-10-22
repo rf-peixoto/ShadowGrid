@@ -27,6 +27,19 @@ Edge is a pool (maximum 7) that refreshes only when the GM says so.
 One die of the pool, usually given by the GM for dramatic moments.
 - A 5 or 6 on the Wild Die counts as 3 hits.
 - A 1 on the Wild Die means none of the 5s in the roll count as hits.""",
+    "Light and vision": """**Light and vision**
+Light is bright, dim or dark; smoke hangs in the air. The GM paints them on the map (the Light tool), lamps and fires can light the cells around a marker, and a runner can switch on a flashlight (10 m around them).
+- Low-light vision sees clearly in any light but total darkness. Thermographic vision sees heat in the dark and through normal smoke, not thermal smoke. Ultrasound works in darkness and through any smoke, out to 50 m.
+- Total darkness: without thermographic vision or ultrasound you can't see what's there. Visibility tests fail outright, so an attack on someone you can't see needs the GM's say-so.
+- Smoke: Blinded I (−3) looking through it, Blinded II (−6) from inside it, unless your eyes see through it.
+- Dim light costs no dice, but whoever sees clearly while the other side doesn't gains 1 Edge (the book's vision advantage). ShadowGrid gives it in GM-resolved attacks.
+- Vision comes from your metatype (elves and orks low-light, dwarfs and trolls thermographic), qualities, cybereyes and their options, an ultrasound sensor, or glasses, goggles, contacts or a monocle with a vision enhancement. Vision magnification adds 2 to the Attack Rating at Medium range and beyond.
+- On the map, an enemy shows to a runner only while that runner can see it (a GM setting per map), and Line of sight (L) shades what your eyes reach.""",
+    "Movement": """**Movement**
+- Move (Minor Action): 10 m (your metatype's walking rate), once per turn.
+- Sprint (Major Action): 15 m plus 1 m per hit on Athletics + Agility, once per turn, never in the same turn as a Move.
+- Prone: 2 m and no Sprint. Hobbled: everything halved. Fatigued III: 5 m walking, 10 m sprinting. Zapped: no Sprint. Immobilized, Restrained, unconscious or surprised in the first round: no movement.
+- In combat, ShadowGrid checks a runner's moves on their own turn: the first one spends the Move, going farther turns it into a Sprint (rolled for you), and the GM can move anyone any time. The Movement overlay (M) shows how far you can go; the map's scale (2 m per cell unless the GM changes it) turns cells into meters.""",
     "Combat": """**Combat**
 An attack is an opposed test:
 - Attack: weapon skill + Agility (Engineering + Logic for vehicle weapons; Sorcery + Magic for spells).

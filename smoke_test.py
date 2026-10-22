@@ -23,8 +23,8 @@ H = {"X-Requested-With": "ShadowGrid"}
 FAILS = []
 
 
-def check(cond, msg):
-    print(("  ok   " if cond else "  FAIL ") + msg)
+def check(cond, msg, detail=None):
+    print(("  ok   " if cond else "  FAIL ") + msg + (f"  [{detail}]" if detail is not None and not cond else ""))
     if not cond:
         FAILS.append(msg)
 
@@ -444,7 +444,7 @@ check(any(x["kind"] == "attack" for x in st["rolls"]), "attacks appear in the ta
 print("Editor does not overwrite live changes")
 m = j(gm.get(f"/api/maps/{mid}"))
 stale = m["data"]
-pl.post("/api/me/move", json={"c": 1, "r": 0}, headers=H)
+gm.post(f"/api/players/{pid}/place", json={"mapId": mid, "c": 1, "r": 0}, headers=H)     # in combat and Prone: the GM moves them
 pl.post("/api/me/door", json={"edge": 0}, headers=H)
 gm.post(f"/api/maps/{mid}/marker", json={"id": "e1", "damage": {"track": "physical", "amount": 1}}, headers=H)
 gm.put(f"/api/maps/{mid}", json={"data": stale}, headers=H)
@@ -1158,6 +1158,137 @@ if CORE.MINIFY:
     check(r.status_code == 200 and b"\n\n" not in r.data, "and so is the CSS")
 import aio as AIO  # noqa: E402
 check(AIO.offload(lambda a, b=0: a + b, 2, b=3) == 5, "offload runs work directly outside gevent")
+
+print("\n== light, vision, hidden enemies, movement and areas")
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+lc = {f"{c},{r}": {"fill": "#123"} for c in range(0, 16) for r in range(0, 6)}
+lc["10,2"]["light"] = "dark"
+lmap = j(gm.post("/api/maps", json={"name": "Dark test", "campaignId": cid, "width": 16, "height": 6, "data": {"cells": lc, "markers": [
+    {"id": "d1", "c": 10, "r": 2, "type": "danger", "label": "Lurker"}, {"id": "d2", "c": 6, "r": 2, "type": "danger", "label": "Guard"},
+    {"id": "x1", "c": 10, "r": 3, "type": "loot"}], "rooms": []}}, headers=H))["id"]
+gm.post(f"/api/players/{pid}/place", json={"mapId": lmap, "c": 2, "r": 2}, headers=H)
+for tr_ in ("physical", "stun"):
+    gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_damage", "track": tr_, "value": 0}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "current_edge": 0}, headers=H)
+gm.post(f"/api/maps/{lmap}/reveal", json={"players": [pid], "cells": list(lc), "action": "reveal"}, headers=H)
+pc = j(pl.get("/api/me/sheet"))["char"]
+for it in list(pc["inventory"]):
+    if it["name"].startswith(("Glasses", "Thermographic", "Low-Light", "Flashlight")):
+        gm.post(f"/api/players/{pid}/sheet/action", json={"action": "remove_item", "uid": it["uid"]}, headers=H)
+eyes0 = j(pl.get("/api/me/state"))["view"]["eyes"]["vision"]
+v = j(pl.get("/api/me/state"))["view"]
+seen = {m["id"] for m in v["map"]["markers"]}
+if not ({"Thermographic", "Ultrasound"} & set(eyes0)):
+    check("d2" in seen and "d1" not in seen and "x1" in seen, "an enemy in a dark cell is hidden from normal eyes; loot stays on the map", (eyes0, seen))
+check(v["map"]["cells"]["10,2"].get("light") == "dark" and v["map"]["settings"]["cellMeters"] == 2, "players get the light of their cells and the map's scale")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": "tools-sensors-glasses", "rating": 2}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": "tools-sensors-thermographic-vision"}, headers=H)
+v = j(pl.get("/api/me/state"))["view"]
+check("Thermographic" in v["eyes"]["vision"], "glasses with a thermographic enhancement give thermographic vision")
+check("d1" in {m["id"] for m in v["map"]["markers"]}, "thermographic vision sees the enemy in the dark")
+gm.post(f"/api/maps/{lmap}/light", json={"cells": ["4,2"], "smoke": "thermal"}, headers=H)
+v = j(pl.get("/api/me/state"))["view"]
+check(v["map"]["cells"]["4,2"].get("smoke") == "thermal", "smoke painted by the GM reaches the players")
+m_ = j(gm.get(f"/api/maps/{lmap}"))
+gm.put(f"/api/maps/{lmap}", json={"data": dict(m_["data"], cells={k: {kk: vv for kk, vv in c.items() if kk not in ("light", "smoke")} for k, c in m_["data"]["cells"].items()})}, headers=H)
+check(j(gm.get(f"/api/maps/{lmap}"))["data"]["cells"]["4,2"].get("smoke") == "thermal", "an editor autosave keeps live light and smoke")
+gm.post(f"/api/maps/{lmap}/light", json={"cells": ["4,2"], "smoke": ""}, headers=H)
+sg = j(gm.post(f"/api/maps/{lmap}/sight", json={"a": {"kind": "player", "id": pid}, "b": {"kind": "marker", "id": "d2"}}, headers=H))["sight"]
+check(sg["meters"] == 8 and sg["band"] == "Near", "sight gives the distance in meters and the range band (2 m cells)")
+# darkness everywhere: the runner (thermographic) sees the guard, the guard (normal eyes) can't see the runner
+gm.post(f"/api/maps/{lmap}/light", json={"cells": list(lc), "light": "dark"}, headers=H)
+r = gm.post(f"/api/maps/{lmap}/attack", json={"attacker": {"kind": "marker", "id": "d2"}, "weapon": "0", "range": "auto", "target": {"kind": "player", "id": pid}}, headers=H)
+check(r.status_code == 400 and "can't see" in j(r)["error"], "an attacker who can't see the target in the dark fails", j(r).get("error"))
+gm.post(f"/api/maps/{lmap}/marker", json={"id": "d2", "npc": {"attrs": {"Body": 3, "Agility": 3, "Reaction": 3, "Strength": 3, "Willpower": 3, "Logic": 3, "Intuition": 3, "Charisma": 3}, "dr": 3,
+                                                              "weapons": [{"name": "Knife", "skill": "Close Combat", "dv": 2, "ar": [6, None, None, None, None]}]}, "cm": {"pm": 10, "sm": 10}}, headers=H)
+pc = j(pl.get("/api/me/sheet"))
+wkey = next(p_["key"] for p_ in pc["pools"] if p_["key"].startswith("weapon:") and p_["key"] != "weapon:unarmed")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_ammo", "uid": wkey[7:], "rounds": 15}, headers=H)
+r = gm.post(f"/api/maps/{lmap}/attack", json={"attacker": {"kind": "player", "id": pid}, "weapon": wkey, "mode": "SA", "range": "auto", "target": {"kind": "marker", "id": "d2"}}, headers=H)
+res = j(r).get("result") or {}
+check(r.status_code == 200 and res.get("range") == "Near", "range 'auto' takes the band from the map", j(r).get("error"))
+check(any("sees better" in n for n in res.get("notes") or []) or res.get("vision_edge"), "seeing in the dark while the target can't gives 1 Edge", res.get("notes"))
+gm.post(f"/api/maps/{lmap}/light", json={"cells": list(lc), "light": ""}, headers=H)
+gm.post(f"/api/maps/{lmap}/light", json={"cells": ["4,2", "5,2"], "smoke": "smoke"}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "remove_item", "uid": next(i["uid"] for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i["name"].startswith("Thermographic"))}, headers=H)
+r = gm.post(f"/api/maps/{lmap}/attack", json={"attacker": {"kind": "player", "id": pid}, "weapon": wkey, "mode": "SA", "range": "auto", "target": {"kind": "marker", "id": "d2"}}, headers=H)
+parts = (j(r).get("result") or {}).get("attack", {}).get("parts") or []
+if not ({"Thermographic", "Ultrasound"} & set(eyes0)):
+    check(any(p_[0].startswith("Smoke") and p_[1] == -3 for p_ in parts), "shooting through smoke: Blinded I, −3 dice", parts)
+gm.post(f"/api/maps/{lmap}/light", json={"cells": ["4,2", "5,2"], "smoke": ""}, headers=H)
+# movement in combat (the guard back on its feet: the attacks above may have dropped it)
+gm.post(f"/api/maps/{lmap}/marker", json={"id": "d2", "cm": {"pm": 10, "sm": 10, "p": 0, "s": 0}}, headers=H)
+gm.post(f"/api/maps/{lmap}/status", json={"target": {"kind": "player", "id": pid}, "status": "Prone", "on": False}, headers=H)
+tr = j(gm.post(f"/api/games/{cid}/combat", json={"op": "start", "players": [pid], "mapId": lmap, "markers": ["d2"], "roll": True, "visible": True}, headers=H))["tracker"]
+pl.post("/api/me/initiative", json={}, headers=H)
+me_e = next(e for e in j(gm.get(f"/api/games/{cid}/combat"))["tracker"]["entries"] if e["ref"] == pid)
+gm.post(f"/api/games/{cid}/combat", json={"op": "turn", "id": me_e["id"]}, headers=H)
+mv = j(pl.get("/api/me/state"))["view"]["movement"]
+check(mv["yourTurn"] and mv["walk"] == 10 and mv["sprint"] == 15, "the movement overlay: 10 m walking, 15 m sprinting", mv)
+r = pl.post("/api/me/move", json={"c": 6, "r": 3}, headers=H)
+check(r.status_code == 200 and j(r)["token"] == {"c": 6, "r": 3}, "a 10 m move spends the Move (a Minor Action)", j(r).get("error"))
+r = pl.post("/api/me/move", json={"c": 7, "r": 3}, headers=H)
+check(r.status_code == 400 and "Sprint can't follow a Move" in j(r)["error"], "the Move covers 10 m; a Sprint can't follow it")
+gm.post(f"/api/games/{cid}/combat", json={"op": "round"}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "turn", "id": me_e["id"]}, headers=H)
+r = pl.post("/api/me/move", json={"c": 15, "r": 3}, headers=H)
+check(r.status_code == 200 and j(r)["token"]["c"] >= 13, "a longer move becomes a Sprint (15 m plus hits)", j(r).get("token"))
+check(any("Sprint" in (x["data"].get("label") or "") for x in j(gm.get(f"/api/games/{cid}"))["rolls"][:3]), "the Sprint test goes to the table log")
+gm.post(f"/api/games/{cid}/combat", json={"op": "next"}, headers=H)
+r = pl.post("/api/me/move", json={"c": 10, "r": 3}, headers=H)
+check(r.status_code == 400 and "turn" in j(r).get("error", ""), "runners move on their own turn", (r.status_code, j(r).get("error"), j(r).get("token")))
+r = gm.post(f"/api/players/{pid}/place", json={"mapId": lmap, "c": 2, "r": 2}, headers=H)
+check(r.status_code == 200, "the GM moves anyone any time")
+gm.post(f"/api/maps/{lmap}/status", json={"target": {"kind": "player", "id": pid}, "status": "Prone", "on": True}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "round"}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "turn", "id": me_e["id"]}, headers=H)
+mv = j(pl.get("/api/me/state"))["view"]["movement"]
+check(mv["walk"] == 2 and mv["sprint"] == 0 and "Prone" in mv["why"], "Prone: 2 m and no Sprint", mv)
+gm.post(f"/api/maps/{lmap}/status", json={"target": {"kind": "player", "id": pid}, "status": "Prone", "on": False}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+import movement as MVM  # noqa: E402
+a_ = MVM.allowance([10, 15, 1], {"Hobbled": True, "Fatigued": 3}, "OK")
+check(a_["walk"] == 3 and MVM.sprint_cap(a_, 4) == 7, "Hobbled halves (round up) and Fatigued III slows to 5/10 m", a_)
+check(not MVM.allowance([10, 15, 1], {"Immobilized": True}, "OK")["canMove"] and not MVM.allowance([10, 15, 1], {}, "Unconscious")["canMove"], "Immobilized or out cold: no movement")
+# areas
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": "ammo-explosives-fragmentation-grenade"}, headers=H)
+gid = next(i["uid"] for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i["name"].startswith("Fragmentation Grenade"))
+r = pl.post("/api/me/templates", json={"op": "add", "source": {"type": "item", "uid": gid}, "c": 6, "r": 2}, headers=H)
+t_ = (j(r).get("templates") or [{}])[-1]
+check(r.status_code == 200 and t_.get("radius") == 20 and t_.get("dv") == ["16P", "12P", "8P"], "a runner places their grenade's blast", t_)
+for _ in range(3):
+    r = pl.post("/api/me/templates", json={"op": "add", "source": {"type": "custom", "radius": 3}, "c": 3, "r": 3}, headers=H)
+check(r.status_code == 400, "runners have 3 areas at most")
+r = gm.post(f"/api/maps/{lmap}/templates", json={"op": "add", "template": {"kind": "smoke", "radius": 2, "name": "Smoke"}, "c": 12, "r": 2}, headers=H)
+tid = j(r)["templates"][-1]["id"]
+r = gm.post(f"/api/maps/{lmap}/templates", json={"op": "smoke", "id": tid, "smoke": "thermal"}, headers=H)
+sm_cells = [k for k, c in j(gm.get(f"/api/maps/{lmap}"))["data"]["cells"].items() if c.get("smoke") == "thermal"]
+check(r.status_code == 200 and {"12,2", "13,2", "12,1"} <= set(sm_cells) and "14,2" not in sm_cells, "the GM fills a cloud with smoke (2 m around, 2 m cells)", sorted(sm_cells))
+r = pl.post("/api/me/templates", json={"op": "remove", "id": tid}, headers=H)
+check(r.status_code == 400, "runners can't remove the GM's areas")
+gm.post(f"/api/maps/{lmap}/templates", json={"op": "clear"}, headers=H)
+check(not j(gm.get(f"/api/maps/{lmap}"))["data"]["templates"], "the GM clears the areas")
+# flashlight
+gm.post(f"/api/maps/{lmap}/light", json={"cells": list(lc), "light": "dark", "smoke": ""}, headers=H)
+r = pl.post("/api/me/flashlight", json={"on": True}, headers=H)
+check(r.status_code == 400, "no flashlight, no light")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": "survival-flashlight"}, headers=H)
+v = j(pl.post("/api/me/flashlight", json={"on": True}, headers=H))
+check(v["flashlight"]["on"] and not v["map"]["cells"]["3,2"].get("light") and v["map"]["cells"]["12,2"].get("light") == "dark",
+      "a flashlight lights the cells around its holder (10 m)")
+pl.post("/api/me/flashlight", json={"on": False}, headers=H)
+gm.delete(f"/api/maps/{lmap}", headers=H)
+from sr import npc6e as N6  # noqa: E402
+from sr import combat as X  # noqa: E402
+check(X.npc_vision(X.parse_template(next(t for t in N6.NPC_TEMPLATES if t["name"].startswith("Sons of Sauron")))) == ["Low-light"], "an ork NPC sees in low light")
+check(X.npc_vision({}, {"vision": ["Ultrasound"], "label": "Ork"}) == ["Ultrasound"], "the GM's word on an NPC's eyes wins")
+
+m_ = j(gm.get(f"/api/maps/{mid}"))
+gm.put(f"/api/maps/{mid}", json={"settings": dict(m_["settings"], playerView="fp")}, headers=H)
+check(j(gm.get(f"/api/maps/{mid}"))["settings"]["playerView"] == "fp", "the GM fixes how players see a map")
+gm.put(f"/api/maps/{mid}", json={"settings": dict(m_["settings"], playerView="sideways")}, headers=H)
+check(j(gm.get(f"/api/maps/{mid}"))["settings"]["playerView"] == "choose", "an unknown view falls back to the players' choice")
+gm.put(f"/api/maps/{mid}", json={"settings": dict(m_["settings"], playerView="choose")}, headers=H)
 
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "All checks passed.")

@@ -6,6 +6,7 @@ import secrets
 from flask import jsonify, request
 
 import geometry as geo
+import sightmap as SM
 
 from core import (GM_COLOR, add_roll, app, body, clamp_int, display_name, err, get_db, load_char, now,
                   roll_rows, save_char)
@@ -266,7 +267,7 @@ def tracker_view(t, gm):
         if not gm and e.get("hidden"):
             continue
         o = {k: e.get(k) for k in ("id", "kind", "ref", "mapId", "name", "total", "dice", "color", "minor", "hidden", "used", "fd", "dirt", "edgeGained",
-                                   "surprised", "cs", "edgeRound", "aim", "aimRound", "troll", "grapple")}
+                                   "surprised", "cs", "edgeRound", "aim", "aimRound", "troll", "grapple", "mv")}
         o["current"] = e["id"] == current
         o["majorLeft"], o["minorLeft"] = actions_left(e)
         entries.append(o)
@@ -662,15 +663,52 @@ def _position(db, map_id, ref, map_data):
     return None
 
 
-def sight(db, map_row, a_ref, b_ref):
-    """Line of sight, cover from the map (walls, closed doors) and distance in cells between two combatants."""
-    data = json.loads(map_row["data"])
-    m = {"gridType": map_row["grid_type"], "width": map_row["width"], "height": map_row["height"]}
+RANGE_LIMITS = (("Close", 3), ("Near", 50), ("Medium", 250), ("Far", 500))
+
+
+def range_band(meters):
+    """Range category for a distance in meters (p. 108): Close 0-3, Near 4-50, Medium 51-250, Far 251-500."""
+    for name, top in RANGE_LIMITS:
+        if meters <= top + 1e-6:
+            return name
+    return "Extreme"
+
+
+def _map_dict(map_row, data):
+    return {"id": map_row["id"], "gridType": map_row["grid_type"], "width": map_row["width"], "height": map_row["height"],
+            "settings": json.loads(map_row["settings"] or "{}"), "data": data, "updatedAt": map_row["updated_at"]}
+
+
+def _eyes(db, ref, data):
+    kind, rid = (ref or {}).get("kind"), str((ref or {}).get("id") or "")
+    if kind == "marker":
+        mk = next((m for m in data.get("markers", []) if m["id"] == rid), None)
+        return SM.eyes_of_marker(mk) if mk else ([], [], 0)
+    if kind == "player":
+        row = db.execute("SELECT character FROM players WHERE id=?", (rid,)).fetchone()
+        return SM.eyes_of_player_row(row) if row else ([], [], 0)
+    return [], [], 0
+
+
+def sight(db, map_row, a_ref, b_ref, data=None, sm=None):
+    """Line of sight, cover (walls, closed doors), distance and range band between two combatants, and how
+    each sees the other in the map's light and smoke with their own eyes."""
+    data = data if data is not None else json.loads(map_row["data"])
+    m = _map_dict(map_row, data)
     pa, pb = _position(db, map_row["id"], a_ref, data), _position(db, map_row["id"], b_ref, data)
     if not pa or not pb:
         return None
-    out = geo.line_of_sight(m, data.get("cells") or {}, pa, pb)
+    sm = sm or SM.map_sight(m, db)
+    out = sm.cover(pa, pb)
     out["cells"] = geo.cell_distance(m["gridType"], pa, pb)
+    cell_m = SM.cell_meters(m)
+    out["meters"] = round(sm.distance_m(pa, pb, cell_m), 1)
+    out["band"] = range_band(out["meters"])
+    ea, eb = _eyes(db, a_ref, data), _eyes(db, b_ref, data)
+    out["view"] = sm.view(pa, pb, ea[0], cell_m, ea[2])
+    out["back"] = sm.view(pb, pa, eb[0], cell_m, eb[2])
+    out["light"] = geo.LIGHT_LEVELS[sm.level(*pb)]
+    out["magnification"] = "Magnification" in ea[1]
     return out
 
 
@@ -762,7 +800,11 @@ def gm_attack(map_id):
         if not targets:
             return _fail(db, "Pick a target.")
         mode = b.get("mode") if b.get("mode") in G.FIRING_MODES else None
+        auto_range = b.get("range") in (None, "", "auto")
         rng = b.get("range") if b.get("range") in G.RANGES else "Near"
+        if auto_range:
+            sg0 = sight(db, mrow, b.get("attacker"), targets[0][0], data)
+            rng = sg0["band"] if sg0 else "Near"
         force = bool(b.get("ignoreActions"))
         notes = []
         wkey = str(b.get("weapon") or "")
@@ -828,13 +870,19 @@ def gm_attack(map_id):
         if b.get("intercept") and not weapon.get("melee"):
             return _fail(db, "Intercept is a melee attack.")
 
-        # line of sight (not needed in astral combat or when the GM says so)
+        # line of sight, light and smoke (not needed in astral combat or when the GM says so)
         sights = {}
+        sm_ = SM.map_sight(_map_dict(mrow, data), db)
+        physical_sight = not weapon.get("astral") and not weapon.get("matrix")
         for ref, f, tref in targets:
-            sg = sight(db, mrow, b.get("attacker"), ref)
+            sg = sight(db, mrow, b.get("attacker"), ref, data, sm_)
             sights[_ref_key(ref)] = sg
-            if sg and not sg["los"] and not weapon.get("astral") and not weapon.get("matrix") and not b.get("ignoreSight"):
+            if sg and not sg["los"] and physical_sight and not b.get("ignoreSight"):
                 return _fail(db, f"{att.name} has no line of sight to {f.name} (walls or a closed door). Tick “Ignore line of sight” for indirect fire.")
+            if sg and not sg["view"]["see"] and physical_sight and not b.get("ignoreSight"):
+                why = "it's too dark for their eyes" if sg["view"].get("dark") else "they are blinded"
+                return _fail(db, f"{att.name} can't see {f.name}: {why} (a visibility test fails outright, p. 51). "
+                                 "Tick “Ignore line of sight” to attack anyway.")
 
         # actions (Intercept: Minor + the Attack Major; full auto splits without Multiple Attacks; attacking
         # from Cover needs an extra Minor) and Edge (one expenditure per combat round)
@@ -928,7 +976,12 @@ def gm_attack(map_id):
             cover = auto_cover if chosen in (None, "auto") else clamp_int(chosen, 0, 4, 0)
             cover = max(cover, tgt.status("Cover"))
             cs = counterspell_on(t, tgt.entry) if weapon.get("spell") else None
-            opts = {"range": rng, "attack_mod": b.get("attackMod"), "defense_mod": b.get("defenseMod"),
+            rng_t = rng
+            if auto_range and sg and physical_sight:
+                rng_t = sg["band"]
+            env_blind = sg["view"]["blind"] if sg and physical_sight and sg["view"]["see"] else 0
+            opts = {"range": rng_t, "attack_mod": b.get("attackMod"), "env_blind": env_blind,
+                    "magnification": bool(sg and sg.get("magnification")), "defense_mod": b.get("defenseMod"),
                     "soak_mod": b.get("soakMod"), "wild": b.get("wild"), "extra_dv": b.get("extraDv"),
                     "unopposed": bool(b.get("unopposed")), "defense": dkey, "cover": cover,
                     "full_defense": bool(tgt.entry and tgt.entry.get("fd")), "called": b.get("called") or None,
@@ -1080,6 +1133,20 @@ def gm_attack(map_id):
                             e["edgeGained"] = _clamp0(e.get("edgeGained")) + got
                         res["edge_awarded"] = who.name
                         notes.append(f"{who.name} gains 1 Edge (AR vs DR)")
+            sgv = (res.get("sight") or {})
+            if auto_edge and physical_sight and sgv.get("view") and not res.get("stray"):
+                # vision advantage (p. 118): whoever sees the other clearly while they can't gains 1 Edge
+                a_clear, d_clear = sgv["view"].get("clear"), sgv["back"].get("clear")
+                who = att if a_clear and not d_clear else tgt if d_clear and not a_clear and sgv["back"].get("see") else None
+                e = who.entry if who else None
+                if who and (e is None or _clamp0(e.get("edgeGained")) < ACT.EDGE_GAIN_CAP):
+                    got = who.gain_edge(1)
+                    if got:
+                        if e is not None:
+                            e["edgeGained"] = _clamp0(e.get("edgeGained")) + got
+                        res["vision_edge"] = who.name
+                        notes.append(f"{who.name} gains 1 Edge (sees better in the {sgv.get('light', 'light')}"
+                                     f"{' and smoke' if sgv['view'].get('blind') or sgv['back'].get('blind') else ''})")
             if res.get("restrained") and not res.get("stray"):
                 e = att.entry
                 if e is None or _clamp0(e.get("edgeGained")) < ACT.EDGE_GAIN_CAP:

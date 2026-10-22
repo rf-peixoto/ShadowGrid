@@ -11,10 +11,12 @@ import threading
 from flask import Response, abort, jsonify, request
 
 import geometry as geo
-from core import (DEFAULT_SETTINGS, app, body, campaign_version, clamp_int, clean_color, display_name,
+from core import (DEFAULT_SETTINGS, add_roll, app, body, campaign_version, clamp_int, clean_color, display_name,
                   err, fetch_player, get_db, load_char, new_id, now, player_required, roll_rows,
                   row_to_player, save_char, save_player)
 import fight
+import movement as MV
+import sightmap as SM
 from security import gamemaster_required, rate_limited
 from sr import combat as X
 from sr import rules as R
@@ -34,8 +36,17 @@ def merged_settings(user):
                         s["colors"][ck] = clean_color(cv, s["colors"][ck])
             elif k == "doorPalette" and isinstance(v, list):
                 s[k] = [clean_color(c, "#ffffff") for c in v[:12]]
-            elif k in ("legendVisible", "showGrid", "showRoomLabels", "sightReveal"):
+            elif k in ("legendVisible", "showGrid", "showRoomLabels", "sightReveal", "enemiesInSight"):
                 s[k] = bool(v)
+            elif k == "playerView":
+                s[k] = v if v in PLAYER_VIEWS else s[k]
+            elif k == "ambientLight":
+                s[k] = v if v in geo.LIGHT_LEVELS else s[k]
+            elif k == "cellMeters":
+                try:
+                    s[k] = round(max(0.5, min(10.0, float(v))), 2)
+                except (TypeError, ValueError):
+                    pass
             elif k == "sightRadius":
                 s[k] = clamp_int(v, 1, 20, s[k])
     return s
@@ -92,6 +103,10 @@ def clean_data(data, grid_type="square"):
             nc["borderOn"] = False
         if cell.get("secret"):
             nc["secret"] = True
+        if cell.get("light") in geo.LIGHT_LEVELS:
+            nc["light"] = cell["light"]
+        if cell.get("smoke") in geo.SMOKE_KINDS:
+            nc["smoke"] = cell["smoke"]
         doors = {}
         for e, d in (cell.get("doors") or {}).items():
             if isinstance(d, dict) and str(e).isdigit() and int(e) < 6:
@@ -132,6 +147,10 @@ def clean_data(data, grid_type="square"):
             continue
         if m.get("hidden"):
             nm["hidden"] = True
+        if clamp_int(m.get("light"), 0, 60, 0):
+            nm["light"] = clamp_int(m.get("light"), 0, 60, 0)          # gives light this many meters around
+        if isinstance(m.get("vision"), list):
+            nm["vision"] = [v for v in X.VISION_TYPES if v in m["vision"]]   # the GM's word on its eyes
         info = str(m.get("info") or "").strip()[:INFO_MAX]
         if info:
             nm["info"] = info
@@ -159,6 +178,33 @@ def clean_data(data, grid_type="square"):
         cells = [str(k)[:16] for k in (room.get("cells") or []) if isinstance(k, str)][:20000]
         out["rooms"].append({"id": str(room.get("id") or new_id(8))[:16], "name": str(room.get("name") or "Room")[:60],
                              "cells": cells})
+    out["templates"] = clean_templates(data.get("templates"))
+    return out
+
+
+TEMPLATE_KINDS = ("blast", "spell", "smoke", "custom")
+PLAYER_VIEWS = ("choose", "top", "iso", "fp")
+TEMPLATES_MAX = 40
+
+
+def clean_templates(v):
+    """Area templates on the map: a circle of `radius` meters around a cell; blasts carry their rings."""
+    out = []
+    for t in (v if isinstance(v, list) else [])[:TEMPLATES_MAX]:
+        if not isinstance(t, dict):
+            continue
+        try:
+            o = {"id": str(t.get("id") or new_id(8))[:16], "c": int(t["c"]), "r": int(t["r"]),
+                 "kind": t.get("kind") if t.get("kind") in TEMPLATE_KINDS else "custom",
+                 "radius": max(0.5, min(100.0, float(t.get("radius") or 2))), "name": str(t.get("name") or "Area")[:60],
+                 "by": str(t.get("by") or "gm")[:20], "color": clean_color(t.get("color"), "#ffb02e"), "t": float(t.get("t") or 0)}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(t.get("dv"), list):
+            o["dv"] = [str(x)[:8] for x in t["dv"][:3]]
+        if t.get("note"):
+            o["note"] = str(t["note"])[:120]
+        out.append(o)
     return out
 
 
@@ -202,7 +248,11 @@ def place_player(p, m, c, r, path=None):
             ms["explored"][k] = True
     st = m.get("settings") or {}
     if st.get("sightReveal"):
-        for k in geo.visible_cells(m, m["data"]["cells"], (c, r), st.get("sightRadius") or 8, ms["explored"]):
+        row = get_db().execute("SELECT character FROM players WHERE id=?", (p["id"],)).fetchone()
+        vision, _extras, blinded = SM.eyes_of_player_row(row) if row else ([], [], 0)
+        sight = SM.map_sight(m, me=p)
+        for k in sight.visible_cells((c, r), st.get("sightRadius") or 8, ms["explored"], vision=vision,
+                                     cell_m=SM.cell_meters(m), blinded=blinded):
             ms["explored"][k] = True
 
 
@@ -369,6 +419,15 @@ def keep_runtime(old, new, runtime):
                     door["open"] = False
                 else:
                     door.pop("locked", None)
+    # light, smoke and area templates change live through their own calls: the server's copy wins
+    for k, cell in new.get("cells", {}).items():
+        oc = old.get("cells", {}).get(k) or {}
+        for f in ("light", "smoke"):
+            if oc.get(f):
+                cell[f] = oc[f]
+            else:
+                cell.pop(f, None)
+    new["templates"] = old.get("templates") or []
     old_markers = {m["id"]: m for m in old.get("markers", [])}
     for m in new.get("markers", []):
         om = old_markers.get(m["id"])
@@ -477,6 +536,180 @@ def apply_reveal(p, map_id, m, action, cell_keys):
                 ms["explored"].pop(k, None)
 
 
+@app.route("/api/maps/<map_id>/light", methods=["POST"])
+@gamemaster_required
+def paint_light(map_id):
+    """Paint light and smoke on cells, live: {cells: [keys], light: bright|dim|dark|"" (the map's ambient),
+    smoke: smoke|thermal|"" (clears)}; a field left out is left alone."""
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    m = fetch_map(map_id)
+    b = body()
+    keys = [str(k)[:16] for k in (b.get("cells") or []) if isinstance(k, str)][:20000]
+    light = b.get("light") if "light" in b else None
+    smoke = b.get("smoke") if "smoke" in b else None
+    if light not in (None, "") and light not in geo.LIGHT_LEVELS:
+        return err("Unknown light level.")
+    if smoke not in (None, "") and smoke not in geo.SMOKE_KINDS:
+        return err("Unknown smoke.")
+    cells = m["data"]["cells"]
+    for k in keys:
+        try:
+            c, r = (int(x) for x in k.split(","))
+        except ValueError:
+            continue
+        if not geo.in_bounds(m, c, r):
+            continue
+        cell = cells.setdefault(f"{c},{r}", {})
+        if light is not None:
+            if light:
+                cell["light"] = light
+            else:
+                cell.pop("light", None)
+        if smoke is not None:
+            if smoke:
+                cell["smoke"] = smoke
+            else:
+                cell.pop("smoke", None)
+        if not cell:
+            del cells[f"{c},{r}"]
+    save_map_data(map_id, m["data"])
+    db.commit()
+    return jsonify({"ok": True, "cells": {k: cells.get(k) for k in keys if k in cells}})
+
+
+# ---------------------------------------------------------------- area templates
+GAS_RADIUS_M = 20          # a gas or smoke grenade's cloud (Gas Attacks, p. 116: Range 5 x 4)
+PLAYER_TEMPLATES = 3
+
+
+def _blast_dv(it):
+    """(radius m, [GZ, Close, Near]) for an explosive item, or None."""
+    name = R._base_name(it)
+    if name == "Explosive Package" and it.get("rating"):
+        rt = R._int(it["rating"])
+        return float(rt), [f"{rt}P", f"{rt // 2}P", f"{rt // 4}P"]
+    e = None
+    try:
+        from sr import catalog as CAT
+        e = CAT.entry(it.get("ref"))
+    except Exception:       # noqa: BLE001 (unknown or custom item)
+        e = None
+    src = e or it
+    blast = str(src.get("blast") or "")
+    m = re.match(r"^(\d+)\s*m", blast)
+    if not m:
+        return None
+    return float(m.group(1)), [str(src.get(k) or "—") for k in ("dv_gz", "dv_close", "dv_near")]
+
+
+def template_from(c, src):
+    """A player's template from their own sheet: {"type": "item", "uid"} (an explosive they carry),
+    {"type": "spell", "name", "increase"} (an area spell they know) or {"type": "custom", "radius"}."""
+    kind = (src or {}).get("type")
+    if kind == "item":
+        it = next((x for x in c["inventory"] if x.get("uid") == src.get("uid")), None)
+        if not it:
+            raise R.RuleError("That item isn't in your inventory.")
+        name = R._base_name(it)
+        if "Smoke" in name or "Gas" in name:
+            return {"kind": "smoke" if "Smoke" in name else "custom", "radius": GAS_RADIUS_M, "name": name,
+                    "note": "Gas Attacks: the cloud lasts about 10 rounds"}
+        bd = _blast_dv(it)
+        if not bd:
+            raise R.RuleError(f"{name} has no blast.")
+        return {"kind": "blast", "radius": bd[0], "name": name, "dv": bd[1]}
+    if kind == "spell":
+        sp = next((x for x in c.get("spells") or [] if x.get("name") == src.get("name")), None)
+        if not sp:
+            raise R.RuleError("You don't know that spell.")
+        area = sp.get("area") or (R.SPELLS.get(sp["name"]) or {}).get("area")
+        if not area:
+            raise R.RuleError(f"{sp['name']} isn't an area spell.")
+        inc = max(0, min(10, R._int(src.get("increase"))))
+        return {"kind": "spell", "radius": 2 + 2 * inc, "name": sp["name"],
+                "note": f"Increase Area +{inc} (+{inc} drain)" if inc else "2 m sphere"}
+    if kind == "custom":
+        return {"kind": "custom", "radius": max(1, min(100, R._int(src.get("radius"), 2))), "name": "Area"}
+    raise R.RuleError("Pick what makes the area.")
+
+
+def _template_op(m, b, by, color, own_only=False):
+    """add / move / remove / clear on the map's templates. Returns an error message or None."""
+    ts = m["data"].setdefault("templates", [])
+    op = b.get("op")
+    if op == "add":
+        tpl = dict(b.get("template") or {})
+        tpl.update({"id": new_id(8), "c": clamp_int(b.get("c"), 0, 999, -1), "r": clamp_int(b.get("r"), 0, 999, -1),
+                    "by": by, "color": color, "t": now()})
+        if not geo.in_bounds(m, tpl["c"], tpl["r"]):
+            return "Pick a cell on the map."
+        if own_only and sum(1 for x in ts if x.get("by") == by) >= PLAYER_TEMPLATES:
+            return f"You can have {PLAYER_TEMPLATES} areas on the map at once. Remove one first."
+        cleaned = clean_templates([tpl])
+        if not cleaned:
+            return "That area can't be placed."
+        ts.append(cleaned[0])
+        del ts[:-TEMPLATES_MAX]
+        return None
+    tpl = next((x for x in ts if x["id"] == b.get("id")), None)
+    if op == "clear" and not own_only:
+        ts.clear()
+        return None
+    if not tpl or (own_only and tpl.get("by") != by):
+        return "That area is gone."
+    if op == "remove":
+        ts.remove(tpl)
+    elif op == "move":
+        c, r = clamp_int(b.get("c"), 0, 999, -1), clamp_int(b.get("r"), 0, 999, -1)
+        if not geo.in_bounds(m, c, r):
+            return "Pick a cell on the map."
+        tpl["c"], tpl["r"] = c, r
+    elif op == "smoke" and not own_only:
+        # fill the cloud with smoke: every room cell the area reaches
+        kind = b.get("smoke") if b.get("smoke") in geo.SMOKE_KINDS else "smoke"
+        for k in template_cells(m, tpl):
+            m["data"]["cells"].setdefault(k, {})["smoke"] = kind
+    else:
+        return "Unknown action."
+    return None
+
+
+def template_cells(m, tpl):
+    """Room cells an area reaches: within its radius of the centre cell, with a line from the centre."""
+    sm = SM.map_sight(m)
+    cm = SM.cell_meters(m)
+    a = (tpl["c"], tpl["r"])
+    rc = int(tpl["radius"] / cm) + 1
+    out = []
+    pa = geo.cell_center(sm.gt, *a)
+    for c in range(a[0] - rc - 1, a[0] + rc + 2):
+        for r in range(a[1] - rc - 1, a[1] + rc + 2):
+            if (c, r) in sm.rooms and sm.distance_m(a, (c, r), cm) <= tpl["radius"] + 1e-6 and \
+                    (a == (c, r) or sm.ray_clear(pa, geo.cell_center(sm.gt, c, r), a, (c, r))):
+                out.append(f"{c},{r}")
+    return out
+
+
+@app.route("/api/maps/<map_id>/templates", methods=["POST"])
+@gamemaster_required
+def gm_templates(map_id):
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    m = fetch_map(map_id)
+    b = body()
+    if b.get("op") == "add":
+        t = b.get("template") or {}
+        b = dict(b, template={k: t.get(k) for k in ("kind", "radius", "name", "dv", "note")})
+    problem = _template_op(m, b, "gm", "#ffd23f")
+    if problem:
+        db.rollback()
+        return err(problem)
+    save_map_data(map_id, m["data"])
+    db.commit()
+    return jsonify({"templates": m["data"]["templates"], "cells": m["data"]["cells"] if b.get("op") == "smoke" else None})
+
+
 @app.route("/api/maps/<map_id>/reveal", methods=["POST"])
 @gamemaster_required
 def bulk_reveal(map_id):
@@ -575,6 +808,17 @@ def gamemaster_update_marker(map_id):
         mk["c"], mk["r"] = c, r
     if "label" in b:
         mk["label"] = str(b["label"])[:80]
+    if "light" in b:
+        lr = clamp_int(b["light"], 0, 60, 0)
+        if lr:
+            mk["light"] = lr
+        else:
+            mk.pop("light", None)
+    if "vision" in b:
+        if isinstance(b["vision"], list):
+            mk["vision"] = [v for v in X.VISION_TYPES if v in b["vision"]]
+        else:
+            mk.pop("vision", None)
     if "info" in b:
         info = str(b["info"] or "").strip()[:INFO_MAX]
         if info:
@@ -821,8 +1065,9 @@ def _known_cells():
     return str(known or "")
 
 
-def _visible_cells(m, explored, station):
-    """Explored cells (and the map station's dim view), with doors facing them; defaults left out."""
+def _visible_cells(m, explored, station, sight=None):
+    """Explored cells (and the map station's dim view), with doors facing them, and the light and smoke
+    there (light sources included); defaults left out."""
     cells = {}
     all_cells = m["data"]["cells"]
     for k, cell in all_cells.items():
@@ -841,6 +1086,13 @@ def _visible_cells(m, explored, station):
             o["doors"] = dict(cell["doors"])
         if vis:
             o["vis"] = vis
+        if sight is not None:
+            c, r = (int(x) for x in k.split(","))
+            lv = sight.level(c, r)
+            if lv:
+                o["light"] = geo.LIGHT_LEVELS[lv]
+        if cell.get("smoke"):
+            o["smoke"] = cell["smoke"]
         cells[k] = o
     # doors stored on a hidden neighbour but facing a visible cell: mirror them onto the visible cell
     edges = geo.edge_count(m["gridType"])
@@ -873,13 +1125,15 @@ def player_view(me_row):
     ms = player_map_state(p, m["id"])
     explored = ms.get("explored") or {}
     station = bool(ms.get("mapStation"))
-    # the visible cells only change with the map or with what this runner has explored: cache them, and
-    # skip them entirely when the browser says it already has this version
-    sig = hashlib.sha1("\x00".join((row["id"], row["data"], json.dumps(explored), str(station))).encode()).hexdigest()[:20]
+    sight = SM.map_sight(m, cached=True)
+    # the visible cells only change with the map, its lights or what this runner has explored: cache them,
+    # and skip them entirely when the browser says it already has this version
+    sig = hashlib.sha1("\x00".join((row["id"], row["data"], json.dumps(explored), str(station),
+                                    str(sorted(sight.lit)))).encode()).hexdigest()[:20]
     with _VIEW_LOCK:
         cells = _VIEW_CELLS.get(sig)
     if cells is None:
-        cells = _visible_cells(m, explored, station)
+        cells = _visible_cells(m, explored, station, sight)
         with _VIEW_LOCK:
             _VIEW_CELLS[sig] = cells
             while len(_VIEW_CELLS) > VIEW_CACHE_MAX:
@@ -887,8 +1141,20 @@ def player_view(me_row):
     if _known_cells() == sig:
         cells = None
     markers = []
+    token = ms.get("token")
+    eyes = (p.get("vision") or [], p.get("visionExtras") or [], SM.blinded_level(p.get("statuses")))
+    hide_unseen = m["settings"].get("enemiesInSight", True)
+    cell_m = SM.cell_meters(m)
     for mk in m["data"]["markers"]:
         k = f"{mk['c']},{mk['r']}"
+        if hide_unseen and SM.is_creature(mk) and not mk.get("hidden") and explored.get(k):
+            # creatures show only while this runner can see them: a sight line, and light enough for their eyes
+            seen = False
+            if token:
+                a, b = (token["c"], token["r"]), (mk["c"], mk["r"])
+                seen = sight.can_see(a, b) and sight.view(a, b, eyes[0], cell_m, eyes[2])["see"]
+            if not seen:
+                continue
         if explored.get(k) and not mk.get("hidden"):
             o = {k2: mk.get(k2) for k2 in ("id", "c", "r", "type", "color", "label", "cm", "statuses", "info") if mk.get(k2) is not None}
             if is_link(mk):
@@ -922,9 +1188,22 @@ def player_view(me_row):
             if d:
                 out["doorsHere"].append({"edge": e, "open": bool(d.get("open")), "locked": bool(d.get("locked")), "color": d.get("color")})
     out["token"] = token
+    out["eyes"] = {"vision": eyes[0], "extras": eyes[1], "blinded": eyes[2]}
+    t = fight.load_tracker(p["campaignId"])
+    e = fight.entry_for(t, "player", p["id"])
+    if e is not None and token:
+        order = fight.ordered(t)
+        cur_e = order[max(0, min(t.get("turn", 0), len(order) - 1))] if order else None
+        ch = load_char(me_row)
+        out["movement"] = MV.overlay(t, e, ch, R.derive(ch), cell_m, bool(cur_e and cur_e["id"] == e["id"]))
+    out["flashlight"] = {"has": bool(p.get("hasFlashlight")), "on": bool(ms.get("flashlight"))}
+    out["templates"] = m["data"].get("templates") or []
+    st_ = m["settings"]
     out["map"] = {"id": m["id"], "name": m["name"], "gridType": m["gridType"], "width": m["width"],
                   "height": m["height"], "cellSize": m["cellSize"],
-                  "settings": {"colors": m["settings"]["colors"], "showGrid": m["settings"]["showGrid"], "legendVisible": m["settings"]["legendVisible"]},
+                  "settings": {"colors": st_["colors"], "showGrid": st_["showGrid"], "legendVisible": st_["legendVisible"],
+                               "ambientLight": st_.get("ambientLight", "bright"), "cellMeters": cell_m,
+                               "enemiesInSight": bool(hide_unseen), "playerView": st_.get("playerView", "choose")},
                   "cells": cells, "cellsSig": sig, "markers": markers, "mapStation": station}
     return out
 
@@ -950,6 +1229,29 @@ def player_move(me):
     path = geo.find_path(m, m["data"]["cells"], cur, (c, r), explored=ms.get("explored"))
     if path is None:
         return err("There is no open way to get there.")
+    # in combat: on their own turn, within their Move or Sprint (the GM's moves are never limited)
+    t = fight.load_tracker(p["campaignId"])
+    e = fight.entry_for(t, "player", p["id"])
+    if e is not None and e.get("total") is not None and path:
+        order = fight.ordered(t)
+        cur_e = order[max(0, min(t.get("turn", 0), len(order) - 1))]
+        if cur_e["id"] != e["id"]:
+            return err(f"It's {cur_e['name'] if not cur_e.get('hidden') else 'someone else'}'s turn. "
+                       "You can move on yours (the GM can move you any time).")
+        ch = load_char(me)
+        try:
+            steps, notes, rolls = MV.combat_move(t, e, ch, R.derive(ch), len(path), SM.cell_meters(m), p["name"])
+        except R.RuleError as ex:
+            return err(str(ex))
+        if steps <= 0:
+            return err("You can't move any farther this turn.")
+        path = path[:steps]
+        c, r = path[-1]
+        fight.save_tracker(p["campaignId"], t)
+        for res in rolls:
+            add_roll(p["campaignId"], p["id"], p["name"], p["color"], "sr", res)
+        add_roll(p["campaignId"], p["id"], p["name"], p["color"], "note",
+                 {"text": " · ".join([f"moves {len(path) * SM.cell_meters(m):g} m"] + notes)})
     place_player(p, m, c, r, path)
     link = link_at(m, c, r)
     if link:
@@ -982,6 +1284,51 @@ def player_door(me):
     if door["open"]:
         place_player(p, m, tok["c"], tok["r"])
         save_player(p)
+    get_db().commit()
+    return jsonify(player_view(_me_fresh(me)))
+
+
+@app.route("/api/me/templates", methods=["POST"])
+@player_required
+@rate_limited("player_templates", 60)
+def player_templates(me):
+    """Players place up to 3 areas (their grenades, area spells, or a radius) for the table to see."""
+    p = locked_player(me["id"])
+    if not p["currentMapId"]:
+        return err("The GM has not placed you on a map yet.")
+    m = fetch_map(p["currentMapId"])
+    b = body()
+    if b.get("op") == "add":
+        try:
+            b = dict(b, template=template_from(load_char(me), b.get("source")))
+        except R.RuleError as ex:
+            return err(str(ex))
+    problem = _template_op(m, b, p["id"], p["color"], own_only=True)
+    if problem:
+        return err(problem)
+    save_map_data(m["id"], m["data"])
+    get_db().commit()
+    return jsonify(player_view(_me_fresh(me)))
+
+
+@app.route("/api/me/flashlight", methods=["POST"])
+@player_required
+@rate_limited("player_flashlight", 30)
+def player_flashlight(me):
+    """Switch the runner's flashlight on or off (it lights the cells around them it can reach)."""
+    p = locked_player(me["id"])
+    if not p["currentMapId"]:
+        return err("The GM has not placed you on a map yet.")
+    on = bool(body().get("on"))
+    if on and not R.derive(load_char(me))["flashlight"]:
+        return err("You need a flashlight in your inventory.")
+    m = fetch_map(p["currentMapId"])
+    ms = player_map_state(p, m["id"])
+    ms["flashlight"] = on
+    tok = ms.get("token")
+    if on and tok:
+        place_player(p, m, tok["c"], tok["r"])
+    save_player(p)
     get_db().commit()
     return jsonify(player_view(_me_fresh(me)))
 

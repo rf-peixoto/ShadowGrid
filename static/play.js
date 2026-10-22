@@ -117,6 +117,7 @@ function onSheet(sh) {
   renderCondition();
   if (mapRoller) mapRoller.render();
   if (S.view === 'store') renderStore();
+  if (S.st && S.st.view) { renderTactics(); requestDraw(); }
 }
 function renderPlayerLog(rolls) {
   SR.renderLog($('p-log'), rolls);
@@ -153,7 +154,7 @@ const mini = document.createElement('canvas'), mctx = mini.getContext('2d');
 const vp = makeViewport(canvas, wrap, $('minimap'), () => S.map);
 $('minimap').addEventListener('minimap-move', requestDraw);
 function loadIso() { try { return localStorage.getItem('sg.iso') !== '0'; } catch { return true; } }
-function setIso(on) { vp.setIso(on); $('iso-toggle').checked = on; try { localStorage.setItem('sg.iso', on ? '1' : '0'); } catch { /* ignore */ } if (S.map) focusToken(); invalidate(); }
+function setIso(on, remember = true) { vp.setIso(on); $('iso-toggle').checked = on; if (remember) try { localStorage.setItem('sg.iso', on ? '1' : '0'); } catch { /* ignore */ } if (S.map) focusToken(); invalidate(); }
 vp.setIso(loadIso());
 $('iso-toggle').checked = vp.iso;
 $('iso-toggle').onchange = e => setIso(e.target.checked);
@@ -188,8 +189,45 @@ function setLos(on) {
 }
 $('los-toggle').onchange = e => setLos(e.target.checked);
 S.los = loadLos(); $('los-toggle').checked = S.los; $('los-key').hidden = !S.los;
+/* range bands of one weapon (picked under Tactics), and the movement reach in combat */
+function pref(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } }
+function setPref(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
+S.range = pref('sg.range', '0') === '1'; S.rangeWeapon = pref('sg.range.w', ''); S.reach = pref('sg.reach', '1') === '1';
+function setRange(on) { S.range = on; $('range-toggle').checked = on; setPref('sg.range', on ? '1' : '0'); renderTactics(); requestDraw(); }
+function setReach(on) { S.reach = on; $('reach-toggle').checked = on; setPref('sg.reach', on ? '1' : '0'); requestDraw(); }
+$('range-toggle').checked = S.range; $('reach-toggle').checked = S.reach;
+$('range-toggle').onchange = e => setRange(e.target.checked);
+$('reach-toggle').onchange = e => setReach(e.target.checked);
+function weaponPools() {
+  const sh = S.sheet; if (!sh || !sh.pools) return [];
+  return sh.pools.filter(p => p.key.startsWith('weapon:') && p.key !== 'weapon:unarmed' && Array.isArray(p.ar));
+}
+function eyesOpts() { const e = (S.st && S.st.view.eyes) || {}; return { vision: e.vision || [], blinded: e.blinded || 0 }; }
+function sightSig() { return S.cellsSig + '|' + S.explored.size; }
 function bump() { wrap.classList.remove('bump'); void wrap.offsetWidth; wrap.classList.add('bump'); }
 $('fp-toggle').onchange = e => setFp(e.target.checked);
+/* the GM can fix how players see a map (top-down, isometric, first person); otherwise it's the player's choice */
+function forcedView() { const v = S.map && S.map.settings && S.map.settings.playerView; return v && v !== 'choose' ? v : null; }
+function applyForcedView() {
+  const f = forcedView();
+  $('iso-toggle').disabled = !!f; $('fp-toggle').disabled = !!f;
+  for (const id of ['iso-toggle', 'fp-toggle']) {
+    const lab = $(id).closest('label');
+    if (lab.dataset.title === undefined) lab.dataset.title = lab.title;
+    lab.title = f ? 'The game master chose how this map is seen.' : lab.dataset.title;
+  }
+  $('view-locked').hidden = !f;
+  if (f) {
+    const iso = f === 'iso', fp = f === 'fp';
+    if (vp.iso !== iso) setIso(iso, false);
+    if (S.fp !== fp) setFpView(fp);
+  } else if (S.forced) {
+    if (vp.iso !== loadIso()) setIso(loadIso(), false);
+    if (S.fp !== loadFp()) setFpView(loadFp());
+  }
+  S.forced = f;
+}
+function setFpView(on) { S.fp = on; $('fp-toggle').checked = on; $('fp-hint').hidden = !on; wrap.classList.toggle('fp', on); closeDetails(); invalidate(); }
 S.fp = loadFp(); $('fp-toggle').checked = S.fp; $('fp-hint').hidden = !S.fp; wrap.classList.toggle('fp', S.fp);
 
 function applyView(v) {
@@ -206,12 +244,13 @@ function applyView(v) {
   const look = JSON.stringify([m.id, m.gridType, m.settings, m.markers, v.token, v.others, m.mapStation]);
   const sceneChanged = cellsChanged || look !== S.lookSig;
   S.lookSig = look;
-  S.map = { gridType: m.gridType, width: m.width, height: m.height, cellSize: m.cellSize,
-    settings: { colors: m.settings.colors, showGrid: m.settings.showGrid }, data: { cells: m.cells, markers: m.markers, rooms: [] } };
+  S.map = { id: m.id, gridType: m.gridType, width: m.width, height: m.height, cellSize: m.cellSize,
+    settings: Object.assign({}, m.settings), data: { cells: m.cells, markers: m.markers, rooms: [] } };
   if (cellsChanged) S.explored = new Set(Object.keys(m.cells).filter(k => m.cells[k].vis !== 'dim'));
   // fit once the map has a size (before layout it is 0 x 0, and draw() does it instead)
   if (!S.fitted || S.lastMapId !== m.id) { if (S.view === 'map' && wrap.clientWidth && wrap.clientHeight) { focusToken(); S.fitted = true; S.lastMapId = m.id; } }
-  renderActions(); renderLegend(); renderTracker();
+  applyForcedView();
+  renderActions(); renderTactics(); renderLegend(); renderTracker();
   if (sceneChanged) invalidate(); else requestDraw();
 }
 /* initiative order, when the GM shows it */
@@ -248,7 +287,14 @@ function viewModel() {
   const tokens = (S.st.view.others || []).map(o => ({ ...o, me: false }));
   const t = token();
   if (t) tokens.push({ c: t.c, r: t.r, color: S.st.me.color, name: S.st.me.name, me: true, cm: S.st.me.cm, statuses: S.st.me.statuses });
-  return { mode: 'player', explored: S.explored, mapStation: !!S.st.view.map.mapStation, tokens };
+  // light as this runner's eyes see it: low-light sees dim light clearly, thermographic and ultrasound see in the dark
+  const eyes = eyesOpts().vision, L = GridCore.LIGHT_LEVELS;
+  const light = (c, r, cell) => {
+    const lv = cell.light ? Math.max(0, L.indexOf(cell.light)) : 0;
+    if (!lv) return 0;
+    return SightCore.handles(eyes, lv, null, 0) ? (lv === 2 ? 1 : 0) : lv;
+  };
+  return { mode: 'player', explored: S.explored, mapStation: !!S.st.view.map.mapStation, tokens, light };
 }
 function pathTo(cell) {
   const t = S.st.view.token; if (!t || !cell) return null;
@@ -288,9 +334,22 @@ function draw() {
   else { ctx2d.setTransform(...vp.matrix(dpr)); const q = scene._q || 1; ctx2d.drawImage(scene, 0, 0, scene.width / q, scene.height / q); }
   ctx2d.setTransform(...vp.matrix(dpr));
   // ---- world-space overlays (lie on the floor)
-  if (S.los && token()) {
+  const world = GridCore.sightWorld(S.map, {}, sightSig());
+  const mv = S.st.view.movement;
+  $('reach-key').hidden = !(S.reach && mv && token());
+  const wpn = S.range ? weaponPools().find(p => p.key === S.rangeWeapon) : null;
+  $('range-key').hidden = !wpn;
+  if ((S.los || wpn) && token()) {
     const t = token(), from = S.drag && S.drag.token && S.hover ? S.hover : t;
-    GridCore.drawSight(ctx2d, S.map, GridCore.sightField(S.map, from, LOS_RADIUS, S.cellsSig + '|' + S.explored.size), vp.zoom);
+    const field = GridCore.sightField(S.map, from, LOS_RADIUS, sightSig(), eyesOpts(), requestDraw);
+    if (field && wpn) GridCore.drawRange(ctx2d, S.map, field, world, wpn.ar, vp.zoom, ((S.st.view.eyes || {}).extras || []).includes('Magnification'));
+    else if (field) GridCore.drawSight(ctx2d, S.map, field, vp.zoom);
+  }
+  if (S.reach && mv && token() && !(S.drag && S.drag.token)) GridCore.drawReach(ctx2d, S.map, S.st.view.token, mv, vp.zoom);
+  if ((S.st.view.templates || []).length) GridCore.drawTemplates(ctx2d, S.map, world, S.st.view.templates, vp.zoom);
+  if (S.placing && S.hover) {
+    const t0 = Object.assign({ c: S.hover.c, r: S.hover.r }, S.placing.preview);
+    ctx2d.globalAlpha = 0.6; GridCore.drawTemplates(ctx2d, S.map, world, [t0], vp.zoom); ctx2d.globalAlpha = 1;
   }
   const target = S.drag && S.drag.token ? S.hover : (S.hover && !S.busy ? S.hover : null);
   const path = target ? pathTo(target) : null;
@@ -344,7 +403,7 @@ function drawFirstPerson(v, G, W, H, dpr, w, hh) {
     S.sceneDirty = false;
   }
   const cam = fpc.camera(performance.now());
-  FPView.render(ctx2d, W, H, dpr, { map: S.map, view: v, cam, sprites: fpSprites(v, G) });
+  FPView.render(ctx2d, W, H, dpr, { map: S.map, view: v, cam, sprites: fpSprites(v, G), eyes: eyesOpts().vision });
   const t = token(), c = G.cellCenter(t.c, t.r);
   vp.centerOn(c.x, c.y); vp.drawMinimap(mini);
   if (cam.animating) requestDraw();
@@ -400,6 +459,87 @@ function showDetails(sx, sy, at) {
   card.style.left = Math.max(8, Math.min(W - cw - 8, sx + 12)) + 'px';
   card.style.top = Math.max(8, Math.min(H - ch - 8, sy + 12)) + 'px';
 }
+/* Tactics: flashlight, movement left, range bands, areas */
+function rangeKey(p) {
+  const el = $('range-key'); el.innerHTML = '';
+  if (!p) return;
+  el.append(h('span.kt', p.label));
+  GridCore.RANGE_BANDS.forEach(([name], i) => el.append(h('span.b' + (p.ar[i] == null ? 'x' : i), `${name} ${p.ar[i] == null ? '—' : 'AR ' + p.ar[i]}`)));
+}
+function templateThings() {
+  const v = S.st.view, out = [];
+  if (v.token) out.push({ c: v.token.c, r: v.token.r, name: S.st.me.name });
+  for (const o of v.others || []) out.push({ c: o.c, r: o.r, name: o.name });
+  for (const m of (S.map && S.map.data.markers) || []) out.push({ c: m.c, r: m.r, name: markerName(m) });
+  return out;
+}
+function renderTactics() {
+  const el = $('p-tactics'), v = S.st && S.st.view;
+  $('p-tactics-block').hidden = !(v && v.map && v.token);
+  el.innerHTML = '';
+  if (!v || !v.map || !v.token) return;
+  // movement this turn
+  const mv = v.movement;
+  if (mv) {
+    const cm = mv.cellM || 2;
+    let txt;
+    if (!mv.rolled) txt = 'Roll initiative: until then you move freely.';
+    else if (!mv.yourTurn) txt = 'Not your turn: you move on yours.';
+    else if (!mv.walk && !mv.sprint) txt = mv.mode ? `You've moved ${mv.moved} m this turn.` : `You can't move${mv.why.length ? ` (${mv.why.join(', ')})` : ''}.`;
+    else txt = [mv.walk ? `Move: ${mv.walk} m left` : null,
+                mv.sprint ? (mv.mode === 'sprint' ? `Sprint: ${mv.sprint} m left` : `Sprint: ${mv.sprint}${mv.sprintMax > mv.sprint ? `–${mv.sprintMax}` : ''} m`) : null].filter(Boolean).join(' · ')
+              + (mv.why.length ? ` (${mv.why.join(', ')})` : '');
+    el.append(h('p.hint.tac-move', txt));
+    const rk = $('reach-key'); rk.innerHTML = '';
+    if (mv.walk) rk.append(h('span.rw', `Move ${mv.walk} m (${Math.floor(mv.walk / cm)} cells)`));
+    if (mv.sprint) rk.append(h('span.rs', `Sprint ${mv.sprint} m`));
+    if (mv.sprintMax > mv.sprint) rk.append(h('span.rm', `with hits, up to ${mv.sprintMax} m`));
+  }
+  // flashlight
+  if (v.flashlight && v.flashlight.has) {
+    el.append(h('button', { type: 'button', onclick: () => act('flashlight', { on: !v.flashlight.on }) },
+      v.flashlight.on ? 'Switch the flashlight off' : 'Switch the flashlight on'));
+  }
+  // vision
+  const eyes = v.eyes || {};
+  el.append(h('p.hint', 'Your eyes: ' + (['Normal', ...(eyes.vision || [])].join(', ')) + ((eyes.extras || []).length ? ` · ${eyes.extras.join(', ')}` : '') + (eyes.blinded ? ` · Blinded ${'I'.repeat(eyes.blinded)}` : '')));
+  // range bands
+  const pools = weaponPools();
+  if (pools.length) {
+    const sel = h('select', { 'aria-label': 'Weapon for the range bands', onchange: e => { S.rangeWeapon = e.target.value; setPref('sg.range.w', S.rangeWeapon); setRange(!!S.rangeWeapon); } },
+      h('option', { value: '' }, 'Range bands: off'),
+      pools.map(p => h('option', { value: p.key, selected: S.range && p.key === S.rangeWeapon }, p.label)));
+    el.append(h('label.tac-range', sel));
+    rangeKey(S.range ? pools.find(p => p.key === S.rangeWeapon) : null);
+  }
+  // areas
+  const inv = (S.sheet && S.sheet.char && S.sheet.char.inventory) || [];
+  const boom = inv.filter(it => it.cat === 'Ammo & Explosives' && (it.blast || /Grenade|Rocket|Explosive|Flash-Pak/i.test(it.name)));
+  const spells = ((S.sheet && S.sheet.char && S.sheet.char.spells) || []).filter(sp => sp.area);
+  const src = h('select', { 'aria-label': 'What makes the area' },
+    boom.map(it => h('option', { value: 'item:' + it.uid }, it.name)),
+    spells.map(sp => h('option', { value: 'spell:' + sp.name }, `${sp.name} (spell)`)),
+    h('option', { value: 'custom' }, 'A radius…'));
+  const extra = h('input', { type: 'number', min: 0, max: 50, value: 0, title: 'Increase Area steps (+2 m each) or the radius in meters', style: { width: '4.2em' } });
+  const syncExtra = () => { const v2 = src.value; extra.hidden = !(v2.startsWith('spell:') || v2 === 'custom'); if (v2 === 'custom' && +extra.value < 1) extra.value = 4; };
+  src.onchange = syncExtra; syncExtra();
+  const place = h('button', { type: 'button', onclick: () => {
+    const v2 = src.value, source = v2 === 'custom' ? { type: 'custom', radius: +extra.value || 4 }
+      : v2.startsWith('spell:') ? { type: 'spell', name: v2.slice(6), increase: +extra.value || 0 } : { type: 'item', uid: v2.slice(5) };
+    const r = source.type === 'custom' ? source.radius : source.type === 'spell' ? 2 + 2 * source.increase : 4;
+    S.placing = { source, preview: { radius: r, name: src.options[src.selectedIndex].textContent, kind: 'custom', color: S.st.me.color } };
+    wrap.classList.add('placing'); toast('Click the cell at the centre of the area (Esc cancels).');
+  } }, 'Place an area');
+  el.append(h('div.tac-area', src, extra, place));
+  const world = S.map ? GridCore.sightWorld(S.map, {}, sightSig()) : null;
+  for (const t of v.templates || []) {
+    const mine = t.by === S.st.me.id, hits = world ? GridCore.templateTargets(world, t, templateThings()) : [];
+    el.append(h('div.tac-tpl', { style: { borderLeftColor: t.color } },
+      h('div.tac-tpl-h', h('b', t.name), ` ${t.radius} m`, t.note ? h('span.muted', ` · ${t.note}`) : null,
+        mine ? h('button.x', { type: 'button', title: 'Remove', onclick: () => act('templates', { op: 'remove', id: t.id }) }, '×') : null),
+      hits.length ? h('div.tac-hits', hits.map(x => h('span', x.name + (x.ring ? ` · ${x.ring}${x.dv ? ' ' + x.dv : ''}` : '')))) : h('div.muted', 'Nobody you can see is inside.')));
+  }
+}
 function renderActions() {
   const el = $('p-actions'); el.innerHTML = '';
   if (!S.st || !S.st.view.map) return;
@@ -445,8 +585,15 @@ function moveTo(cell) {
   act('move', { c: cell.c, r: cell.r });
 }
 canvas.addEventListener('contextmenu', e => e.preventDefault());
+function stopPlacing() { S.placing = null; wrap.classList.remove('placing'); requestDraw(); }
 canvas.addEventListener('pointerdown', ev => {
   if (S.fp && token()) { S.drag = { fp: true, sx: ev.clientX, sy: ev.clientY, right: ev.button === 2 }; return; }
+  if (S.placing && ev.button === 0) {
+    const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy), cell = S.map ? geom(S.map).pointToCell(pt.x, pt.y) : null;
+    const source = S.placing.source; stopPlacing();
+    if (cell) act('templates', { op: 'add', source, c: cell.c, r: cell.r });
+    return;
+  }
   canvas.setPointerCapture(ev.pointerId);
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
   const pan = ev.button === 1 || ev.button === 2 || S.spaceDown;
@@ -497,13 +644,19 @@ const ARROWS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowR
 window.addEventListener('keydown', ev => {
   if (S.view !== 'map' || ev.target.matches('input, textarea, select') || document.querySelector('dialog[open]')) return;
   if (ev.key === 'Escape') closeDetails();
-  if ((ev.key.toLowerCase() === 'v' || ev.key === '3') && !ev.ctrlKey && !ev.metaKey) { setFp(!S.fp); return; }
+  if ((ev.key.toLowerCase() === 'v' || ev.key === '3') && !ev.ctrlKey && !ev.metaKey) { if (!forcedView()) setFp(!S.fp); return; }
   if (ev.key.toLowerCase() === 'l' && !ev.ctrlKey && !ev.metaKey && !S.fp) { setLos(!S.los); return; }
+  if (ev.key.toLowerCase() === 'r' && !ev.ctrlKey && !ev.metaKey && !S.fp) {
+    if (!S.rangeWeapon && weaponPools()[0]) { S.rangeWeapon = weaponPools()[0].key; setPref('sg.range.w', S.rangeWeapon); }
+    setRange(!S.range); return;
+  }
+  if (ev.key.toLowerCase() === 'm' && !ev.ctrlKey && !ev.metaKey && !S.fp) { setReach(!S.reach); return; }
+  if (ev.key === 'Escape' && S.placing) { stopPlacing(); return; }
   if (S.fp && token() && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { if (fpc.key(ev)) return; }
   if (ev.code === 'Space') { S.spaceDown = true; canvas.classList.add('panning'); ev.preventDefault(); }
   if (ev.key.toLowerCase() === 'f' && S.map) { vp.fit(); invalidate(); }
   if (ev.key.toLowerCase() === 'c' && S.map) { focusToken(); invalidate(); }
-  if (ev.key.toLowerCase() === 'i' && !ev.ctrlKey && !ev.metaKey) setIso(!vp.iso);
+  if (ev.key.toLowerCase() === 'i' && !ev.ctrlKey && !ev.metaKey && !forcedView()) setIso(!vp.iso);
   if (ARROWS[ev.key] && S.map && S.st.view.token && !S.busy) {
     ev.preventDefault();
     const t = S.st.view.token, G = geom(S.map), [dc, dr] = ARROWS[ev.key];

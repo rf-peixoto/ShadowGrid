@@ -187,6 +187,11 @@ DEFAULT_SETTINGS = {
     "legendVisible": True, "showGrid": True, "showRoomLabels": True,
     # reveal what runners can see (line of sight, walls and closed doors block it) as they move
     "sightReveal": False, "sightRadius": 8,
+    # light everywhere the GM hasn't painted (bright, dim, dark); meters per cell for ranges and movement;
+    # enemies (danger, boss and NPC markers) show to a runner only while that runner can see them
+    "ambientLight": "bright", "cellMeters": 2, "enemiesInSight": True,
+    # how players see this map: their own choice, or the GM's (top-down, isometric, first person)
+    "playerView": "choose",
 }
 PLAYER_COLORS = ["#ff2f7d", "#2de2e6", "#6dff9c", "#ffb02e", "#b98cff", "#ff6b3d", "#3dffd0", "#ffffff"]
 GM_COLOR = "#ffd23f"
@@ -411,6 +416,7 @@ def row_to_player(row, include_state=True):
          "statuses": c.get("statuses") or {},
          "pendingContacts": sum(1 for ct in c.get("contacts") or [] if not ct.get("verified", True)),
          "init": {"score": d["initiative_score"], "dice": d["initiative_dice"], "minor": d["minor_actions"]},
+         "vision": d["vision"], "visionExtras": d["vision_extras"], "hasFlashlight": d["flashlight"], "move": R.move_list(d),
          "charRev": row["char_rev"],
          "ping": json.loads(row["ping"]) if row["ping"] else None}
     if include_state:

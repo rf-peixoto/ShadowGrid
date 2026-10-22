@@ -316,6 +316,44 @@ def natural_max(c, attr, qs=None, inf=None):
     return max(1, min(13, mx))
 
 
+# ---- vision from gear: enhancements (p. 275) work in a worn optical device (glasses, goggles, contacts, a
+# monocle); cybereye options and the ultrasound sensor are implants. Magnification adds 2 to the Attack
+# Rating at Medium range and beyond; flare compensation softens glare and flash-paks.
+OPTICS = ("Glasses", "Goggles", "Contacts", "Monocle")
+VISION_MODS = {"Low-Light Vision": "Low-light", "Thermographic Vision": "Thermographic", "Ultrasound Link": "Ultrasound"}
+VISION_EXTRAS = {"Vision Magnification": "Magnification", "Flare Compensation": "Flare compensation"}
+
+
+def _base_name(it):
+    return re.sub(r"\s+\d+$", "", re.sub(r"\s*\(eye\)$", "", str(it.get("name") or ""))).strip()
+
+
+def vision_gear(c):
+    """(vision types, extras) from worn optics with enhancements and from implants."""
+    names = [_base_name(it) for it in c["inventory"]]
+    optics = any(n in OPTICS for n in names)
+    vis, extras = set(), set()
+    for it, n in zip(c["inventory"], names):
+        if it.get("implant"):
+            if n == "Ultrasound Sensor":
+                vis.add("Ultrasound")
+            if n in VISION_EXTRAS:
+                extras.add(VISION_EXTRAS[n])
+            continue
+        if it.get("mod") and optics:
+            if n in VISION_MODS:
+                vis.add(VISION_MODS[n])
+            if n in VISION_EXTRAS:
+                extras.add(VISION_EXTRAS[n])
+    return vis, extras
+
+
+def move_list(d):
+    """[walk, sprint, meters per sprint hit] from derived values."""
+    mv = d.get("movement") or {}
+    return [_int(mv.get("walk"), 10), _int(mv.get("sprint"), 15), _int(mv.get("per_hit"), 1)]
+
+
 def implants(c):
     return [it for it in c["inventory"] if it.get("implant")]
 
@@ -566,10 +604,13 @@ def _derive(c):
                if (K.QUALITIES[q["name"]].get("effects") or {}).get("vision")} | {it["vision"] for it in implants(c) if it.get("vision")}
     if inf:
         visions |= {v for v in (inf.get("vision"), inf.get("vision2")) if v}
+    gear_vision, vision_extras = vision_gear(c)
+    visions |= gear_vision
     composure = aug["Willpower"] + aug["Charisma"] - (init_dice if _qeffect(qs, "twitchy") else 0)
     return {
         "attributes": aug, "base": A, "max": maxes, "bonuses": bonuses, "essence": essence,
-        "qualities": qs, "vision": sorted(visions),
+        "qualities": qs, "vision": sorted(visions), "vision_extras": sorted(vision_extras),
+        "flashlight": any(_base_name(it) == "Flashlight" for it in c["inventory"]),
         "physical_boxes": p_boxes, "stun_boxes": s_boxes, "overflow_boxes": overflow,
         "physical_damage": pd, "stun_damage": sd, "wound_modifier": wound, "status": status,
         "initiative_score": aug["Reaction"] + aug["Intuition"], "initiative_dice": init_dice,

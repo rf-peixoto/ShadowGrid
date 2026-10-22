@@ -58,19 +58,42 @@ function setFp(on) {
 }
 /* line of sight overlay: from the selected token or marker, else the runner we are seeing as */
 const LOS_RADIUS = 20;
+/* an NPC's eyes (the same reading of its stat block as the server: sr/combat.py npc_vision) */
+const VISION_TYPES = ['Low-light', 'Thermographic', 'Ultrasound'];
+function npcVision(m) {
+  if (Array.isArray(m.vision)) return m.vision;
+  const npc = m.npc || {};
+  if (Array.isArray(npc.vision)) return npc.vision;
+  const text = [npc.template, npc.notes, m.label].filter(Boolean).join(' ').toLowerCase(), out = new Set();
+  for (const [w, v] of [['low-light', 'Low-light'], ['lowlight', 'Low-light'], ['thermographic', 'Thermographic'], ['thermo vision', 'Thermographic'], ['ultrasound', 'Ultrasound']]) if (text.includes(w)) out.add(v);
+  if (/\b(orks?|elf|elves|elven)\b/.test(text)) out.add('Low-light');
+  if (/\b(trolls?|dwarfs?|dwarves)\b/.test(text)) out.add('Thermographic');
+  return VISION_TYPES.filter(v => out.has(v));
+}
+const blindLevel = st => { const v = (st || {}).Blinded; return !v ? 0 : v === true ? 1 : Math.max(0, Math.min(3, +v || 1)); };
+function playerAt(c, r) {
+  return S.ctx.players.find(q => q.currentMapId === MAP_ID && (q.state.maps || {})[MAP_ID]?.token && q.state.maps[MAP_ID].token.c === c && q.state.maps[MAP_ID].token.r === r) || null;
+}
 function losSource() {
   if (S.selected) {
-    const { c, r } = S.selected;
-    if (markerAt(c, r)) return { c, r, who: (markerAt(c, r).label || (MARKER_BY_ID[markerAt(c, r).type] || MARKER_TYPES[0]).name) };
-    const p = S.ctx.players.find(q => q.currentMapId === MAP_ID && (q.state.maps || {})[MAP_ID]?.token && q.state.maps[MAP_ID].token.c === c && q.state.maps[MAP_ID].token.r === r);
-    if (p) return { c, r, who: p.name };
+    const { c, r } = S.selected, m = markerAt(c, r);
+    if (m) return { c, r, who: m.label || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name, vision: npcVision(m), blinded: blindLevel(m.statuses), marker: m };
+    const p = playerAt(c, r);
+    if (p) return { c, r, who: p.name, vision: p.vision || [], blinded: blindLevel(p.statuses), player: p };
   }
   const p = player(), t = p && pms(p).token;
-  return t ? { c: t.c, r: t.r, who: p.name } : null;
+  return t ? { c: t.c, r: t.r, who: p.name, vision: p.vision || [], blinded: blindLevel(p.statuses), player: p } : null;
 }
+/* the light the GM sees: the map's own, painted cells, lit markers and runners' flashlights */
+function gmLight() {
+  const toks = (S.ctx.players || []).filter(p => p.currentMapId === MAP_ID).map(p => { const ms = (p.state.maps || {})[MAP_ID] || {}; return ms.token ? { c: ms.token.c, r: ms.token.r, flashlight: !!ms.flashlight } : null; }).filter(Boolean);
+  return { ambient: (S.map.settings && S.map.settings.ambientLight) || 'bright', sources: GridCore.lightSources(S.map, toks) };
+}
+const sightSig = () => 'gm' + (S.geoSeq || 0);
+function gmWorld() { return GridCore.sightWorld(S.map, gmLight(), sightSig() + JSON.stringify(gmLight().sources)); }
 function losField() {
   const src = S.los && losSource();
-  return src ? GridCore.sightField(S.map, src, LOS_RADIUS, 'gm' + (S.geoSeq || 0)) : null;
+  return src ? GridCore.sightField(S.map, src, LOS_RADIUS, sightSig(), Object.assign({ vision: src.vision, blinded: src.blinded }, gmLight()), requestDraw) : null;
 }
 function setLos(on) {
   S.los = on; $('los-toggle').checked = on; $('los-key').hidden = !on;
@@ -105,7 +128,7 @@ function drawFirstPerson(dpr, W, H) {
   if (S.sceneDirty) renderSceneCache();
   const view = currentView(), cam = fpc.camera(performance.now());
   if (!cam) { setFp(false); return; }
-  FPView.render(ctx2d, W, H, dpr, { map: S.map, view, cam, sprites: fpSprites(view) });
+  FPView.render(ctx2d, W, H, dpr, { map: S.map, view, cam, sprites: fpSprites(view), eyes: player() ? (player().vision || []) : null });
   const c = G().cellCenter(S.fpCam.c, S.fpCam.r); vp.centerOn(c.x, c.y); vp.drawMinimap(mini);
   updateStatus();
   if (cam.animating) requestDraw();
@@ -127,17 +150,17 @@ function markerAt(c, r) { return markers().find(m => m.c === c && m.r === r); }
 // ------------------------------------------------------------ view model
 function currentView() {
   const showRooms = S.map.settings.showRoomLabels !== false;
-  if (S.mode === 'edit') return { mode: 'edit', rooms: showRooms };
+  if (S.mode === 'edit') { const w = gmWorld(); return { mode: 'edit', rooms: showRooms, light: (c, r) => w.level(c, r) }; }
   const tokens = [];
   for (const p of S.ctx.players) {
     if (p.currentMapId !== MAP_ID) continue;
     const t = (p.state.maps || {})[MAP_ID]?.token;
     if (t) tokens.push({ c: t.c, r: t.r, color: p.color, name: p.name, me: p.id === S.viewAs, cm: p.cm, statuses: p.statuses });
   }
-  const p = player();
-  if (!p) return { mode: 'gm', tokens, rooms: showRooms };
+  const p = player(), w = gmWorld(), light = (c, r) => w.level(c, r);
+  if (!p) return { mode: 'gm', tokens, rooms: showRooms, light };
   const ms = pms(p);
-  return { mode: 'player', explored: new Set(Object.keys(ms.explored)), mapStation: !!ms.mapStation, tokens };
+  return { mode: 'player', explored: new Set(Object.keys(ms.explored)), mapStation: !!ms.mapStation, tokens, light };
 }
 function hoverLabel() {
   if (!S.hover) return null;
@@ -184,6 +207,12 @@ function draw() {
   ctx2d.setTransform(...vp.matrix(dpr));
   const lf = losField();
   if (lf) GridCore.drawSight(ctx2d, S.map, lf, vp.zoom);
+  const tpls = S.map.data.templates || [];
+  if (tpls.length && S.mode === 'play') GridCore.drawTemplates(ctx2d, S.map, gmWorld(), tpls, vp.zoom);
+  if (S.placingArea && S.hover) { ctx2d.globalAlpha = 0.6; GridCore.drawTemplates(ctx2d, S.map, gmWorld(), [Object.assign({ c: S.hover.c, r: S.hover.r }, S.placingArea)], vp.zoom); ctx2d.globalAlpha = 1; }
+  const reach = S.mode === 'play' && S.reach ? gmReach() : null;
+  $('reach-key').hidden = !reach;
+  if (reach) GridCore.drawReach(ctx2d, S.map, reach.from, reach.mv, vp.zoom);
 
   const g = G();
   ctx2d.lineWidth = 2 / vp.zoom;
@@ -468,6 +497,7 @@ function applyTool(cell, pt, isFirst) {
     case 'marker': if (!isFirst) return; if (markerAt(c, r)) { S.selected = { c, r }; renderInspector(); return; } pushUndo(); placeMarker(c, r); break;
     case 'pmarker': if (!isFirst) return; S.selected = { c, r }; renderInspector(); return;
     case 'select': S.selected = { c, r }; renderInspector(); requestDraw(); return;
+    case 'light': queueLight(G().brushCells(cell, lightBrush()).map(b => key(b.c, b.r))); return;
     case 'reveal': if (!needPlayer()) return; queueFog('reveal', G().brushCells(cell, S.brush).map(b => key(b.c, b.r))); return;
     case 'hide': if (!needPlayer()) return; queueFog('hide', G().brushCells(cell, S.brush).map(b => key(b.c, b.r))); return;
     case 'pdoor': if (!isFirst) return; toggleDoorAt(c, r, G().nearestEdge(c, r, pt.x, pt.y), S.shiftDown); return;
@@ -479,11 +509,139 @@ function applyTool(cell, pt, isFirst) {
   renderLegend();
 }
 
+// ------------------------------------------------------------ light and smoke (painted live)
+const lightSfx = () => (S.mode === 'edit' ? 'e' : 'p');
+const lightBrush = () => +$('light-brush-' + lightSfx()).value || 1;
+for (const sfx of ['e', 'p']) $('light-brush-' + sfx).oninput = e => { $('light-brush-val-' + sfx).textContent = e.target.value; requestDraw(); };
+S.lightQueue = new Set();
+function queueLight(keys) {
+  const lv = $('light-level-' + lightSfx()).value, sm = $('light-smoke-' + lightSfx()).value;
+  if (lv === '-' && sm === '-') { toast('Pick a light level or smoke first.'); return; }
+  for (const k of keys) {
+    const [c, r] = k.split(',').map(Number); if (!G().inBounds(c, r)) continue;
+    const cell = getCell(c, r, true);
+    if (lv !== '-') { if (lv) cell.light = lv; else delete cell.light; }
+    if (sm !== '-') { if (sm) cell.smoke = sm; else delete cell.smoke; }
+    if (!Object.keys(cell).length) delete cells()[k];
+    S.lightQueue.add(k);
+  }
+  invalidate();
+}
+async function flushLight() {
+  if (!S.lightQueue.size) return;
+  const keys = [...S.lightQueue]; S.lightQueue = new Set();
+  const lv = $('light-level-' + lightSfx()).value, sm = $('light-smoke-' + lightSfx()).value, body = { cells: keys };
+  if (lv !== '-') body.light = lv;
+  if (sm !== '-') body.smoke = sm;
+  try { await api(`/api/maps/${MAP_ID}/light`, 'POST', body); } catch (e) { toast('Light not saved: ' + e.message); }
+}
+
+// ------------------------------------------------------------ movement reach of the selected combatant (combat)
+S.reach = (() => { try { return localStorage.getItem('sg.reach.gm') !== '0'; } catch { return true; } })();
+function allowance(move, statuses, condition, surprised) {        // movement.py allowance()
+  const lv = n => { const v = (statuses || {})[n]; return !v ? 0 : v === true ? 1 : (+v || 1); };
+  let [walk, sprint, per] = move || [10, 15, 1];
+  const none = why => ({ walk: 0, sprint: 0, perHit: 0, canMove: false, canSprint: false, why: [why] });
+  if (['Unconscious', 'Dying', 'Dead'].includes(condition)) return none(condition.toLowerCase());
+  for (const n of ['Immobilized', 'Restrained', 'Petrified', 'Stilled']) if (lv(n)) return none(n);
+  if (surprised) return none('surprised');
+  let canSprint = true; const why = [];
+  if (lv('Fatigued') >= 3) { walk = Math.min(walk, 5); sprint = Math.min(sprint, 10); why.push('Fatigued III'); }
+  if (lv('Prone')) { walk = Math.min(walk, 2); canSprint = false; why.push('Prone'); }
+  if (lv('Zapped')) { canSprint = false; why.push('Zapped'); }
+  const hob = !!lv('Hobbled'); if (hob) { walk = Math.ceil(walk / 2); why.push('Hobbled'); }
+  return { walk, sprint: canSprint ? sprint : 0, perHit: canSprint ? per : 0, canMove: walk > 0, canSprint: canSprint && sprint > 0, why, hobbled: hob };
+}
+function gmReach() {
+  const t = S.tracker; if (!t || !t.active || !S.selected) return null;
+  const { c, r } = S.selected, m = markerAt(c, r), p = m ? null : playerAt(c, r);
+  if (!m && !p) return null;
+  const e = (t.entries || []).find(x => m ? x.kind === 'marker' && x.ref === m.id : x.kind === 'player' && x.ref === p.id);
+  if (!e) return null;
+  const move = m ? String((m.npc || {}).move || '10/15/+1').split('/').map(x => parseInt(x, 10)).filter(x => !isNaN(x)) : (p.move || [10, 15, 1]);
+  const cond = m ? GridCore.cmStatus(m.cm) : (p.cm || {}).status;
+  const a = allowance(move.length === 3 ? move : [10, 15, 1], (m || p).statuses, cond === 'Dead' ? 'Dead' : cond, e.surprised && t.round === 1);
+  const mvs = e.mv && e.mv.round === t.round ? e.mv : { m: 0, mode: null, cap: 0 };
+  const cm = (S.map.settings && S.map.settings.cellMeters) || 2, mv = { cellM: cm, walk: 0, sprint: 0, sprintMax: 0 };
+  if (a.canMove) {
+    if (mvs.mode === 'move') mv.walk = Math.max(0, mvs.cap - mvs.m);
+    else if (mvs.mode === 'sprint') mv.sprint = mv.sprintMax = Math.max(0, mvs.cap - mvs.m);
+    else {
+      if (e.minorLeft > 0 || e.majorLeft > 0) mv.walk = a.walk;
+      if (a.canSprint && (e.majorLeft > 0 || e.minorLeft >= 4)) {
+        const half = x => a.hobbled ? Math.ceil(x / 2) : x;
+        const agi = m ? (((m.npc || {}).attrs || {}).Agility || 3) + (((m.npc || {}).skills || {}).Athletics || 0) : 8;
+        mv.sprint = half(a.sprint); mv.sprintMax = half(a.sprint + agi * a.perHit);
+      }
+    }
+  }
+  const rk = $('reach-key'); rk.innerHTML = '';
+  rk.append(h('span.kt', (m ? (m.label || 'Marker') : p.name) + ':'));
+  if (mv.walk) rk.append(h('span.rw', `Move ${mv.walk} m`));
+  if (mv.sprint) rk.append(h('span.rs', `Sprint ${mv.sprint} m`));
+  if (mv.sprintMax > mv.sprint) rk.append(h('span.rm', `with hits, up to ${mv.sprintMax} m`));
+  if (!mv.walk && !mv.sprint) rk.append(h('span.kt', a.why.length ? `can't move (${a.why.join(', ')})` : 'no movement left'));
+  return { from: { c, r }, mv };
+}
+
+$('reach-toggle').checked = S.reach;
+$('reach-toggle').onchange = e => { S.reach = e.target.checked; try { localStorage.setItem('sg.reach.gm', S.reach ? '1' : '0'); } catch { /* ignore */ } requestDraw(); };
+
+// ------------------------------------------------------------ area templates (Play mode)
+function areaThings() {
+  const out = [];
+  for (const m of markers()) out.push({ c: m.c, r: m.r, name: m.label || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name, ref: { kind: 'marker', id: m.id } });
+  for (const p of S.ctx.players || []) { const t = p.currentMapId === MAP_ID && ((p.state.maps || {})[MAP_ID] || {}).token; if (t) out.push({ c: t.c, r: t.r, name: p.name, ref: { kind: 'player', id: p.id } }); }
+  return out;
+}
+function syncAreaForm() {
+  const k = $('area-kind').value;
+  $('area-dv-row').querySelector('label').hidden = k !== 'blast';
+  if (k === 'spell' && +$('area-radius').value > 10) $('area-radius').value = 2;
+  if (k === 'smoke' && +$('area-radius').value < 5) $('area-radius').value = 20;
+}
+$('area-kind').onchange = syncAreaForm;
+$('area-place').onclick = () => {
+  const kind = $('area-kind').value, radius = Math.max(1, Math.min(100, +$('area-radius').value || 2));
+  const dv = kind === 'blast' ? $('area-dv').value.trim().split(/[\s,/]+/).filter(Boolean).slice(0, 3) : null;
+  const name = { blast: 'Blast', spell: 'Area spell', smoke: 'Smoke', custom: 'Area' }[kind];
+  S.placingArea = { kind, radius, name, dv, color: '#ffd23f' };
+  wrap.classList.add('placing'); toast('Click the cell at the centre of the area (Esc cancels).');
+};
+async function areaOp(body) {
+  try { const r = await api(`/api/maps/${MAP_ID}/templates`, 'POST', body); S.map.data.templates = r.templates; if (r.cells) S.map.data.cells = r.cells; invalidate(); renderAreas(); }
+  catch (e) { toast(e.message); }
+}
+function renderAreas() {
+  const el = $('area-list'); if (!el) return;
+  el.innerHTML = '';
+  const ts = S.map.data.templates || [], w = gmWorld(), things = areaThings();
+  for (const t of ts) {
+    const hits = GridCore.templateTargets(w, t, things);
+    const by = t.by === 'gm' ? 'GM' : ((S.ctx.players.find(p => p.id === t.by) || {}).name || 'a runner');
+    el.append(h('div.tac-tpl', { style: { borderLeftColor: t.color } },
+      h('div.tac-tpl-h', h('b', t.name), ` ${t.radius} m · ${by}`, t.dv ? h('span.muted', ` · ${t.dv.join('/')}`) : null,
+        h('button.x', { type: 'button', title: 'Remove', onclick: () => areaOp({ op: 'remove', id: t.id }) }, '×')),
+      hits.length ? h('div.tac-hits', hits.map(x => h('span', x.name + (x.ring ? ` · ${x.ring}${x.dv ? ' ' + x.dv : ''}` : '')))) : h('div.muted', 'Nobody inside.'),
+      h('div.row.tight',
+        t.kind === 'smoke' ? h('button.small', { type: 'button', onclick: () => areaOp({ op: 'smoke', id: t.id, smoke: 'smoke' }) }, 'Fill with smoke') : null,
+        t.kind === 'smoke' ? h('button.small.ghost', { type: 'button', onclick: () => areaOp({ op: 'smoke', id: t.id, smoke: 'thermal' }) }, 'Thermal smoke') : null,
+        hits.length && S.ctx.campaign ? h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, hits[0].ref, hits.map(x => x.ref)) }, '⚔ Attack those inside…') : null)));
+  }
+  if (ts.length > 1) el.append(h('button.small.ghost', { type: 'button', onclick: () => areaOp({ op: 'clear' }) }, 'Remove all areas'));
+}
+
 // ------------------------------------------------------------ pointer
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', ev => {
   canvas.setPointerCapture(ev.pointerId);
   const { sx, sy } = vp.canvasPoint(ev);
+  if (S.placingArea && ev.button === 0) {
+    const pt0 = vp.screenToMap(sx, sy), cell0 = G().pointToCell(pt0.x, pt0.y), a = S.placingArea;
+    S.placingArea = null; wrap.classList.remove('placing');
+    if (cell0) areaOp({ op: 'add', c: cell0.c, r: cell0.r, template: { kind: a.kind, radius: a.radius, name: a.name, dv: a.dv } });
+    return;
+  }
   if (S.fp && S.fpCam) {
     if (ev.button !== 0) return;
     const hit = FPView.pick(sx, sy);
@@ -526,7 +684,7 @@ function endDrag() {
   if (!S.dragging) return;
   if (S.dragging.kind === 'rect' && S.hover) { for (const k of dragCells()) { const [c, r] = k.split(',').map(Number); paintCell(c, r); } markDirty(); renderLegend(); }
   if (S.dragging.kind === 'room') { finishRoom(S.dragging.set); markDirty(); }
-  if (S.dragging.kind === 'apply') flushFog();
+  if (S.dragging.kind === 'apply') { flushFog(); flushLight(); }
   if (S.dragging.kind === 'marker') {
     if (S.dragging.moved && S.hover) moveMarker(S.dragging.m, S.hover.c, S.hover.r);
     else { S.selected = S.dragging.from; renderInspector(); }
@@ -539,8 +697,8 @@ canvas.addEventListener('pointerleave', () => { S.hover = null; requestDraw(); }
 canvas.addEventListener('wheel', ev => { ev.preventDefault(); if (S.fp) return; const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
 
 // ------------------------------------------------------------ keyboard
-const TOOL_KEYS = { edit: { p: 'paint', r: 'rect', e: 'erase', s: 'secret', d: 'door', m: 'marker', g: 'room', v: 'select' },
-                    play: { p: 'reveal', e: 'hide', d: 'pdoor', t: 'token', m: 'pmarker', v: 'select' } };
+const TOOL_KEYS = { edit: { p: 'paint', r: 'rect', e: 'erase', s: 'secret', d: 'door', m: 'marker', g: 'room', v: 'select', b: 'light' },
+                    play: { p: 'reveal', e: 'hide', d: 'pdoor', t: 'token', m: 'pmarker', v: 'select', b: 'light' } };
 window.addEventListener('keydown', ev => {
   if (ev.target.matches('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
   if (ev.code === 'Space') { S.spaceDown = true; canvas.classList.add('panning'); ev.preventDefault(); return; }
@@ -552,6 +710,7 @@ window.addEventListener('keydown', ev => {
   if (S.fp && S.fpCam && !ev.altKey) { if (k === 'escape') { setFp(false); return; } if (fpc.key(ev)) return; }
   if (k === 'f') { vp.fit(); invalidate(); return; }
   if (k === 'i') { setIso(!vp.iso); return; }
+  if (k === 'escape' && S.placingArea) { S.placingArea = null; wrap.classList.remove('placing'); requestDraw(); return; }
   if (k === 'escape') { S.selected = null; renderInspector(); requestDraw(); return; }
   if (k === 'tab' && S.mode === 'play' && S.ctx.players.length) { ev.preventDefault(); const ids = ['', ...S.ctx.players.map(p => p.id)]; setViewAs(ids[(ids.indexOf(S.viewAs) + 1) % ids.length]); return; }
   const t = TOOL_KEYS[S.mode][k]; if (t) setTool(t);
@@ -810,6 +969,18 @@ function renderInspector() {
     const info = h('textarea.marker-info', { rows: 2, maxlength: 600, placeholder: 'What players see when they right-click it (optional)', value: m.info || '' });
     info.onchange = () => { const v = info.value.trim(); updateMarkerLive(m, { info: v }); if (!v) delete m.info; };
     row.appendChild(info);
+    const lightIn = h('input', { type: 'number', min: 0, max: 60, value: m.light || 0, style: { width: '4.2em' }, title: 'It lights this many meters around it (a lamp, a fire, a flashlight)',
+      onchange: () => { const v = Math.max(0, Math.min(60, +lightIn.value || 0)); updateMarkerLive(m, { light: v }); if (!v) delete m.light; invalidate(); } });
+    const auto = !Array.isArray(m.vision), vis = npcVision(m);
+    const visBox = h('span.row.tight', VISION_TYPES.map(v => {
+      const cb = h('input', { type: 'checkbox', checked: vis.includes(v), disabled: auto,
+        onchange: () => updateMarkerLive(m, { vision: VISION_TYPES.filter(x => x === v ? cb.checked : (m.vision || []).includes(x)) }) });
+      return h('label.check', cb, ' ' + v);
+    }));
+    const autoCb = h('input', { type: 'checkbox', checked: auto, title: 'Read its eyes from its stat block (metatype, cyberware, powers)',
+      onchange: () => { if (autoCb.checked) { updateMarkerLive(m, { vision: null }); delete m.vision; } else updateMarkerLive(m, { vision: npcVision(m) }); renderInspector(); } });
+    row.appendChild(h('div.insp-eyes', h('div.row.tight', h('label.inline', 'Gives light ', lightIn, ' m')),
+      h('div.row.tight', h('span.hint', 'Eyes:'), h('label.check', autoCb, ' from its stats'), visBox)));
     row.appendChild(markerNpc(m));
     row.appendChild(markerCM(m));
     row.appendChild(statusEditor(m.statuses || {}, (name, on, value) => {
@@ -1104,7 +1275,7 @@ function cellDistance(a, b) {
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
 }
 function bandFor(m) { return m <= 3 ? 'Close' : m <= 50 ? 'Near' : m <= 250 ? 'Medium' : m <= 500 ? 'Far' : 'Extreme'; }
-async function attackDialog(attacker, target) {
+async function attackDialog(attacker, target, more) {
   if (!S.ctx.campaign) { toast('Assign this map to a game first.'); return; }
   const list = combatants();
   if (list.length < 2) { toast('You need at least two combatants on this map (runner tokens or markers with a monitor).'); return; }
@@ -1123,8 +1294,7 @@ async function attackDialog(attacker, target) {
   const targets = [];                    // [{key, info, sight, defense, cover}]
   const weapon = h('select'), mode = h('select'), range = h('select', SR.RANGES.map(r => option(r, `${r} (${SR.CAT.store.rangeMeters[r]})`)));
   const info = h('p.attack-info'), distInfo = h('span.hint'), attInfo = h('p.hint');
-  let cellM = 2; try { cellM = +localStorage.getItem('sg.cellMeters') || 2; } catch { /* ignore */ }
-  const meters = h('input', { type: 'number', min: 0.5, step: 0.5, value: cellM, style: { width: '4rem' }, title: 'Meters per cell', onchange: () => { try { localStorage.setItem('sg.cellMeters', meters.value); } catch { /* ignore */ } suggestRange(); } });
+  const cellM = (S.map.settings && S.map.settings.cellMeters) || 2;      // the map's scale (Colors & settings)
   const amod = h('input', { type: 'number', value: 0 }), dmod = h('input', { type: 'number', value: 0 }), smod = h('input', { type: 'number', value: 0 });
   const amp = h('input', { type: 'number', min: 0, max: 10, value: 0 }), xdv = h('input', { type: 'number', value: 0 }), dice = h('input', { type: 'number', min: 0, placeholder: 'auto' });
   const chk = (on, title) => h('input', { type: 'checkbox', checked: !!on, title });
@@ -1142,9 +1312,10 @@ async function attackDialog(attacker, target) {
   const cur = () => options.find(x => x.key === weapon.value) || {};
   function suggestRange() {
     const a = pos(attSel.value), b = targets[0] && pos(targets[0].key); if (!a || !b) return;
-    const d = cellDistance(a, b), m = d * (+meters.value || 2);
+    const sg = targets[0].sight;
+    const d = sg ? sg.cells : cellDistance(a, b), m = sg ? sg.meters : d * cellM;
     distInfo.textContent = `${d} cells ≈ ${m} m`;
-    range.value = bandFor(m); describe();
+    range.value = sg ? sg.band : bandFor(m); describe();
   }
   async function loadAttacker() {
     const [kind, id] = attSel.value.split(':');
@@ -1202,7 +1373,15 @@ async function attackDialog(attacker, target) {
   function sightText(sg) {
     if (!sg) return h('span.hint', 'not on this map');
     if (!sg.los) return h('span.bad', 'No line of sight');
-    return sg.cover ? h('span.warn', `Cover ${'I II III IV'.split(' ')[sg.cover - 1]} from the map`) : h('span.good', 'Clear line of sight');
+    const bits = [sg.cover ? h('span.warn', `Cover ${'I II III IV'.split(' ')[sg.cover - 1]} from the map`) : h('span.good', 'Clear line of sight')];
+    const v = sg.view || {}, bk = sg.back || {};
+    if (v.see === false) bits.push(h('span.bad', v.dark ? ' · too dark for the attacker to see' : ' · the attacker is blinded'));
+    else if (v.blind) bits.push(h('span.warn', ` · smoke: Blinded ${'I'.repeat(v.blind)} (−${3 * v.blind})`));
+    if (sg.light && sg.light !== 'bright') bits.push(h('span.hint', ` · ${sg.light} light`));
+    if (v.clear && !bk.clear) bits.push(h('span.good', ' · attacker sees better: +1 Edge'));
+    else if (bk.clear && !v.clear && v.see !== false) bits.push(h('span.warn', ' · target sees better: +1 Edge to them'));
+    if (sg.magnification && ['Medium', 'Far', 'Extreme'].includes(sg.band)) bits.push(h('span.hint', ' · magnification +2 AR'));
+    return h('span', bits);
   }
   function drawTargets() {
     tgtBox.innerHTML = '';
@@ -1318,13 +1497,13 @@ async function attackDialog(attacker, target) {
       h('label.check', { title: RULES.trip.desc }, trip, 'Trip (Minor)'),
       h('label.check', { title: 'Unarmed: on a hit, Strength + net hits vs their Strength to hold them (no damage)' }, grapple, 'Grapple')),
     h('details', h('summary', 'Modifiers'), h('div.form-grid', h('label', 'Attack dice ±', amod), h('label', 'Defense dice ±', dmod), h('label', 'Soak dice ±', smod),
-      h('label', 'Extra DV', xdv), h('label', 'Amp Up (spells)', amp), h('label', 'NPC dice (override)', dice), h('label', 'Meters per cell', meters))),
+      h('label', 'Extra DV', xdv), h('label', 'Amp Up (spells)', amp), h('label', 'NPC dice (override)', dice))),
     h('div.row', h('label.check', wild, 'Wild Die'), h('label.check', { title: 'Optional rule for grunts below PR 3: they don’t roll to defend' }, unopp, 'Unopposed (grunt)'),
       h('label.check', hidden, 'Hidden roll'), h('label.check', apply, 'Apply damage'),
       h('label.check', { title: 'Give 1 Edge to whoever wins AR vs DR by 4+ (the highest DR with several targets), at most 2 per round; none when attacking from cover' }, autoEdge, 'Award Edge'),
       h('label.check', { title: 'Indirect fire, scent, sound…' }, ignoreSight, 'Ignore line of sight'),
       h('label.check', { title: 'Allow the attack even without actions left this round' }, ignoreActions, 'Ignore action limits')));
-  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: async () => { if (firstTarget) await addTarget(firstTarget); await loadAttacker(); } });
+  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: async () => { if (firstTarget) await addTarget(firstTarget); for (const t of more || []) await addTarget(`${t.kind}:${t.id}`); await loadAttacker(); } });
   if (!await okP) return;
   if (!targets.length) { toast('Pick a target.'); return; }
   const defenses = {}, cover = {}, wrest = {}, tactical = {};
@@ -1348,6 +1527,7 @@ async function attackDialog(attacker, target) {
 
 // ------------------------------------------------------------ legend
 function renderLegend() {
+  if (S.map) renderAreas();
   const el = $('legend'); el.hidden = !S.map.settings.legendVisible; el.innerHTML = '';
   if (el.hidden) return;
   const view = currentView(), vis = k => GridCore.visibility(view, k, cells()[k]);
@@ -1385,12 +1565,19 @@ function openSettings() {
   sc.value = S.map.campaignId || '';
   $('set-grid').checked = !!S.map.settings.showGrid;
   $('set-sight').checked = !!S.map.settings.sightReveal; $('set-sight-r').value = S.map.settings.sightRadius || 8;
+  $('set-ambient').value = S.map.settings.ambientLight || 'bright'; $('set-cellm').value = S.map.settings.cellMeters || 2;
+  $('set-enemies').checked = S.map.settings.enemiesInSight !== false;
+  $('set-pview').value = S.map.settings.playerView || 'choose';
   $('set-w').value = S.map.width; $('set-h').value = S.map.height; $('set-cs').value = S.map.cellSize;
   $('settings-dialog').showModal();
 }
 $('btn-settings').onclick = openSettings;
 $('set-grid').onchange = e => { S.map.settings.showGrid = e.target.checked; markDirty(); };
 $('set-sight').onchange = e => { S.map.settings.sightReveal = e.target.checked; markDirty(); };
+$('set-ambient').onchange = e => { S.map.settings.ambientLight = e.target.value; markDirty(); invalidate(); };
+$('set-cellm').onchange = e => { S.map.settings.cellMeters = Math.max(0.5, Math.min(10, +e.target.value || 2)); e.target.value = S.map.settings.cellMeters; markDirty(); invalidate(); };
+$('set-enemies').onchange = e => { S.map.settings.enemiesInSight = e.target.checked; markDirty(); };
+$('set-pview').onchange = e => { S.map.settings.playerView = e.target.value; markDirty(); };
 $('set-sight-r').onchange = e => { S.map.settings.sightRadius = Math.max(1, Math.min(20, +e.target.value || 8)); e.target.value = S.map.settings.sightRadius; markDirty(); };
 $('set-w').onchange = e => { S.map.width = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };
 $('set-h').onchange = e => { S.map.height = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };

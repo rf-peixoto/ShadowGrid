@@ -49,7 +49,8 @@ game masters, with screenshots.
   sight. Players right-click markers and runners for details, including a
   description the GM writes; the GM can see the map as any runner.
 - **Isometric view** in the style of the SNES Shadowrun, or a flat top-down
-  view. Toggle with <kbd>I</kbd>.
+  view. Toggle with <kbd>I</kbd>. The GM can fix how players see each map
+  (top-down, isometric or first person), or leave it to them.
 - **First-person view**: walk the map at eye level, like an early-90s dungeon
   crawler (<kbd>V</kbd> or <kbd>3</kbd>). Players walk their own runner, and
   doors open from the cell in front. The GM gets a free camera that walks
@@ -61,6 +62,30 @@ game masters, with screenshots.
   token or marker, or from the runner they are seeing the map as. Each map can
   also reveal what runners can see as they move (walls and closed doors block
   it), set under Colors &amp; settings.
+- **Light and vision**: the GM paints bright, dim and dark cells and smoke
+  (normal or thermal), lights lamps on markers, and runners switch on their
+  flashlights. What a runner sees follows their eyes: metatype, qualities,
+  cybereyes, an ultrasound sensor, or glasses and contacts with vision
+  enhancements. Darkness hides what only thermographic vision or ultrasound
+  can see, smoke blinds (Blinded I through it, II inside it), and in attacks
+  the side that sees better gains the book's bonus Edge.
+- **Enemies only in sight**: danger, boss and NPC markers show to a player only
+  while their own runner can see them (a setting per map); loot, portals and
+  the rest stay on the map once explored.
+- **Range bands** (<kbd>R</kbd>): a player picks one of their weapons and the
+  cells in sight take the colour of its range bands, with its Attack Rating
+  for each. The GM's attacks take the range from the map, in meters (2 m per
+  cell unless the GM sets another scale).
+- **Movement in combat** (<kbd>M</kbd>): the overlay shows how far a runner can
+  Move and Sprint this turn, from their metatype, statuses and the actions
+  they have left. Their own moves are checked on their turn: the first spends
+  the Move, going farther becomes a Sprint (rolled for them), and a move past
+  their reach stops where their meters run out. The GM moves anyone freely.
+- **Area templates**: players place their grenades' blasts, area spells or a
+  plain radius; the GM places blasts, spells and smoke or gas clouds. Walls
+  block them, blasts show their Ground Zero, Close and Near rings, and each
+  area lists who it catches and the DV there. The GM can fill a cloud with
+  smoke or open an attack on everyone inside.
 - **SR6 dice roller**: pools from the sheet, hits and glitches, thresholds, the
   Wild Die, Edge Boosts, firing modes and ranges, Matrix actions against a
   target's rating, and drain or fading after casting. Every roll goes to a
@@ -253,6 +278,10 @@ can also set them yourself when running `app.py` or `serve.py` directly.
   thread, so hundreds of open pages cost little. Password checks and image
   uploads run on worker threads so they don't hold up other requests.
   Without gevent, waitress serves with a thread pool.
+- Sight lines walk the grid cell by cell instead of sampling, the same way
+  on the server and in the browser; what a runner can see is cached per
+  place, light and eyes. In the browser, line of sight runs in a background
+  worker, so big maps and hex maps don't stall the page.
 - Scripts and styles are minified in memory the first time they are served
   (the files on disk stay readable), then compressed.
 - A character's derived values are worked out once per request, even when the
@@ -480,15 +509,20 @@ so a table can check them against its books and change them in one place.
 - `sr/wiki.py`: the rules wiki
 - `sr/dice.py`: SR6 dice engine
 - `security.py`: auth decorators, proof of work, rate limits, security headers
-- `geometry.py`: grid adjacency, door blocking, line of sight, what a runner
-  can see
+- `geometry.py`: grid adjacency, door blocking, line of sight, cover, light
+  and vision
+- `sightmap.py`: sight on a live map (light sources, runners' eyes)
+- `movement.py`: movement in combat: Move, Sprint, statuses
 - `static/`: front end, with no build step. The main files are:
   - `api.js`: shared helpers, live updates, Markdown
   - `play.js`: the player app
   - `sheet.js`: the character sheet
   - `editor.js`: the GM map editor and combat
   - `gamepage.js`: the GM game dashboard
-  - `gridcore.js`: the map renderer, line of sight and cover
+  - `gridcore.js`: the map renderer and its overlays (sight, range bands,
+    movement, areas)
+  - `sightcore.js`, `sightworker.js`: line of sight, light and vision (the
+    same rules as the server), and the worker that runs them
   - `fpview.js`: the first-person view
   - `srui.js`: the dice and condition widgets
   - `layout.js`: the map screen layout (side panel tabs, dice panel)

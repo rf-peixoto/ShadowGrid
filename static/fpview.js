@@ -35,9 +35,30 @@ window.FPView = (() => {
   }
 
   /* the world as seen by this viewer: is a cell a room they can see into, and how should it look */
-  function world(map, view) {
+  /* light at a cell for these eyes: {k: how much darker, tint: colour to lean toward or null}.
+     eyes null: the GM's view (light shown, nobody blinded) */
+  const THERMAL = [70, 34, 120], SONAR = [96, 110, 118];
+  function tone(lv, eyes) {
+    if (!lv) return null;
+    if (!eyes) return { k: lv === 1 ? 0.25 : 0.5, tint: null };
+    const handles = typeof SightCore !== 'undefined' ? SightCore.handles : () => false;
+    if (handles(eyes, lv, null, 0)) {
+      if (lv === 2) return eyes.includes('Thermographic') ? { k: 0.15, tint: THERMAL } : { k: 0.2, tint: SONAR };
+      return { k: 0.12, tint: null };                    // low-light: a little grainy, clear enough
+    }
+    return lv === 1 ? { k: 0.45, tint: null } : { k: 0.9, tint: null };
+  }
+  function toned(c3, t) {
+    if (!t) return c3;
+    const x = t.tint ? mixc(c3, t.tint, 0.55) : c3;
+    return mixc(x, [0, 0, 0], t.k);
+  }
+  function world(map, view, eyes) {
     const G = geom(map), cells = map.data.cells, cs = G.cs, col = map.settings.colors;
     const cellInfo = new Map();
+    const amb = view.mode === 'player' ? 0 : Math.max(0, ['bright', 'dim', 'dark'].indexOf((map.settings && map.settings.ambientLight) || 'bright'));
+    const lightOf = view.light || ((c, r, cell) => cell.light ? Math.max(0, ['bright', 'dim', 'dark'].indexOf(cell.light)) : amb);
+    const seesSmoke = kind => !!eyes && typeof SightCore !== 'undefined' && SightCore.handles(eyes, 0, kind, 0);
     function info(c, r) {
       const k = key(c, r);
       let v = cellInfo.get(k);
@@ -47,10 +68,11 @@ window.FPView = (() => {
       if (!cell || vis === 'hidden') v = { room: false, unknown: view.mode === 'player', c, r };
       else if (!cell.fill) v = { room: false, unknown: false, c, r };
       else {
-        const fill = rgb(cell.fill), dim = vis === 'dim';
-        v = { room: true, c, r, dim, cell,
-              floor: dim ? mixc(fill, rgb(col.revealedTint), 0.6) : fill,
-              trim: rgb(cell.border || col.cellBorder), ceil: mixc(fill, [0, 0, 0], 0.82) };
+        const fill = rgb(cell.fill), dim = vis === 'dim', t = tone(lightOf(c, r, cell), eyes);
+        v = { room: true, c, r, dim, cell, tone: t, smoke: cell.smoke && !seesSmoke(cell.smoke) ? cell.smoke : null,
+              floor: toned(dim ? mixc(fill, rgb(col.revealedTint), 0.6) : fill, t),
+              trim: toned(rgb(cell.border || col.cellBorder), t), ceil: toned(mixc(fill, [0, 0, 0], 0.82), t) };
+        if (v.smoke) v.floor = mixc(v.floor, [150, 158, 162], 0.35);
       }
       cellInfo.set(k, v);
       return v;
@@ -63,7 +85,7 @@ window.FPView = (() => {
       }
       return null;
     }
-    return { G, cs, col, info, doorBetween };
+    return { G, cs, col, info, doorBetween, cells };
   }
 
   /* cast one ray from (px, py) in cell units along (dx, dy); square grids walk the cells exactly (DDA),
@@ -73,44 +95,56 @@ window.FPView = (() => {
     const stepC = dx < 0 ? -1 : 1, stepR = dy < 0 ? -1 : 1;
     const ddx = dx === 0 ? 1e30 : Math.abs(1 / dx), ddy = dy === 0 ? 1e30 : Math.abs(1 / dy);
     let sx = dx < 0 ? (px - c) * ddx : (c + 1 - px) * ddx, sy = dy < 0 ? (py - r) * ddy : (r + 1 - py) * ddy;
-    let from = W.info(c, r), side = 0, dist = 0;
+    let from = W.info(c, r), side = 0, dist = 0, smoke = from.smoke ? 1 : 0;
     for (let i = 0; i < 200; i++) {
       if (sx < sy) { dist = sx; sx += ddx; c += stepC; side = 0; } else { dist = sy; sy += ddy; r += stepR; side = 1; }
-      if (dist > MAX_DIST) return { dist: MAX_DIST, kind: 'far' };
+      if (dist > MAX_DIST) return { dist: MAX_DIST, kind: 'far', smoke };
       const to = W.info(c, r);
       const door = from.room ? W.doorBetween(from, to) : null;
       const hx = px + dx * dist, hy = py + dy * dist;
       const u = side === 0 ? hy - Math.floor(hy) : hx - Math.floor(hx);
-      if (door && !door.open) return { dist, kind: 'door', door, u, side, from };
-      if (!to.room) return { dist, kind: to.unknown ? 'unknown' : 'wall', u, side, from, openDoor: door };
+      if (door && !door.open) return { dist, kind: 'door', door, u, side, from, smoke };
+      if (!to.room) return { dist, kind: to.unknown ? 'unknown' : 'wall', u, side, from, openDoor: door, smoke };
+      if (to.smoke) smoke++;
       from = to;
     }
-    return { dist: MAX_DIST, kind: 'far' };
+    return { dist: MAX_DIST, kind: 'far', smoke };
   }
+  /* hexes: walk from hexagon to hexagon through the edge the ray leaves by (exact, like the squares' DDA);
+     u is the position along that edge, so seams and door slits sit where they should */
+  const HEXC = [0, 1, 2, 3, 4, 5].map(i => [0.5 * Math.cos(Math.PI / 3 * i), 0.5 * Math.sin(Math.PI / 3 * i)]);
   function castHex(W, px, py, dx, dy) {
-    const G = W.G, cs = W.cs, step = 0.035;
-    let cur = G.pointToCell(px * cs, py * cs), from = cur ? W.info(cur.c, cur.r) : { room: false };
-    for (let t = step; t < MAX_DIST; t += step) {
-      const x = px + dx * t, y = py + dy * t;
-      const nc = G.pointToCell(x * cs, y * cs);
-      if (!nc) return { dist: t, kind: 'wall', u: 0.5, side: 0, from };
-      if (cur && nc.c === cur.c && nc.r === cur.r) continue;
-      const to = W.info(nc.c, nc.r);
-      const door = from.room ? W.doorBetween(from, to) : null;
-      const u = ((x + y * 0.57) * 2) % 1;
-      const side = Math.abs(dx) > Math.abs(dy) ? 0 : 1;
-      if (door && !door.open) return { dist: t, kind: 'door', door, u, side, from };
-      if (!to.room) return { dist: t, kind: to.unknown ? 'unknown' : 'wall', u, side, from, openDoor: door };
-      cur = nc; from = to;
+    const G = W.G, cs = W.cs;
+    let cur = G.pointToCell(px * cs, py * cs);
+    if (!cur) return { dist: 0.05, kind: 'wall', u: 0.5, side: 0, from: { room: false } };
+    let from = W.info(cur.c, cur.r), t = 0, smoke = from.smoke ? 1 : 0;
+    for (let n = 0; n < 600; n++) {
+      const ctr = G.cellCenter(cur.c, cur.r), cx = ctr.x / cs, cy = ctr.y / cs;
+      let best = Infinity, be = -1, bu = 0;
+      for (let e = 0; e < 6; e++) {
+        const [x1, y1] = HEXC[e], [x2, y2] = HEXC[(e + 1) % 6];
+        const ax = cx + x1, ay = cy + y1, ex = x2 - x1, ey = y2 - y1;
+        const den = dx * ey - dy * ex;
+        if (Math.abs(den) < 1e-12) continue;
+        const s = ((ax - px) * ey - (ay - py) * ex) / den, u = ((ax - px) * dy - (ay - py) * dx) / den;
+        if (s > t + 1e-7 && u >= -1e-6 && u <= 1 + 1e-6 && s < best) { best = s; be = e; bu = Math.max(0, Math.min(1, u)); }
+      }
+      if (be < 0 || best > MAX_DIST) return { dist: MAX_DIST, kind: 'far', smoke };
+      const nb = G.neighbor(cur.c, cur.r, be), to = W.info(nb.c, nb.r);
+      const door = from.room ? GridCore.doorOnEdge(G, W.cells, cur.c, cur.r, be) : null;
+      if (door && !door.open) return { dist: best, kind: 'door', door, u: bu, side: be, edge: be, from, smoke };
+      if (!to.room) return { dist: best, kind: to.unknown ? 'unknown' : 'wall', u: bu, side: be, edge: be, from, openDoor: door, smoke };
+      if (to.smoke) smoke++;
+      cur = nb; from = to; t = best;
     }
-    return { dist: MAX_DIST, kind: 'far' };
+    return { dist: MAX_DIST, kind: 'far', smoke };
   }
 
   function wallColor(hit, v, colors) {
     // v: 0 at the top of the wall, 1 at the bottom
     const u = hit.u;
     if (hit.kind === 'door') {
-      const dc = rgb(hit.door.color || colors.doorDefault);
+      const dc = toned(rgb(hit.door.color || colors.doorDefault), hit.from && hit.from.tone);
       const slit = Math.abs(u - 0.5) < 0.035 && v > 0.08;
       const frame = u < 0.07 || u > 0.93 || v < 0.06;
       return slit ? mixc(dc, [0, 0, 0], 0.75) : frame ? mixc(dc, [255, 255, 255], 0.25) : mixc(dc, [0, 0, 0], 0.35 + 0.1 * ((v * 6) % 1 < 0.08));
@@ -156,7 +190,7 @@ window.FPView = (() => {
   }
 
   function render(ctx, W, H, dpr, o) {
-    const map = o.map, colors = map.settings.colors, Wd = world(map, o.view), G = Wd.G, cs = G.cs;
+    const map = o.map, colors = map.settings.colors, Wd = world(map, o.view, o.eyes || null), G = Wd.G, cs = G.cs;
     const RW = Math.max(200, Math.min(560, Math.round(W * dpr / (W > 1100 ? 3 : 2.4)))), RH = Math.max(120, Math.round(RW * H / W));
     if (buf.width !== RW || buf.height !== RH) { buf.width = RW; buf.height = RH; img = bctx.createImageData(RW, RH); zbuf = new Float32Array(RW); }
     const px = o.cam.x / cs, py = o.cam.y / cs, a = o.cam.a;
@@ -209,8 +243,9 @@ window.FPView = (() => {
       const d = Math.max(0.05, dist);
       const top = half - f * (WALL_H - EYE) / d, bot = half + f * EYE / d;
       const y0 = Math.max(0, Math.ceil(top)), y1 = Math.min(RH - 1, Math.floor(bot));
-      const shade = hex ? 0.82 + 0.18 * Math.abs(dx / len) : (hit.side ? 0.78 : 1);
-      const fog = Math.min(1, Math.pow(dist / FOG_DIST, 1.15));
+      // facets: square walls by side, hex walls by the direction their edge faces (light from the north-west)
+      const shade = hex ? 0.7 + 0.3 * Math.max(0, Math.cos((60 * (hit.edge || 0) + 30) * Math.PI / 180 + 2.1)) : (hit.side ? 0.78 : 1);
+      const fog = Math.min(1, Math.pow(dist / FOG_DIST, 1.15) + 0.22 * (hit.smoke || 0));
       for (let y = y0; y <= y1; y++) {
         const v = (y - top) / (bot - top);
         let c = wallColor(hit, v, colors);
@@ -245,8 +280,10 @@ window.FPView = (() => {
       if (cx1 < 0 || cx0 >= RW) continue;
       const im = spriteImage(s, colors);
       const fog = Math.min(1, Math.pow(tY / FOG_DIST, 1.15));
+      const tn = s.at ? Wd.info(s.at.c, s.at.r).tone : null, lightK = tn ? tn.k : 0;
       ctx.globalAlpha = s.hidden ? 0.45 : 1;
-      if ('filter' in ctx) ctx.filter = fog > 0.02 ? `brightness(${(1 - fog * 0.85).toFixed(2)})` : 'none';
+      const bright = (1 - fog * 0.85) * (1 - lightK);
+      if ('filter' in ctx) ctx.filter = bright < 0.98 ? `brightness(${bright.toFixed(2)})${tn && tn.tint ? ' hue-rotate(220deg) saturate(1.6)' : ''}` : 'none';
       let run = -1, any = false;
       const flush = end => {
         if (run < 0) return;

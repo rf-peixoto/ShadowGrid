@@ -281,6 +281,10 @@ function renderScene(g, map, view, opts) {
   }
   drawGrid(g, map, opts);
   if (opts.onlyGrid) return;
+  // light: the player's cells carry it (sources included); the GM's view works it out (view.light)
+  const amb = view.mode === 'player' ? 0 : Math.max(0, LIGHT_LEVELS.indexOf((map.settings && map.settings.ambientLight) || 'bright'));
+  const lightOf = view.light || ((c, r, cell) => cell.light ? Math.max(0, LIGHT_LEVELS.indexOf(cell.light)) : amb);
+  const smokeCells = [];
 
   for (const k in cells) {
     const cell = cells[k]; if (!cell) continue;
@@ -293,12 +297,15 @@ function renderScene(g, map, view, opts) {
       let fill = cell.fill;
       if (vis === 'dim') fill = mix(cell.fill, col.revealedTint, 0.65);
       else if (view.mode === 'player') fill = mix(cell.fill, col.exploredTint, 0.10);
+      const lv = lightOf(c, r, cell);
+      if (lv) fill = mix(fill, '#000000', (view.mode === 'player' ? [0, 0.42, 0.74] : [0, 0.3, 0.56])[lv]);
       tracePoly(g, corners, snap); g.fillStyle = fill; g.fill();
       if (cell.borderOn !== false && opts.borders !== false) {
         const b = cell.border || col.cellBorder;
         g.strokeStyle = vis === 'dim' ? mix(b, col.revealedTint, 0.5) : b;
         g.lineWidth = Math.max(1, pixel ? Math.round(size / 16) : size / 16); g.stroke();
       }
+      if (cell.smoke) smokeCells.push({ c, r, kind: cell.smoke });
     }
     if (cell.secret && view.mode === 'edit') {
       g.save(); tracePoly(g, corners, snap); g.clip();
@@ -309,6 +316,8 @@ function renderScene(g, map, view, opts) {
       g.restore();
     }
   }
+
+  if (smokeCells.length) drawSmokeLayer(g, G, smokeCells, size, cells);
 
   const rank = { hidden: 0, dim: 1, full: 2 };
   for (const k in cells) {
@@ -629,105 +638,164 @@ function drawIsoLayers(ctx, L, vp, dpr, cs) {
   ctx.setTransform(...M); ctx.drawImage(L.floor, 0, 0, wq, hq);
 }
 
-// ---------------------------------------------------------------- line of sight and cover (same rules as the server)
-/* Sight lines run in a unit space (square: 1 per cell; flat-top hex: size 1), from 5 points around the
-   viewer's cell to 5 around the target's: 25 rays. Walls (cells without a floor) and closed doors block a ray.
-   Cover follows the share of blocked rays: up to 1/4 = I, 1/2 = II, 3/4 = III, more = IV; all = no sight. */
-const S3 = Math.sqrt(3);
-function unitCenter(hex, c, r) { return hex ? [c * 1.5, S3 * (r + 0.5 * (c & 1))] : [c + 0.5, r + 0.5]; }
-function unitCell(hex, x, y) {
-  if (!hex) return [Math.floor(x), Math.floor(y)];
-  const q = (2 / 3) * x, rr = (-1 / 3) * x + (S3 / 3) * y;
-  const cx = q, cz = rr, cy = -cx - cz;
-  let rx = Math.round(cx), ry = Math.round(cy), rz = Math.round(cz);
-  const dx = Math.abs(rx - cx), dy = Math.abs(ry - cy), dz = Math.abs(rz - cz);
-  if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz; else rz = -rx - ry;
-  return [rx, rz + (rx - (rx & 1)) / 2];
-}
-function sightSamples(hex, c, r, spread) {
-  const [x, y] = unitCenter(hex, c, r), s = spread * 0.5;
-  return [[x, y], [x - s, y - s], [x + s, y - s], [x - s, y + s], [x + s, y + s]];
-}
-function sightWorld(map) {
-  const G = geom(map), cells = map.data.cells, hex = G.hex, MW = map.width, MH = map.height;
-  // flat lookups: is a cell a room, and does it (or a neighbour) carry a door
-  const rooms = new Uint8Array(MW * MH), doors = new Uint8Array(MW * MH);
-  for (const k in cells) {
-    const cell = cells[k], i = k.indexOf(','), c = +k.slice(0, i), r = +k.slice(i + 1);
-    if (c < 0 || r < 0 || c >= MW || r >= MH) continue;
-    if (cell.fill) rooms[r * MW + c] = 1;
-    if (cell.doors && Object.keys(cell.doors).length) {
-      doors[r * MW + c] = 1;
-      for (let e = 0; e < G.edgeCount; e++) { const n = G.neighbor(c, r, e); if (G.inBounds(n.c, n.r)) doors[n.r * MW + n.c] = 1; }
-    }
-  }
-  const room = (c, r) => c >= 0 && r >= 0 && c < MW && r < MH && rooms[r * MW + c] === 1;
-  const edgeBetween = (a, b) => { for (let e = 0; e < G.edgeCount; e++) { const n = G.neighbor(a[0], a[1], e); if (n.c === b[0] && n.r === b[1]) return e; } return -1; };
-  const closed = (a, b) => {
-    if (!(a[0] >= 0 && a[1] >= 0 && a[0] < MW && a[1] < MH && doors[a[1] * MW + a[0]])) return false;
-    const e = edgeBetween(a, b); if (e < 0) return false;
-    const d = doorOnEdge(G, cells, a[0], a[1], e); return !!(d && !d.open);
-  };
-  const adjacent = (a, b) => {
-    const dc = b[0] - a[0], dr = b[1] - a[1];
-    if (!hex) return Math.abs(dc) + Math.abs(dr) === 1;
-    return edgeBetween(a, b) >= 0;
-  };
-  function stepOk(a, b) {
-    if (!room(b[0], b[1])) return false;
-    if (!adjacent(a, b)) {
-      if (!hex && Math.abs(a[0] - b[0]) === 1 && Math.abs(a[1] - b[1]) === 1) {
-        for (const mid of [[b[0], a[1]], [a[0], b[1]]]) if (room(mid[0], mid[1]) && !closed(a, mid) && !closed(mid, b)) return true;
-        return false;
-      }
-      return true;
-    }
-    return !closed(a, b);
-  }
-  function rayClear(p, q, start, end) {
-    const dist = Math.hypot(q[0] - p[0], q[1] - p[1]), steps = Math.max(1, Math.floor(dist / 0.08));
-    let cur = start;
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const nxt = i === steps ? end : unitCell(hex, p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t);
-      if (nxt[0] !== cur[0] || nxt[1] !== cur[1]) { if (!stepOk(cur, nxt)) return false; cur = nxt; }
-    }
-    return true;
-  }
-  return { G, hex, room, rayClear };
-}
-function coverFrom(W, a, b) {
-  if (a[0] === b[0] && a[1] === b[1]) return { los: true, cover: 0, clear: 1, rays: 1 };
-  const src = sightSamples(W.hex, a[0], a[1], 0.6), dst = sightSamples(W.hex, b[0], b[1], 0.7);
-  let total = 0, clear = 0;
-  for (const p of src) for (const q of dst) { total++; if (W.rayClear(p, q, a, b)) clear++; }
-  if (!clear) return { los: false, cover: 0, clear: 0, rays: total };
-  const blocked = 1 - clear / total;
-  const cover = blocked === 0 ? 0 : blocked <= 0.25 ? 1 : blocked <= 0.5 ? 2 : blocked <= 0.75 ? 3 : 4;
-  return { los: true, cover, clear, rays: total };
-}
-/* sight and cover between two cells {c, r} */
-function lineOfSight(map, a, b) { return coverFrom(sightWorld(map), [a.c, a.r], [b.c, b.r]); }
-/* everything a viewer standing on `from` can see within `radius` steps: Map key -> cover (0-4), plus the
-   room cells in range that are out of sight. Cached on the caller's `sig` (change it when walls or doors change). */
-const sightCache = { sig: null, out: null };
-function sightField(map, from, radius, sig) {
-  const ck = sig === undefined ? null : `${sig}|${map.id}|${from.c},${from.r}|${radius}`;
-  if (ck && sightCache.sig === ck) return sightCache.out;
-  const W = sightWorld(map), G = W.G, a = [from.c, from.r], seen = new Map(), hidden = new Set(), far = new Set();
-  for (const k in map.data.cells) {
-    const i = k.indexOf(','), c = +k.slice(0, i), r = +k.slice(i + 1);
-    if (!W.room(c, r)) continue;
-    if (G.cellDistance(from, { c, r }) > radius) { far.add(k); continue; }
-    const res = coverFrom(W, a, [c, r]);
-    if (res.los) seen.set(k, res.cover); else hidden.add(k);
-  }
-  const out = { from: { c: from.c, r: from.r }, radius, seen, hidden, far };
-  if (ck) { sightCache.sig = ck; sightCache.out = out; }
+// ---------------------------------------------------------------- line of sight, light and vision (SightCore)
+/* The rules live in sightcore.js (the same as the server's geometry.py). Here: a light-weight copy of the map
+   for it, a cache, and a Web Worker so big maps and hexes don't stall drawing. */
+const LIGHT_LEVELS = ['bright', 'dim', 'dark'];
+/* light sources on a map seen by the GM: lit markers and flashlights of runners standing on it.
+   players: [{c, r, flashlight}] (tokens). Radii in cells. */
+function lightSources(map, players) {
+  const cm = (map.settings && map.settings.cellMeters) || 2, out = [];
+  for (const m of map.data.markers || []) if (m.light) out.push([m.c, m.r, Math.max(0, Math.ceil(m.light / cm - 1e-9))]);
+  for (const p of players || []) if (p.flashlight) out.push([p.c, p.r, Math.max(0, Math.ceil(10 / cm - 1e-9))]);
   return out;
+}
+/* the map as SightCore wants it. opts: { ambient, sources } (players' maps carry the light already) */
+function sightMap(map, opts) {
+  opts = opts || {};
+  return { gridType: map.gridType, width: map.width, height: map.height, cells: map.data.cells,
+           ambient: opts.ambient || 'bright', sources: opts.sources || [], cellM: (map.settings && map.settings.cellMeters) || 2 };
+}
+const worlds = { sig: null, w: null };
+function sightWorld(map, opts, sig) {
+  if (sig !== undefined && worlds.sig === sig && worlds.w) return worlds.w;
+  const w = SightCore.world(sightMap(map, opts));
+  if (sig !== undefined) { worlds.sig = sig; worlds.w = w; }
+  return w;
+}
+/* sight and cover between two cells {c, r} (walls and closed doors) */
+function lineOfSight(map, a, b) { return SightCore.world(sightMap(map)).cover([a.c, a.r], [b.c, b.r]); }
+
+const fieldCache = new Map();      // key -> field (a few recent ones)
+const SW = { worker: null, failed: false, mapSig: null, pending: new Map(), seq: 0 };
+function sightWorker() {
+  if (SW.worker || SW.failed || typeof Worker === 'undefined') return SW.worker;
+  try {
+    const core = document.querySelector('script[src*="sightcore.js"]');
+    if (!core) { SW.failed = true; return null; }
+    const url = new URL('sightworker.js', core.src); url.search = '?c=' + encodeURIComponent(core.src);
+    SW.worker = new Worker(url.href);
+    SW.worker.onmessage = ev => {
+      const m = ev.data || {}, cbs = SW.pending.get(m.key) || [];
+      SW.pending.delete(m.key);
+      if (m.error || !m.field) return;
+      const f = m.field;
+      remember(m.key, { from: f.from, radius: f.radius, seen: new Map(f.seen), hidden: new Set(f.hidden), dark: new Set(f.dark),
+                        far: new Set(f.far), blind: new Map(f.blind) });
+      for (const cb of cbs) try { cb(); } catch { /* ignore */ }
+    };
+    SW.worker.onerror = () => { SW.failed = true; SW.worker = null; SW.pending.clear(); };
+  } catch { SW.failed = true; SW.worker = null; }
+  return SW.worker;
+}
+function remember(k, f) { fieldCache.delete(k); fieldCache.set(k, f); while (fieldCache.size > 12) fieldCache.delete(fieldCache.keys().next().value); }
+/* everything a viewer standing on `from` can see within `radius` steps (see SightCore.field). `sig` names the
+   map version (change it when walls, doors, light or smoke change). opts: { vision, blinded, ambient, sources }.
+   With onReady, the work runs in a worker: the call returns the last field for this map and viewer (or null)
+   and onReady fires when the new one is in. Without it, it is worked out right away. */
+function sightField(map, from, radius, sig, opts, onReady) {
+  opts = opts || {};
+  const eyes = Array.isArray(opts.vision) ? opts.vision.join('+') : '-';
+  const base = `${sig}|${map.id}|${radius}|${eyes}|${opts.blinded || 0}|${JSON.stringify(opts.sources || [])}|${opts.ambient || ''}`;
+  const k = `${base}|${from.c},${from.r}`;
+  if (fieldCache.has(k)) return fieldCache.get(k);
+  const w = onReady ? sightWorker() : null;
+  if (!w) {
+    const f = SightCore.field(sightWorld(map, opts, `${sig}|${map.id}|${JSON.stringify(opts.sources || [])}|${opts.ambient || ''}`), from, radius,
+                              { vision: opts.vision, blinded: opts.blinded });
+    remember(k, f);
+    return f;
+  }
+  const mapSig = `${sig}|${map.id}|${JSON.stringify(opts.sources || [])}|${opts.ambient || ''}`;
+  if (SW.mapSig !== mapSig) { w.postMessage({ type: 'map', sig: mapSig, map: sightMap(map, opts) }); SW.mapSig = mapSig; }
+  if (!SW.pending.has(k)) {
+    SW.pending.set(k, []);
+    w.postMessage({ type: 'field', id: ++SW.seq, key: k, sig: mapSig, from: { c: from.c, r: from.r }, radius, opts: { vision: opts.vision, blinded: opts.blinded } });
+  }
+  SW.pending.get(k).push(onReady);
+  // meanwhile: the most recent field with the same map and eyes (the viewer was probably one step away)
+  let last = null;
+  for (const [kk, f] of fieldCache) if (kk.startsWith(base + '|')) last = f;
+  return last;
 }
 const COVER_NAMES = ['', 'I', 'II', 'III', 'IV'];
 /* draw a sight field in map space (the caller sets the viewport transform) */
+/* Smoke: one soft cloud over all the smoky cells, so neighbours flow into each other. Each cell adds a
+   radial puff to a mask (dense in the middle, fading at the edge); the mask is then filled with a drifting
+   noise texture and laid over the floor. Thermal smoke has a warm tint. */
+const SMOKE_TONES = { smoke: [196, 206, 210], thermal: [226, 182, 152] };
+const smokeTex = {};
+function smokeTexture(kind) {
+  if (smokeTex[kind]) return smokeTex[kind];
+  const N = 160, cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d'), img = g.createImageData(N, N), [R, Gc, B] = SMOKE_TONES[kind] || SMOKE_TONES.smoke;
+  // tileable value noise, three octaves
+  const grid = (n, seed) => { const a = []; let x = seed; for (let i = 0; i < n * n; i++) { x = (x * 1103515245 + 12345) & 0x7fffffff; a.push(x / 0x7fffffff); } return a; };
+  const octs = [[5, 0.55, grid(5, 7)], [10, 0.3, grid(10, 19)], [20, 0.15, grid(20, 31)]];
+  const smooth = t => t * t * (3 - 2 * t);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    let v = 0;
+    for (const [n, w, a] of octs) {
+      const fx = x / N * n, fy = y / N * n, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = smooth(fx - x0), ty = smooth(fy - y0);
+      const at = (i, j) => a[((j % n) + n) % n * n + ((i % n) + n) % n];
+      const top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * tx, bot = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * tx;
+      v += (top + (bot - top) * ty) * w;
+    }
+    const i = (y * N + x) * 4, shade = 0.82 + 0.3 * v;
+    img.data[i] = Math.min(255, R * shade); img.data[i + 1] = Math.min(255, Gc * shade); img.data[i + 2] = Math.min(255, B * shade);
+    img.data[i + 3] = Math.round(255 * (0.45 + 0.55 * v));
+  }
+  g.putImageData(img, 0, 0);
+  smokeTex[kind] = cv;
+  return cv;
+}
+function drawSmokeLayer(g, G, list, size, cells) {
+  const t = g.getTransform(), s = Math.max(0.25, Math.hypot(t.a, t.b) || 1);
+  for (const kind of ['smoke', 'thermal']) {
+    const mine = list.filter(x => x.kind === kind);
+    if (!mine.length) continue;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const pts = mine.map(x => G.cellCenter(x.c, x.r));
+    for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+    x0 -= size; y0 -= size; x1 += size; y1 += size;
+    const W = Math.max(1, Math.ceil((x1 - x0) * s)), H = Math.max(1, Math.ceil((y1 - y0) * s));
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const m = cv.getContext('2d');
+    m.setTransform(s, 0, 0, s, -x0 * s, -y0 * s);
+    for (const p of pts) {
+      const rad = size * 0.95, gr = m.createRadialGradient(p.x, p.y, size * 0.12, p.x, p.y, rad);
+      gr.addColorStop(0, 'rgba(0,0,0,.85)'); gr.addColorStop(0.55, 'rgba(0,0,0,.6)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      m.fillStyle = gr; m.beginPath(); m.arc(p.x, p.y, rad, 0, Math.PI * 2); m.fill();
+    }
+    // walls hold smoke in: keep the cloud on the floor cells it covers
+    if (cells) {
+      m.globalCompositeOperation = 'destination-in'; m.fillStyle = '#000'; m.beginPath();
+      const c0 = Math.floor(x0 / size) - 2, c1 = Math.ceil(x1 / size) + 2, r0 = Math.floor(y0 / size) - 2, r1 = Math.ceil(y1 / size) + 2;
+      for (let c = c0; c <= c1; c++) for (let r = r0; r <= r1; r++) {
+        const cell = cells[key(c, r)]; if (!cell || !cell.fill) continue;
+        const pts2 = G.cellCorners(c, r); m.moveTo(pts2[0].x, pts2[0].y); for (let i = 1; i < pts2.length; i++) m.lineTo(pts2[i].x, pts2[i].y); m.closePath();
+      }
+      m.fill();
+    }
+    // texture the mask: drifting noise in the smoke's tone
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.globalCompositeOperation = 'source-in';
+    const pat = m.createPattern(smokeTexture(kind), 'repeat');
+    if (pat && pat.setTransform && typeof DOMMatrix !== 'undefined') pat.setTransform(new DOMMatrix().scale(Math.max(0.5, size * s / 64)));
+    m.fillStyle = pat || `rgb(${SMOKE_TONES[kind].join(',')})`; m.fillRect(0, 0, W, H);
+    g.save(); g.globalAlpha = 0.78; g.drawImage(cv, x0, y0, x1 - x0, y1 - y0); g.restore();
+  }
+}
+function cellLabel(ctx, G, c, r, text, zoom, color, dy) {
+  const p = G.cellCenter(c, r);
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(text, p.x + 1 / zoom, p.y + (dy || 0) + 1 / zoom);
+  ctx.fillStyle = color || '#ffe2a8'; ctx.fillText(text, p.x, p.y + (dy || 0));
+}
+function shadeCells(ctx, G, keys, style) {
+  ctx.fillStyle = style;
+  for (const k of keys) { const [c, r] = k.split(',').map(Number); tracePoly(ctx, G.cellCorners(c, r), false); ctx.fill(); }
+}
+
 function drawSight(ctx, map, field, zoom) {
   const G = geom(map), col = map.settings.colors;
   ctx.save();
@@ -741,15 +809,7 @@ function drawSight(ctx, map, field, zoom) {
     const [c, r] = k.split(',').map(Number); tracePoly(ctx, G.cellCorners(c, r), false);
     ctx.fillStyle = tint[cv]; ctx.fill();
   }
-  if (G.cs * zoom >= 20) {
-    ctx.font = `700 ${Math.round(G.cs * 0.34)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    for (const [k, cv] of field.seen) {
-      if (!cv) continue;
-      const [c, r] = k.split(',').map(Number), p = G.cellCenter(c, r);
-      ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(COVER_NAMES[cv], p.x + 1 / zoom, p.y + 1 / zoom);
-      ctx.fillStyle = '#ffe2a8'; ctx.fillText(COVER_NAMES[cv], p.x, p.y);
-    }
-  }
+  drawSightLabels(ctx, G, field, zoom);
   // the viewer
   const p = G.cellCenter(field.from.c, field.from.r);
   ctx.strokeStyle = col.highlight; ctx.lineWidth = 2 / zoom; ctx.setLineDash([4 / zoom, 3 / zoom]);
@@ -757,5 +817,144 @@ function drawSight(ctx, map, field, zoom) {
   ctx.restore();
 }
 
-return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT, lineOfSight, sightField, drawSight, COVER_NAMES };
+/* cover numerals, and smoke (−3 per Blinded level) on the cells in sight */
+function drawSightLabels(ctx, G, field, zoom) {
+  if (G.cs * zoom < 20) return;
+  ctx.font = `700 ${Math.round(G.cs * 0.34)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [k, cv] of field.seen) {
+    const [c, r] = k.split(',').map(Number), bl = field.blind && field.blind.get(k);
+    if (cv) cellLabel(ctx, G, c, r, COVER_NAMES[cv], zoom, '#ffe2a8', bl ? -G.cs * 0.14 : 0);
+    if (bl) cellLabel(ctx, G, c, r, `−${3 * bl}`, zoom, '#d6e2e4', cv ? G.cs * 0.2 : 0);
+  }
+}
+
+// ---------------------------------------------------------------- range bands
+const RANGE_BANDS = [['Close', 3], ['Near', 50], ['Medium', 250], ['Far', 500], ['Extreme', Infinity]];
+const BAND_TINT = ['rgba(185,140,255,.24)', 'rgba(109,255,156,.18)', 'rgba(255,214,90,.20)', 'rgba(255,150,60,.22)', 'rgba(255,70,90,.24)'];
+function bandOf(meters) { for (let i = 0; i < RANGE_BANDS.length; i++) if (meters <= RANGE_BANDS[i][1] + 1e-6) return i; return 4; }
+/* a weapon's range bands over the cells in sight: weapon = { ar: [5 values or null] }, extras: +2 AR from
+   Medium on with vision magnification */
+function drawRange(ctx, map, field, world, ar, zoom, magnify) {
+  const G = geom(map);
+  ctx.save();
+  shadeCells(ctx, G, field.hidden, 'rgba(0,0,0,.58)');
+  shadeCells(ctx, G, field.far || [], 'rgba(0,0,0,.42)');
+  const a = [field.from.c, field.from.r];
+  ctx.font = `600 ${Math.round(G.cs * 0.26)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [k] of field.seen) {
+    const [c, r] = k.split(',').map(Number);
+    if (c === a[0] && r === a[1]) continue;
+    const b = bandOf(world.distM(a, [c, r]));
+    tracePoly(ctx, G.cellCorners(c, r), false);
+    if (ar[b] == null) { ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fill(); continue; }
+    ctx.fillStyle = BAND_TINT[b]; ctx.fill();
+  }
+  // where one band gives way to the next: a line along the cell edges
+  ctx.strokeStyle = 'rgba(232,246,244,.55)'; ctx.lineWidth = 1.5 / zoom;
+  for (const [k] of field.seen) {
+    const [c, r] = k.split(',').map(Number), b = bandOf(world.distM(a, [c, r]));
+    for (let e = 0; e < G.edgeCount; e++) {
+      const n = G.neighbor(c, r, e), nk = key(n.c, n.r);
+      if (!field.seen.has(nk) || bandOf(world.distM(a, [n.c, n.r])) <= b) continue;
+      const [p1, p2] = G.edgePoints(c, r, e); ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+    }
+  }
+  drawSightLabels(ctx, G, field, zoom);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- movement reach
+/* steps (cells) from a cell to every room cell a token can walk to: doors closed block, like moving */
+function reachSteps(map, from, maxSteps) {
+  const G = geom(map), cells = map.data.cells, dist = new Map([[key(from.c, from.r), 0]]);
+  let frontier = [from];
+  for (let d = 1; d <= maxSteps && frontier.length; d++) {
+    const next = [];
+    for (const cur of frontier) for (let e = 0; e < G.edgeCount; e++) {
+      const n = G.neighbor(cur.c, cur.r, e), k = key(n.c, n.r);
+      if (dist.has(k) || !passable(G, cells, cur, n)) continue;
+      dist.set(k, d); next.push(n);
+    }
+    frontier = next;
+  }
+  return dist;
+}
+/* mv = { walk, sprint, sprintMax, cellM } meters left: walk zone (cyan), sure sprint (amber), possible sprint (hatched) */
+function drawReach(ctx, map, from, mv, zoom) {
+  const G = geom(map), cm = mv.cellM || 2;
+  const w = Math.floor((mv.walk || 0) / cm + 1e-6), s = Math.floor((mv.sprint || 0) / cm + 1e-6), sx = Math.floor((mv.sprintMax || 0) / cm + 1e-6);
+  const steps = reachSteps(map, from, Math.max(w, s, sx));
+  ctx.save();
+  for (const [k, d] of steps) {
+    if (d === 0) continue;
+    const [c, r] = k.split(',').map(Number), poly = G.cellCorners(c, r);
+    if (d <= w) { tracePoly(ctx, poly, false); ctx.fillStyle = 'rgba(255,255,255,.16)'; ctx.fill(); }
+    else if (d <= s) { tracePoly(ctx, poly, false); ctx.fillStyle = 'rgba(255,176,46,.22)'; ctx.fill(); }
+    else if (d <= sx) {
+      ctx.save(); tracePoly(ctx, poly, false); ctx.clip();
+      ctx.strokeStyle = 'rgba(255,176,46,.45)'; ctx.lineWidth = 1.5 / zoom;
+      const p = G.cellCenter(c, r), sz = G.cs;
+      for (let q = -sz; q <= sz; q += sz / 4) { ctx.beginPath(); ctx.moveTo(p.x - sz + q, p.y - sz); ctx.lineTo(p.x + sz + q, p.y + sz); ctx.stroke(); }
+      ctx.restore();
+    }
+  }
+  // outline the edge of the walking zone
+  ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2.5 / zoom; ctx.setLineDash([5 / zoom, 3 / zoom]);
+  for (const [k, d] of steps) {
+    if (d > w) continue;
+    const [c, r] = k.split(',').map(Number);
+    for (let e = 0; e < G.edgeCount; e++) {
+      const n = G.neighbor(c, r, e), nd = steps.get(key(n.c, n.r));
+      if (nd !== undefined && nd <= w) continue;
+      const [p1, p2] = G.edgePoints(c, r, e); ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+  return steps;
+}
+
+// ---------------------------------------------------------------- area templates
+const RING_TINT = ['rgba(255,60,60,.42)', 'rgba(255,140,50,.32)', 'rgba(255,214,90,.22)'];
+/* blast rings (p. 114): Ground Zero within 1 m, Close 1-3 m, Near out to the blast radius */
+function ringOf(d) { return d <= 1 + 1e-6 ? 0 : d <= 3 + 1e-6 ? 1 : 2; }
+function templateCells(world, t) { return SightCore.areaCells(world, t.c, t.r, t.radius); }
+function drawTemplates(ctx, map, world, templates, zoom, opts) {
+  opts = opts || {};
+  const G = geom(map), cm = world.cellM, pxPerM = (G.hex ? G.cs * SQRT3 / 2 : G.cs) / cm;
+  for (const t of templates || []) {
+    const cells = templateCells(world, t);
+    ctx.save();
+    for (const x of cells) {
+      tracePoly(ctx, G.cellCorners(x.c, x.r), false);
+      ctx.fillStyle = t.kind === 'blast' ? RING_TINT[ringOf(x.d)] : t.kind === 'smoke' ? 'rgba(190,200,204,.25)' : 'rgba(185,140,255,.22)';
+      ctx.fill();
+    }
+    const p = G.cellCenter(t.c, t.r);
+    ctx.strokeStyle = t.color || '#ffb02e'; ctx.lineWidth = 2 / zoom; ctx.setLineDash([6 / zoom, 4 / zoom]);
+    ctx.beginPath(); ctx.arc(p.x, p.y, t.radius * pxPerM, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+    if (t.kind === 'blast') for (const rr of [1, 3]) if (rr < t.radius) { ctx.beginPath(); ctx.arc(p.x, p.y, rr * pxPerM, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.font = `700 ${Math.max(10, Math.round(13 / zoom))}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    const label = `${t.name} · ${t.radius} m`;
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; const tw = ctx.measureText(label).width + 8 / zoom;
+    ctx.fillRect(p.x - tw / 2, p.y - t.radius * pxPerM - 18 / zoom, tw, 16 / zoom);
+    ctx.fillStyle = t.color || '#ffb02e'; ctx.fillText(label, p.x, p.y - t.radius * pxPerM - 3 / zoom);
+    ctx.restore();
+  }
+}
+/* who an area catches: things = [{c, r, name}] -> [{name, ring: 'Ground zero'|'Close'|'Near'|null, dv}] */
+function templateTargets(world, t, things) {
+  const inside = new Map(templateCells(world, t).map(x => [key(x.c, x.r), x.d]));
+  const out = [];
+  for (const th of things) {
+    const d = inside.get(key(th.c, th.r));
+    if (d === undefined) continue;
+    const ring = t.kind === 'blast' ? ringOf(d) : null;
+    out.push({ name: th.name, ref: th.ref, d, ring: ring == null ? null : ['Ground zero', 'Close', 'Near'][ring], dv: ring == null || !t.dv ? null : t.dv[ring] });
+  }
+  return out.sort((x, y) => x.d - y.d);
+}
+
+return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT, lineOfSight, sightField, sightWorld, sightMap, lightSources, drawSight, COVER_NAMES, LIGHT_LEVELS,
+         drawRange, bandOf, RANGE_BANDS, reachSteps, drawReach, drawTemplates, templateTargets, templateCells };
 })();

@@ -248,6 +248,29 @@ def npc_from_key(key, force=None):
     raise R.RuleError("Unknown template.")
 
 
+VISION_TYPES = ("Low-light", "Thermographic", "Ultrasound")
+_VISION_WORDS = (("low-light", "Low-light"), ("lowlight", "Low-light"), ("thermographic", "Thermographic"),
+                 ("thermo vision", "Thermographic"), ("ultrasound", "Ultrasound"))
+
+
+def npc_vision(npc, marker=None):
+    """An NPC's vision: what the GM set, else read from the stat block (metatype words in its name, label or
+    notes: orks and elves see in low light, dwarfs and trolls in thermographic; and any vision gear,
+    cyberware or critter powers mentioned)."""
+    npc = npc or {}
+    if isinstance((marker or {}).get("vision"), list):
+        return [v for v in VISION_TYPES if v in marker["vision"]]
+    if isinstance(npc.get("vision"), list):
+        return [v for v in VISION_TYPES if v in npc["vision"]]
+    text = " ".join(str(x) for x in (npc.get("template"), npc.get("notes"), (marker or {}).get("label")) if x).lower()
+    out = {v for w, v in _VISION_WORDS if w in text}
+    if re.search(r"\b(orks?|elf|elves|elven)\b", text):
+        out.add("Low-light")
+    if re.search(r"\b(trolls?|dwarfs?|dwarves)\b", text):
+        out.add("Thermographic")
+    return [v for v in VISION_TYPES if v in out]
+
+
 def clean_npc(v):
     """Sanitize an NPC stat block coming from the editor."""
     if not isinstance(v, dict):
@@ -288,6 +311,7 @@ def clean_npc(v):
             "init_dice": max(1, min(5, _int(v.get("init_dice"), 1))), "grunt": bool(v.get("grunt")),
             "edge": max(0, min(10, _int(v.get("edge")))), "skills": skills, "specs": specs,
             "move": str(v.get("move") or "")[:48], "weapons": weapons, "notes": str(v.get("notes") or "")[:4000],
+            "vision": [x for x in VISION_TYPES if x in v["vision"]] if isinstance(v.get("vision"), list) else None,
             "force": _int(v.get("force")) or None,
             "matrix": {"rating": max(0, min(12, _int((v.get("matrix") or {}).get("rating"))))} if isinstance(v.get("matrix"), dict) else None,
             "vehicle": _clean_vehicle(v.get("vehicle")),
@@ -434,6 +458,13 @@ class Fighter:
         attrs = {a: _int((npc.get("attrs") or {}).get(a), 1) for a in K.PHYSICAL + K.MENTAL + ["Magic", "Resonance"]}
         return cls(mk.get("label") or "Enemy", attrs, _int(npc.get("dr")), marker_wound(mk.get("cm")),
                    skills=npc.get("skills"), specs=npc.get("specs"), npc=npc, cm=mk.get("cm"), statuses=mk.get("statuses") or {}, marker=mk)
+
+    @property
+    def vision(self):
+        """Vision types (Low-light, Thermographic, Ultrasound) and extras (Magnification, Flare compensation)."""
+        if self.char is not None:
+            return list(self.d.get("vision") or []), list(self.d.get("vision_extras") or [])
+        return npc_vision(self.npc, self.marker), []
 
     def rank(self, skill):
         r = _int((self.skills or {}).get(skill))
@@ -682,6 +713,9 @@ def resolve_attack(att, weapon, target, opts):
         a_parts.append(["Attacking from Cover IV", ACT.COVER_ATTACK["full_cover_dice"]])
     if called:
         a_parts.append([called["name"], called["dice"]])
+    env = max(0, min(3, _int(opts.get("env_blind"))) - att.status("Blinded"))
+    if env and not melee and not astral and not weapon.get("matrix"):
+        a_parts.append([f"Smoke (Blinded {'I' * env})", -3 * env])       # p. 263: through it I, from inside II
     if _int(opts.get("attack_mod")):
         a_parts.append(["Modifier", _int(opts["attack_mod"])])
     split = max(1, _int(opts.get("split"), 1))
@@ -692,6 +726,8 @@ def resolve_attack(att, weapon, target, opts):
     if ar is not None:
         for name, v in status_parts(att, "ar", ranged):
             ar = max(0, ar + v)
+        if opts.get("magnification") and ri >= 2 and ranged and not weapon.get("spell"):
+            ar += 2                                 # vision magnification: +2 AR at Medium, Far, Extreme (p. 275)
         if att.status("Prone") and physical_attack and weapon.get("firearm") and not weapon.get("bow"):
             ar += ACT.PRONE["firearm_ar"]
 

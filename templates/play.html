@@ -49,6 +49,10 @@
           <p class="hint" id="p-help">Waiting for the game master to place you on a map.</p>
           <div id="p-actions" class="col"></div>
         </section>
+        <section class="pane-block" id="p-tactics-block" hidden>
+          <h4 class="pane-h">Tactics</h4>
+          <div id="p-tactics" class="col"></div>
+        </section>
       </div>
     </aside>
     <main class="stage">
@@ -59,7 +63,11 @@
         <canvas id="map"></canvas>
         <div class="legend" id="legend"></div>
         <canvas id="minimap" class="minimap"></canvas>
-        <div class="los-key" id="los-key" hidden><span class="k0">In sight</span><span class="k1">Cover I</span><span class="k2">II</span><span class="k3">III</span><span class="k4">IV</span><span class="kx" title="Out of sight, or more than 20 cells away">Out of sight</span></div>
+        <div class="map-keys">
+          <div class="los-key range-key" id="range-key" hidden></div>
+          <div class="los-key reach-key" id="reach-key" hidden></div>
+          <div class="los-key" id="los-key" hidden><span class="k0">In sight</span><span class="k1">Cover I</span><span class="k2">II</span><span class="k3">III</span><span class="k4">IV</span><span class="kx" title="Out of sight, or more than 20 cells away">Out of sight</span></div>
+        </div>
         <div class="fp-hint" id="fp-hint" hidden>Arrows or WASD: walk and turn · Q/E: sidestep · Enter: door ahead · tap the sides to turn, the middle to step</div>
         <details class="view-menu">
           <summary title="View options">View</summary>
@@ -67,8 +75,11 @@
             <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle" checked> Isometric view</label>
             <label class="check" title="See the map through your runner's eyes (V)"><input type="checkbox" id="fp-toggle"> First person</label>
             <label class="check" title="Shade what your runner can see from their token, and the cover there (L)"><input type="checkbox" id="los-toggle"> Line of sight</label>
+            <label class="check" title="Colour the cells in sight by a weapon's range bands; pick the weapon under Tactics (R)"><input type="checkbox" id="range-toggle"> Range bands</label>
+            <label class="check" title="In combat, show how far you can Move and Sprint this turn (M)"><input type="checkbox" id="reach-toggle" checked> Movement</label>
             <label class="check"><input type="checkbox" id="legend-toggle" checked> Legend</label>
-            <p class="hint">Drag your token or click a room to move. Double-click to ping. Scroll to zoom, right-drag to pan. <kbd>F</kbd> fits the map, <kbd>C</kbd> centres on you, <kbd>I</kbd> toggles the isometric view, <kbd>V</kbd> (or <kbd>3</kbd>) the first-person view (arrows or WASD to walk and turn, <kbd>Q</kbd>/<kbd>E</kbd> to sidestep, <kbd>Enter</kbd> opens the door ahead), <kbd>L</kbd> shows your line of sight, <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
+            <p class="hint" id="view-locked" hidden>The game master chose how this map is seen.</p>
+            <p class="hint">Drag your token or click a room to move. Double-click to ping. Scroll to zoom, right-drag to pan. <kbd>F</kbd> fits the map, <kbd>C</kbd> centres on you, <kbd>I</kbd> toggles the isometric view, <kbd>V</kbd> (or <kbd>3</kbd>) the first-person view (arrows or WASD to walk and turn, <kbd>Q</kbd>/<kbd>E</kbd> to sidestep, <kbd>Enter</kbd> opens the door ahead), <kbd>L</kbd> shows your line of sight, <kbd>R</kbd> a weapon's range bands, <kbd>M</kbd> how far you can move in combat, <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
           </div>
         </details>
         <div id="map-empty" class="overlay" hidden><div class="panel"><h3>No map yet</h3><p class="muted">Your GM hasn't placed your token on a map. Meanwhile, build your character.</p><button class="primary" data-goto="sheet">Open my character</button></div></div>
@@ -119,6 +130,7 @@
 <script src="{{ asset('api.js') }}"></script>
 <script src="{{ asset('music.js') }}"></script>
 <script src="{{ asset('layout.js') }}"></script>
+<script src="{{ asset('sightcore.js') }}"></script>
 <script src="{{ asset('gridcore.js') }}"></script>
 <script src="{{ asset('fpview.js') }}"></script>
 <script src="{{ asset('srui.js') }}"></script>

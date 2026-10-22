@@ -1089,8 +1089,11 @@ body.shell #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 
 @keyframes fp-bump { 0%, 100% { transform: none; } 30% { transform: translateX(-4px); } 60% { transform: translateX(3px); } }
 @media (prefers-reduced-motion: reduce) { .canvas-wrap.bump { animation: none; } }
 
-/* line-of-sight key: what the shading on the map means */
-.los-key { position: absolute; left: 50%; bottom: .6rem; transform: translateX(-50%); z-index: 3; pointer-events: none;
+/* keys under the map: what the shading means (line of sight, range bands, movement) */
+.map-keys { position: absolute; left: 50%; bottom: .6rem; transform: translateX(-50%); z-index: 3; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: .3rem; }
+.canvas-wrap.fp .map-keys { display: none; }
+.los-key { position: static;
   display: flex; gap: .15rem; padding: .25rem; border-radius: 2px; background: rgba(5, 9, 9, .82); border: 1px solid var(--line, #1f3236);
   font-size: .78rem; color: var(--text, #d8e8e6); white-space: nowrap; }
 .los-key[hidden], .canvas-wrap.fp .los-key { display: none; }
@@ -1101,4 +1104,21 @@ body.shell #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 
 .los-key .k3 { background: rgba(255,120,40,.5); }
 .los-key .k4 { background: rgba(255,60,60,.6); }
 .los-key .kx { background: rgba(0,0,0,.8); color: var(--muted, #8aa3a0); }
-@media (max-width: 700px) { .los-key { font-size: .7rem; bottom: 2.6rem; } }
+@media (max-width: 700px) { .los-key { font-size: .7rem; } .map-keys { bottom: 2.6rem; } }
+.los-key .b0 { background: rgba(185,140,255,.34); } .los-key .b1 { background: rgba(109,255,156,.28); }
+.los-key .b2 { background: rgba(255,214,90,.3); } .los-key .b3 { background: rgba(255,150,60,.34); }
+.los-key .b4 { background: rgba(255,70,90,.36); } .los-key .bx { background: rgba(0,0,0,.8); color: var(--muted, #8aa3a0); }
+.los-key .rw { background: rgba(255,255,255,.18); box-shadow: inset 0 0 0 1px rgba(255,255,255,.7); } .los-key .rs { background: rgba(255,176,46,.32); }
+.los-key .rm { background: repeating-linear-gradient(45deg, rgba(255,176,46,.45) 0 2px, transparent 2px 6px); }
+.los-key .kt { color: var(--muted, #8aa3a0); }
+
+/* Tactics (player side panel): movement left, flashlight, range bands, areas */
+.tac-move { margin: 0; color: var(--text); }
+.tac-range select { width: 100%; }
+.tac-area { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
+.tac-area select { flex: 1 1 8rem; min-width: 0; }
+.tac-tpl { border-left: 3px solid var(--line); padding: .2rem 0 .2rem .5rem; font-size: .88rem; }
+.tac-tpl-h { display: flex; align-items: baseline; gap: .1rem .3rem; flex-wrap: wrap; }
+.tac-tpl-h .x { margin-left: auto; }
+.tac-hits { display: flex; flex-wrap: wrap; gap: .2rem .6rem; color: var(--muted); }
+.canvas-wrap.placing canvas#map { cursor: crosshair; }

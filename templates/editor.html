@@ -48,6 +48,7 @@
         <button data-tool="marker" class="tool" title="Place markers (M)">Marker</button>
         <button data-tool="room" class="tool" title="Group cells into a named room (G)">Room</button>
         <button data-tool="select" class="tool" title="Inspect a cell (V)">Select</button>
+        <button data-tool="light" class="tool" title="Paint light and smoke (B)">Light</button>
       </div>
 
       <div class="tool-opts" data-for="paint rect">
@@ -88,6 +89,12 @@
         <div id="room-list" class="mini-list"></div>
       </div>
 
+      <div class="tool-opts" data-for="light">
+        <label>Light <select id="light-level-e"><option value="-">Leave as it is</option><option value="">The map's light</option><option value="bright">Bright</option><option value="dim">Dim</option><option value="dark">Dark</option></select></label>
+        <label>Smoke <select id="light-smoke-e"><option value="-">Leave as it is</option><option value="">Clear the air</option><option value="smoke">Smoke</option><option value="thermal">Thermal smoke</option></select></label>
+        <label>Brush size <input type="range" id="light-brush-e" min="1" max="6" value="2"> <span id="light-brush-val-e">2</span></label>
+        <p class="hint">Paint light and smoke; players see it at once. Dark cells hide what's in them unless a runner has thermographic vision or ultrasound; smoke blinds those who look through it. The map's own light is under Colors &amp; settings.</p>
+      </div>
       <div class="tool-opts" data-for="secret">
         <p class="hint">Secret cells are never revealed by the map station. Players only see them when their token walks in, or when you reveal them by hand.</p>
       </div>
@@ -107,7 +114,15 @@
         <button data-tool="token" class="tool" title="Place this player's token (T)">Token</button>
         <button data-tool="pmarker" class="tool" title="Move markers, set enemy health (M)">Markers</button>
         <button data-tool="select" class="tool active" title="Click to inspect, drag a marker to move it (V)">Select</button>
+        <button data-tool="light" class="tool" title="Paint light and smoke (B)">Light</button>
       </div>
+      <div class="tool-opts" data-for="light">
+        <label>Light <select id="light-level-p"><option value="-">Leave as it is</option><option value="">The map's light</option><option value="bright">Bright</option><option value="dim">Dim</option><option value="dark">Dark</option></select></label>
+        <label>Smoke <select id="light-smoke-p"><option value="-">Leave as it is</option><option value="">Clear the air</option><option value="smoke">Smoke</option><option value="thermal">Thermal smoke</option></select></label>
+        <label>Brush size <input type="range" id="light-brush-p" min="1" max="6" value="2"> <span id="light-brush-val-p">2</span></label>
+        <p class="hint">Paint light and smoke; players see it at once. Dark cells hide what's in them unless a runner has thermographic vision or ultrasound; smoke blinds those who look through it. The map's own light is under Colors &amp; settings.</p>
+      </div>
+
       <div class="tool-opts" data-for="select">
         <p class="hint">Click a marker, token or cell to inspect it in the Selected tab. Drag a marker to move it.</p>
       </div>
@@ -123,6 +138,15 @@
       </div>
       <div class="tool-opts" data-for="token">
         <p class="hint">Click a room cell to move the selected player's token there. The map reveals around it using their view radius.</p>
+      </div>
+        <h4 class="pane-h">Areas</h4>
+      <div class="col" id="gm-areas">
+        <div class="row tight">
+          <select id="area-kind" class="grow"><option value="blast">Blast</option><option value="spell">Area spell</option><option value="smoke">Smoke or gas cloud</option><option value="custom">Radius</option></select>
+          <label class="inline">m <input type="number" id="area-radius" min="1" max="100" value="15" style="width:4.2em"></label>
+        </div>
+        <div class="row tight" id="area-dv-row"><label class="inline">DV <input id="area-dv" value="16P 12P 8P" style="width:8em" title="Ground zero, Close, Near"></label><button type="button" id="area-place" class="small">Place an area</button></div>
+        <div id="area-list" class="col"></div>
       </div>
         <h4 class="pane-h">Fog</h4>
       <div class="fog-actions" id="fog-player" hidden>
@@ -177,7 +201,10 @@
       <canvas id="map"></canvas>
       <div class="legend" id="legend"></div>
       <canvas id="minimap" class="minimap"></canvas>
-      <div class="los-key" id="los-key" hidden><span class="k0">In sight</span><span class="k1">Cover I</span><span class="k2">II</span><span class="k3">III</span><span class="k4">IV</span><span class="kx" title="Out of sight, or more than 20 cells away">Out of sight</span></div>
+      <div class="map-keys">
+        <div class="los-key range-key" id="reach-key" hidden></div>
+        <div class="los-key" id="los-key" hidden><span class="k0">In sight</span><span class="k1">Cover I</span><span class="k2">II</span><span class="k3">III</span><span class="k4">IV</span><span class="kx" title="Out of sight, or more than 20 cells away">Out of sight</span></div>
+      </div>
       <div class="fp-hint" id="fp-hint" hidden>Arrows or WASD: walk and turn · Q/E: sidestep · Enter: door ahead · click a sprite to select it · 3 or Esc: back to the map</div>
       <details class="view-menu">
         <summary title="View options">View</summary>
@@ -185,6 +212,7 @@
           <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle"> Isometric view</label>
           <label class="check" title="Walk the map at eye level (3)"><input type="checkbox" id="fp-toggle"> First person</label>
           <label class="check" title="Shade what the selected token or marker (or the runner you see as) can see, and the cover there (L)"><input type="checkbox" id="los-toggle"> Line of sight</label>
+          <label class="check" title="In combat, show how far the selected runner or marker can Move and Sprint this turn"><input type="checkbox" id="reach-toggle" checked> Movement</label>
           <label class="check"><input type="checkbox" id="legend-toggle" checked> Legend</label>
           <label class="check"><input type="checkbox" id="rooms-toggle" checked> Room names</label>
           <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map. <kbd>3</kbd> walks it in first person. <kbd>L</kbd> shades the line of sight of the selected token or marker. <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
@@ -219,6 +247,14 @@
     <div class="row" id="settings-door-palette"></div>
     <h3>Rendering</h3>
     <label class="check"><input type="checkbox" id="set-grid"> Show grid lines</label>
+    <h3>Light and scale</h3>
+    <div class="row">
+      <label class="inline">The map's light <select id="set-ambient"><option value="bright">Bright</option><option value="dim">Dim</option><option value="dark">Dark</option></select></label>
+      <label class="inline">Meters per cell <input type="number" id="set-cellm" min="0.5" max="10" step="0.5" style="width:4.5em"></label>
+    </div>
+    <label class="check"><input type="checkbox" id="set-enemies"> Enemies show to a runner only while that runner can see them</label>
+    <div class="row"><label class="inline">Players see this map <select id="set-pview"><option value="choose">as they choose</option><option value="top">top-down</option><option value="iso">isometric</option><option value="fp">in first person</option></select></label></div>
+    <p class="hint">Paint brighter or darker cells and smoke with the Light tool. The scale sets range bands, movement and area templates.</p>
     <h3>Runners' sight</h3>
     <div class="row">
       <label class="check"><input type="checkbox" id="set-sight"> Reveal what runners can see as they move</label>
@@ -274,6 +310,7 @@
 <script src="{{ asset('music.js') }}"></script>
 <script src="{{ asset('layout.js') }}"></script>
 <script src="{{ asset('srui.js') }}"></script>
+<script src="{{ asset('sightcore.js') }}"></script>
 <script src="{{ asset('gridcore.js') }}"></script>
 <script src="{{ asset('fpview.js') }}"></script>
 <script src="{{ asset('editor.js') }}"></script>
