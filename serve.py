@@ -1,13 +1,19 @@
-"""ShadowGrid production server (waitress). Started by serve.sh, which sets the environment:
+"""ShadowGrid production server (gevent, or waitress without it). Started by serve.sh, which sets the environment:
 
     SHADOWGRID_HOST / SHADOWGRID_PORT    where to listen (127.0.0.1:8000 behind nginx)
     SHADOWGRID_HTTPS=1                   secure cookies (only behind HTTPS)
     SHADOWGRID_TRUST_PROXY=1             trust X-Forwarded-For from the local nginx
-    SHADOWGRID_THREADS / SHADOWGRID_CONNECTIONS   thread pool and connection limit (64 / 200)
+    SHADOWGRID_SERVER=waitress           use waitress and a thread pool even if gevent is installed
+    SHADOWGRID_CONNECTIONS               open connections at once (gevent 1000; waitress 200)
+    SHADOWGRID_THREADS                   waitress thread pool (64)
 """
-from app import init_db
-from core import run_server
-from game import catalog_blob
+import aio
+
+aio.patch()     # first: makes sockets, locks and sleeps cooperative under gevent
+
+from app import init_db  # noqa: E402
+from core import run_server  # noqa: E402
+from game import catalog_blob  # noqa: E402
 
 if __name__ == "__main__":
     init_db()

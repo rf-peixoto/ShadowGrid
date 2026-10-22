@@ -157,6 +157,40 @@ function setIso(on) { vp.setIso(on); $('iso-toggle').checked = on; try { localSt
 vp.setIso(loadIso());
 $('iso-toggle').checked = vp.iso;
 $('iso-toggle').onchange = e => setIso(e.target.checked);
+/* first-person view: the camera stands on our token */
+function loadFp() { try { return localStorage.getItem('sg.fp') === '1'; } catch { return false; } }
+function setFp(on) {
+  S.fp = on; $('fp-toggle').checked = on; $('fp-hint').hidden = !on; wrap.classList.toggle('fp', on);
+  try { localStorage.setItem('sg.fp', on ? '1' : '0'); } catch { /* ignore */ }
+  closeDetails(); invalidate();
+}
+const fpc = FPView.controller({
+  map: () => S.map, mapId: () => S.st && S.st.view.map && S.st.view.map.id, at: () => token(), storeKey: 'sg.fp.face.',
+  redraw: () => requestDraw(),
+  step: cell => {
+    const t = S.st.view.token; if (!t || S.busy) return;
+    if (!GridCore.passable(geom(S.map), S.map.data.cells, t, cell)) { bump(); return; }
+    S.ghost = { c: cell.c, r: cell.r }; requestDraw();
+    act('move', { c: cell.c, r: cell.r });
+  },
+  door: edge => {
+    const t = S.st.view.token; if (!t) return;
+    if (doorOnEdge(geom(S.map), S.map.data.cells, t.c, t.r, edge)) act('door', { edge }); else bump();
+  },
+});
+/* line of sight: what our runner can see from their token, cover shaded */
+const LOS_RADIUS = 20;
+function loadLos() { try { return localStorage.getItem('sg.los') === '1'; } catch { return false; } }
+function setLos(on) {
+  S.los = on; $('los-toggle').checked = on; $('los-key').hidden = !on;
+  try { localStorage.setItem('sg.los', on ? '1' : '0'); } catch { /* ignore */ }
+  requestDraw();
+}
+$('los-toggle').onchange = e => setLos(e.target.checked);
+S.los = loadLos(); $('los-toggle').checked = S.los; $('los-key').hidden = !S.los;
+function bump() { wrap.classList.remove('bump'); void wrap.offsetWidth; wrap.classList.add('bump'); }
+$('fp-toggle').onchange = e => setFp(e.target.checked);
+S.fp = loadFp(); $('fp-toggle').checked = S.fp; $('fp-hint').hidden = !S.fp; wrap.classList.toggle('fp', S.fp);
 
 function applyView(v) {
   S.st.view = v; S.ghost = null; S.pathCache = null;
@@ -175,7 +209,8 @@ function applyView(v) {
   S.map = { gridType: m.gridType, width: m.width, height: m.height, cellSize: m.cellSize,
     settings: { colors: m.settings.colors, showGrid: m.settings.showGrid }, data: { cells: m.cells, markers: m.markers, rooms: [] } };
   if (cellsChanged) S.explored = new Set(Object.keys(m.cells).filter(k => m.cells[k].vis !== 'dim'));
-  if (!S.fitted || S.lastMapId !== m.id) { if (S.view === 'map') { focusToken(); S.fitted = true; S.lastMapId = m.id; } }
+  // fit once the map has a size (before layout it is 0 x 0, and draw() does it instead)
+  if (!S.fitted || S.lastMapId !== m.id) { if (S.view === 'map' && wrap.clientWidth && wrap.clientHeight) { focusToken(); S.fitted = true; S.lastMapId = m.id; } }
   renderActions(); renderLegend(); renderTracker();
   if (sceneChanged) invalidate(); else requestDraw();
 }
@@ -235,6 +270,7 @@ function draw() {
   if (!S.map) return;
   if (!S.fitted || S.lastMapId !== S.st.view.map.id) { focusToken(); S.fitted = true; S.lastMapId = S.st.view.map.id; S.sceneDirty = true; }
   const v = viewModel(), G = geom(S.map), { w, h: hh } = G.mapPixelSize();
+  if (S.fp && token()) { drawFirstPerson(v, G, W, H, dpr, w, hh); return; }
   if (S.sceneDirty || Math.abs(vp.zoom - S.sceneZoom) > 0.5 || S.sceneIso !== vp.iso) {
     const q = Math.min(3, Math.max(1, Math.ceil(vp.zoom * dpr)));
     if (vp.iso) GridCore.buildIsoLayers(S.iso, S.map, v, q);
@@ -252,6 +288,10 @@ function draw() {
   else { ctx2d.setTransform(...vp.matrix(dpr)); const q = scene._q || 1; ctx2d.drawImage(scene, 0, 0, scene.width / q, scene.height / q); }
   ctx2d.setTransform(...vp.matrix(dpr));
   // ---- world-space overlays (lie on the floor)
+  if (S.los && token()) {
+    const t = token(), from = S.drag && S.drag.token && S.hover ? S.hover : t;
+    GridCore.drawSight(ctx2d, S.map, GridCore.sightField(S.map, from, LOS_RADIUS, S.cellsSig + '|' + S.explored.size), vp.zoom);
+  }
   const target = S.drag && S.drag.token ? S.hover : (S.hover && !S.busy ? S.hover : null);
   const path = target ? pathTo(target) : null;
   if (path && path.length) {
@@ -281,6 +321,33 @@ function draw() {
   const hl = hoverLabel();
   if (hl) { const c = G.cellCenter(hl.c, hl.r), p = vp.toScreen(c.x, c.y); GridCore.drawLabel(ctx2d, p.x, p.y + G.cs * vp.zoom * 0.35, hl.text, G.cs * vp.zoom); }
   vp.drawMinimap(mini);
+}
+function fpSprites(v, G) {
+  const out = [], cells = S.map.data.cells;
+  for (const m of S.map.data.markers) {
+    if (m.hidden || GridCore.visibility(v, key(m.c, m.r), cells[key(m.c, m.r)]) !== 'full') continue;
+    const p = G.cellCenter(m.c, m.r);
+    out.push({ kind: 'marker', x: p.x, y: p.y, type: m.type, color: m.color, label: markerName(m), cm: m.cm, statuses: m.statuses, at: { c: m.c, r: m.r } });
+  }
+  for (const t of v.tokens) {
+    if (t.me || GridCore.visibility(v, key(t.c, t.r), cells[key(t.c, t.r)]) !== 'full') continue;
+    const p = G.cellCenter(t.c, t.r);
+    out.push({ kind: 'token', x: p.x, y: p.y, color: t.color, name: t.name, label: t.name, cm: t.cm, statuses: t.statuses, at: { c: t.c, r: t.r } });
+  }
+  return out;
+}
+function drawFirstPerson(v, G, W, H, dpr, w, hh) {
+  if (S.sceneDirty) {      // the minimap still shows the whole map
+    const { MW, MH, scale } = vp.minimapSize();
+    if (mini.width !== MW || mini.height !== MH) { mini.width = MW; mini.height = MH; }
+    mctx.setTransform(scale, 0, 0, scale, 0, 0); mctx.clearRect(0, 0, w, hh); renderScene(mctx, S.map, v, { pixel: false, grid: false, borders: false, forExport: true });
+    S.sceneDirty = false;
+  }
+  const cam = fpc.camera(performance.now());
+  FPView.render(ctx2d, W, H, dpr, { map: S.map, view: v, cam, sprites: fpSprites(v, G) });
+  const t = token(), c = G.cellCenter(t.c, t.r);
+  vp.centerOn(c.x, c.y); vp.drawMinimap(mini);
+  if (cam.animating) requestDraw();
 }
 /* what is under the pointer: the drawn icon in the isometric view, else the cell's contents */
 function thingsAt(sx, sy, cell) {
@@ -379,6 +446,7 @@ function moveTo(cell) {
 }
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', ev => {
+  if (S.fp && token()) { S.drag = { fp: true, sx: ev.clientX, sy: ev.clientY, right: ev.button === 2 }; return; }
   canvas.setPointerCapture(ev.pointerId);
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
   const pan = ev.button === 1 || ev.button === 2 || S.spaceDown;
@@ -390,6 +458,7 @@ canvas.addEventListener('pointerdown', ev => {
   canvas.classList.toggle('panning', pan);
 });
 canvas.addEventListener('pointermove', ev => {
+  if (S.fp && token()) return;
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
   S.hover = S.map ? geom(S.map).pointToCell(pt.x, pt.y) : null;
   S.hoverAt = S.drag || document.getElementById('map-details') ? null : thingsAt(sx, sy, S.hover);
@@ -401,6 +470,13 @@ canvas.addEventListener('pointermove', ev => {
   requestDraw();
 });
 canvas.addEventListener('pointerup', ev => {
+  if (S.fp && token() && S.drag && S.drag.fp) {
+    const d = S.drag; S.drag = null;
+    const { sx, sy } = vp.canvasPoint(ev), hit = FPView.pick(sx, sy);
+    if (hit) { const at = thingsAt(0, 0, hit.at); showDetails(sx, sy, at); return; }
+    if (!d.right) { closeDetails(); fpc.tap(sx, sy, wrap.clientWidth, wrap.clientHeight); }
+    return;
+  }
   const d = S.drag; S.drag = null; canvas.classList.remove('panning');
   if (d && S.map) {
     const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy), cell = geom(S.map).pointToCell(pt.x, pt.y);
@@ -416,11 +492,14 @@ canvas.addEventListener('pointerup', ev => {
   requestDraw();
 });
 canvas.addEventListener('pointerleave', () => { S.hover = null; S.hoverAt = null; requestDraw(); });
-canvas.addEventListener('wheel', ev => { ev.preventDefault(); closeDetails(); const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
+canvas.addEventListener('wheel', ev => { ev.preventDefault(); if (S.fp) return; closeDetails(); const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
 const ARROWS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
 window.addEventListener('keydown', ev => {
   if (S.view !== 'map' || ev.target.matches('input, textarea, select') || document.querySelector('dialog[open]')) return;
   if (ev.key === 'Escape') closeDetails();
+  if ((ev.key.toLowerCase() === 'v' || ev.key === '3') && !ev.ctrlKey && !ev.metaKey) { setFp(!S.fp); return; }
+  if (ev.key.toLowerCase() === 'l' && !ev.ctrlKey && !ev.metaKey && !S.fp) { setLos(!S.los); return; }
+  if (S.fp && token() && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { if (fpc.key(ev)) return; }
   if (ev.code === 'Space') { S.spaceDown = true; canvas.classList.add('panning'); ev.preventDefault(); }
   if (ev.key.toLowerCase() === 'f' && S.map) { vp.fit(); invalidate(); }
   if (ev.key.toLowerCase() === 'c' && S.map) { focusToken(); invalidate(); }

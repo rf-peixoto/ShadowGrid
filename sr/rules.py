@@ -16,7 +16,9 @@ Economy:
   available) and items sell back at the game's sell percentage.
 - The GM can do anything and never pays.
 """
+import contextvars
 import copy
+import functools
 import math
 import re
 import secrets
@@ -339,7 +341,58 @@ def skill_attr(skill):
 
 
 # --------------------------------------------------------------------------- derived stats
+# ---- derive memo: a read-only request asks for the same character's derived values several times
+# (the sheet, the player card, the pools ...), often from separate loads of the same stored JSON.
+# Inside derive_memo(), derive() returns the first result for the same object or the same stored JSON.
+# Only for code that does not change a character between those calls (read-only views).
+_MEMO = contextvars.ContextVar("sg_derive_memo", default=None)
+
+
+class derive_memo:
+    def __enter__(self):
+        self.tok = _MEMO.set({"id": {}, "src": {}, "by_src": {}})
+        return self
+
+    def __exit__(self, *exc):
+        _MEMO.reset(self.tok)
+        return False
+
+
+def memo_view(fn):
+    """Decorator for read-only views: derive() results are shared for the length of the call."""
+    @functools.wraps(fn)
+    def inner(*a, **kw):
+        with derive_memo():
+            return fn(*a, **kw)
+    return inner
+
+
+def remember_source(c, src):
+    """Record which stored JSON a loaded character came from (core.load_char calls this)."""
+    m = _MEMO.get()
+    if m is not None and isinstance(src, str):
+        m["src"][id(c)] = (c, src)
+
+
 def derive(c):
+    m = _MEMO.get()
+    if m is None:
+        return _derive(c)
+    hit = m["id"].get(id(c))
+    if hit is not None and hit[0] is c:
+        return hit[1]
+    s = m["src"].get(id(c))
+    src = s[1] if s is not None and s[0] is c else None
+    d = m["by_src"].get(src) if src is not None else None
+    if d is None:
+        d = _derive(c)
+        if src is not None:
+            m["by_src"][src] = d
+    m["id"][id(c)] = (c, d)
+    return d
+
+
+def _derive(c):
     """Every derived value of a character."""
     qs = qualities_of(c)
     inf = infected_info(c)

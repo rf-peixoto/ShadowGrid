@@ -9,6 +9,8 @@ import time
 from flask import Response, abort, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import aio
+
 from core import (APPROVED, DRAFT, GM_COLOR, INVITE_DAYS, PLAYER_COLORS, SUBMITTED, add_roll, app, body, gzip_bytes,
                   campaign_version, clamp_int, display_name, err, fetch_player_row, game_settings, get_db, ledger_add,
                   ledger_rows, load_char, new_id, now, player_required, roll_rows, row_to_player, save_char)
@@ -199,7 +201,7 @@ def sheet_payload(row, gamemaster):
         # the GM tracks Overwatch in secret; players only know what Check Overwatch Score (or Baby Monitor) told them
         known = (c.get("matrix_state") or {}).get("os_known")
         c["matrix_state"] = {"os": known, "os_known": known}
-        d["matrix"]["os"] = known
+        d = dict(d, matrix=dict(d["matrix"], os=known))      # a copy: derive() results may be shared
     approved = row["approved"] == APPROVED
     allies = [{"id": r["id"], "name": display_name(r), "color": r["color"]} for r in get_db().execute(
         "SELECT * FROM players WHERE campaign_id=? AND id<>? ORDER BY created_at", (row["campaign_id"], row["id"])).fetchall()]
@@ -325,6 +327,7 @@ def delete_campaign(cid):
 
 @app.route("/api/games/<cid>")
 @gamemaster_required
+@R.memo_view
 def game_detail(cid):
     g = game_or_404(cid)
     db = get_db()
@@ -397,6 +400,9 @@ def accept_invite(token):
     if not verify_pow(b.get("challenge"), b.get("counter"), LOGIN_POW_BITS):
         return err("Browser check failed. Reload and try again.")
     db = get_db()
+    # hash before the write lock: under gevent the hash runs on a worker thread while other requests go on
+    pw_in = str(b.get("password") or "")
+    pw_hash = aio.offload(generate_password_hash, pw_in) if len(pw_in) >= 8 else None
     db.execute("BEGIN IMMEDIATE")
     try:
         inv, problem = invite_row(token)
@@ -424,7 +430,7 @@ def accept_invite(token):
         c = R.new_character()
         db.execute("INSERT INTO players (id,campaign_id,username,pw_hash,pw_rev,color,radius,current_map_id,state,approved,character,created_at,updated_at,last_seen)"
                    " VALUES (?,?,?,?,0,?,1,NULL,?,0,?,?,?,?)",
-                   (pid, cid, username, generate_password_hash(password), PLAYER_COLORS[count % len(PLAYER_COLORS)],
+                   (pid, cid, username, pw_hash, PLAYER_COLORS[count % len(PLAYER_COLORS)],
                     json.dumps({"maps": {}}), json.dumps(c), t, t, t))
         db.execute("UPDATE invites SET used_by=?, used_at=? WHERE token=?", (pid, t, token))
         db.commit()
@@ -445,7 +451,8 @@ def accept_invite(token):
 def gamemaster_reset_password(pid):
     fetch_player_row(pid)
     pw = "-".join(secrets.token_urlsafe(4) for _ in range(3))
-    get_db().execute("UPDATE players SET pw_hash=?, pw_rev=pw_rev+1 WHERE id=?", (generate_password_hash(pw), pid))
+    h = aio.offload(generate_password_hash, pw)
+    get_db().execute("UPDATE players SET pw_hash=?, pw_rev=pw_rev+1 WHERE id=?", (h, pid))
     get_db().commit()
     return jsonify({"password": pw})
 
@@ -486,6 +493,7 @@ def review_sheet(pid):
 # ====================================================================== gamemaster: sheets, grants, edge
 @app.route("/api/players/<pid>/sheet")
 @gamemaster_required
+@R.memo_view
 def gamemaster_sheet(pid):
     return jsonify(sheet_payload(fetch_player_row(pid), True))
 
@@ -985,6 +993,7 @@ def my_runs(me):
 @app.route("/api/me/state")
 @player_required
 @rate_limited("player_state", 150)
+@R.memo_view
 def me_state(me):
     version = campaign_version(me["campaign_id"], me["current_map_id"])
     if request.args.get("since") == version:
@@ -1006,6 +1015,7 @@ def me_state(me):
 
 @app.route("/api/me/sheet")
 @player_required
+@R.memo_view
 def me_sheet(me):
     return jsonify(sheet_payload(me, False))
 
@@ -1119,12 +1129,13 @@ def me_runs(me):
 @rate_limited("password_change", 10)
 def me_password(me):
     b = body()
-    if not check_password_hash(me["pw_hash"], str(b.get("current") or "")):
+    if not aio.offload(check_password_hash, me["pw_hash"], str(b.get("current") or "")):
         return err("Your current password is wrong.")
     new = str(b.get("new") or "")
     if len(new) < 8:
         return err("Use a password of at least 8 characters.")
-    get_db().execute("UPDATE players SET pw_hash=?, pw_rev=pw_rev+1 WHERE id=?", (generate_password_hash(new), me["id"]))
+    h = aio.offload(generate_password_hash, new)
+    get_db().execute("UPDATE players SET pw_hash=?, pw_rev=pw_rev+1 WHERE id=?", (h, me["id"]))
     get_db().commit()
     session["pwv"] = me["pw_rev"] + 1
     return jsonify({"ok": True})

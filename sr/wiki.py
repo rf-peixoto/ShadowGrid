@@ -38,7 +38,7 @@ An attack is an opposed test:
 - Elemental damage adds a status: electricity Zapped, fire Burning, cold Chilled, chemical Corrosive.
 - Ranges: Close 0-3 m, Near 4-50 m, Medium 51-250 m, Far 251-500 m, Extreme 500+ m. A weapon without an Attack Rating at a range can't be used there.
 - Defending (interrupts, out of turn): Block (Minor, melee: +Close Combat), Dodge (Minor: +Athletics), Hit the Dirt (Minor, ranged: +2, then Prone and −2 on your next turn), Full Defense (Major: +Willpower on every Defense test this round).
-- Cover I-IV adds its level to the Defense Rating and to the Defense test. ShadowGrid works out line of sight and cover from the map's walls and closed doors.
+- Cover I-IV adds its level to the Defense Rating and to the Defense test. ShadowGrid works out line of sight and cover from the map's walls and closed doors. Press L on the map to see it: the Line of sight overlay marks each cell with the cover a target there would have.
 - Called shot (Minor, with the attack): −4 dice, +2 DV. Shank (melee, 1 Edge): only −2 dice. Vitals (5 Edge): +3 DV. Disarm (5 Edge): the target drops their weapon.
 - Multiple Attacks (Minor): split the pool evenly among the targets; Anticipation (4 Edge) rolls the full pool for each.
 - Statuses change the numbers: Zapped −1, Fatigued −2 per level, Confused −its value, Chilled −1 (and −4 Initiative), Immobilized −3 dice and AR (no Reaction on defense), Prone +2 defense against Medium+ ranged attacks and −2 against the rest, Wet −6 to resist cold and electricity.

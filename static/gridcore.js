@@ -629,5 +629,133 @@ function drawIsoLayers(ctx, L, vp, dpr, cs) {
   ctx.setTransform(...M); ctx.drawImage(L.floor, 0, 0, wq, hq);
 }
 
-return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT };
+// ---------------------------------------------------------------- line of sight and cover (same rules as the server)
+/* Sight lines run in a unit space (square: 1 per cell; flat-top hex: size 1), from 5 points around the
+   viewer's cell to 5 around the target's: 25 rays. Walls (cells without a floor) and closed doors block a ray.
+   Cover follows the share of blocked rays: up to 1/4 = I, 1/2 = II, 3/4 = III, more = IV; all = no sight. */
+const S3 = Math.sqrt(3);
+function unitCenter(hex, c, r) { return hex ? [c * 1.5, S3 * (r + 0.5 * (c & 1))] : [c + 0.5, r + 0.5]; }
+function unitCell(hex, x, y) {
+  if (!hex) return [Math.floor(x), Math.floor(y)];
+  const q = (2 / 3) * x, rr = (-1 / 3) * x + (S3 / 3) * y;
+  const cx = q, cz = rr, cy = -cx - cz;
+  let rx = Math.round(cx), ry = Math.round(cy), rz = Math.round(cz);
+  const dx = Math.abs(rx - cx), dy = Math.abs(ry - cy), dz = Math.abs(rz - cz);
+  if (dx > dy && dx > dz) rx = -ry - rz; else if (dy > dz) ry = -rx - rz; else rz = -rx - ry;
+  return [rx, rz + (rx - (rx & 1)) / 2];
+}
+function sightSamples(hex, c, r, spread) {
+  const [x, y] = unitCenter(hex, c, r), s = spread * 0.5;
+  return [[x, y], [x - s, y - s], [x + s, y - s], [x - s, y + s], [x + s, y + s]];
+}
+function sightWorld(map) {
+  const G = geom(map), cells = map.data.cells, hex = G.hex, MW = map.width, MH = map.height;
+  // flat lookups: is a cell a room, and does it (or a neighbour) carry a door
+  const rooms = new Uint8Array(MW * MH), doors = new Uint8Array(MW * MH);
+  for (const k in cells) {
+    const cell = cells[k], i = k.indexOf(','), c = +k.slice(0, i), r = +k.slice(i + 1);
+    if (c < 0 || r < 0 || c >= MW || r >= MH) continue;
+    if (cell.fill) rooms[r * MW + c] = 1;
+    if (cell.doors && Object.keys(cell.doors).length) {
+      doors[r * MW + c] = 1;
+      for (let e = 0; e < G.edgeCount; e++) { const n = G.neighbor(c, r, e); if (G.inBounds(n.c, n.r)) doors[n.r * MW + n.c] = 1; }
+    }
+  }
+  const room = (c, r) => c >= 0 && r >= 0 && c < MW && r < MH && rooms[r * MW + c] === 1;
+  const edgeBetween = (a, b) => { for (let e = 0; e < G.edgeCount; e++) { const n = G.neighbor(a[0], a[1], e); if (n.c === b[0] && n.r === b[1]) return e; } return -1; };
+  const closed = (a, b) => {
+    if (!(a[0] >= 0 && a[1] >= 0 && a[0] < MW && a[1] < MH && doors[a[1] * MW + a[0]])) return false;
+    const e = edgeBetween(a, b); if (e < 0) return false;
+    const d = doorOnEdge(G, cells, a[0], a[1], e); return !!(d && !d.open);
+  };
+  const adjacent = (a, b) => {
+    const dc = b[0] - a[0], dr = b[1] - a[1];
+    if (!hex) return Math.abs(dc) + Math.abs(dr) === 1;
+    return edgeBetween(a, b) >= 0;
+  };
+  function stepOk(a, b) {
+    if (!room(b[0], b[1])) return false;
+    if (!adjacent(a, b)) {
+      if (!hex && Math.abs(a[0] - b[0]) === 1 && Math.abs(a[1] - b[1]) === 1) {
+        for (const mid of [[b[0], a[1]], [a[0], b[1]]]) if (room(mid[0], mid[1]) && !closed(a, mid) && !closed(mid, b)) return true;
+        return false;
+      }
+      return true;
+    }
+    return !closed(a, b);
+  }
+  function rayClear(p, q, start, end) {
+    const dist = Math.hypot(q[0] - p[0], q[1] - p[1]), steps = Math.max(1, Math.floor(dist / 0.08));
+    let cur = start;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const nxt = i === steps ? end : unitCell(hex, p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t);
+      if (nxt[0] !== cur[0] || nxt[1] !== cur[1]) { if (!stepOk(cur, nxt)) return false; cur = nxt; }
+    }
+    return true;
+  }
+  return { G, hex, room, rayClear };
+}
+function coverFrom(W, a, b) {
+  if (a[0] === b[0] && a[1] === b[1]) return { los: true, cover: 0, clear: 1, rays: 1 };
+  const src = sightSamples(W.hex, a[0], a[1], 0.6), dst = sightSamples(W.hex, b[0], b[1], 0.7);
+  let total = 0, clear = 0;
+  for (const p of src) for (const q of dst) { total++; if (W.rayClear(p, q, a, b)) clear++; }
+  if (!clear) return { los: false, cover: 0, clear: 0, rays: total };
+  const blocked = 1 - clear / total;
+  const cover = blocked === 0 ? 0 : blocked <= 0.25 ? 1 : blocked <= 0.5 ? 2 : blocked <= 0.75 ? 3 : 4;
+  return { los: true, cover, clear, rays: total };
+}
+/* sight and cover between two cells {c, r} */
+function lineOfSight(map, a, b) { return coverFrom(sightWorld(map), [a.c, a.r], [b.c, b.r]); }
+/* everything a viewer standing on `from` can see within `radius` steps: Map key -> cover (0-4), plus the
+   room cells in range that are out of sight. Cached on the caller's `sig` (change it when walls or doors change). */
+const sightCache = { sig: null, out: null };
+function sightField(map, from, radius, sig) {
+  const ck = sig === undefined ? null : `${sig}|${map.id}|${from.c},${from.r}|${radius}`;
+  if (ck && sightCache.sig === ck) return sightCache.out;
+  const W = sightWorld(map), G = W.G, a = [from.c, from.r], seen = new Map(), hidden = new Set(), far = new Set();
+  for (const k in map.data.cells) {
+    const i = k.indexOf(','), c = +k.slice(0, i), r = +k.slice(i + 1);
+    if (!W.room(c, r)) continue;
+    if (G.cellDistance(from, { c, r }) > radius) { far.add(k); continue; }
+    const res = coverFrom(W, a, [c, r]);
+    if (res.los) seen.set(k, res.cover); else hidden.add(k);
+  }
+  const out = { from: { c: from.c, r: from.r }, radius, seen, hidden, far };
+  if (ck) { sightCache.sig = ck; sightCache.out = out; }
+  return out;
+}
+const COVER_NAMES = ['', 'I', 'II', 'III', 'IV'];
+/* draw a sight field in map space (the caller sets the viewport transform) */
+function drawSight(ctx, map, field, zoom) {
+  const G = geom(map), col = map.settings.colors;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.58)';
+  for (const k of field.hidden) { const [c, r] = k.split(',').map(Number); tracePoly(ctx, G.cellCorners(c, r), false); ctx.fill(); }
+  ctx.fillStyle = 'rgba(0,0,0,.42)';        // beyond the range we check: not known to be in sight
+  for (const k of field.far || []) { const [c, r] = k.split(',').map(Number); tracePoly(ctx, G.cellCorners(c, r), false); ctx.fill(); }
+  const tint = ['', 'rgba(255,214,90,.16)', 'rgba(255,176,46,.28)', 'rgba(255,120,40,.40)', 'rgba(255,60,60,.52)'];
+  for (const [k, cv] of field.seen) {
+    if (!cv) continue;
+    const [c, r] = k.split(',').map(Number); tracePoly(ctx, G.cellCorners(c, r), false);
+    ctx.fillStyle = tint[cv]; ctx.fill();
+  }
+  if (G.cs * zoom >= 20) {
+    ctx.font = `700 ${Math.round(G.cs * 0.34)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const [k, cv] of field.seen) {
+      if (!cv) continue;
+      const [c, r] = k.split(',').map(Number), p = G.cellCenter(c, r);
+      ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(COVER_NAMES[cv], p.x + 1 / zoom, p.y + 1 / zoom);
+      ctx.fillStyle = '#ffe2a8'; ctx.fillText(COVER_NAMES[cv], p.x, p.y);
+    }
+  }
+  // the viewer
+  const p = G.cellCenter(field.from.c, field.from.r);
+  ctx.strokeStyle = col.highlight; ctx.lineWidth = 2 / zoom; ctx.setLineDash([4 / zoom, 3 / zoom]);
+  ctx.beginPath(); ctx.arc(p.x, p.y, G.cs * 0.62, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  ctx.restore();
+}
+
+return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT, lineOfSight, sightField, drawSight, COVER_NAMES };
 })();

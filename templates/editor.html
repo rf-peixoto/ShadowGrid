@@ -177,16 +177,20 @@
       <canvas id="map"></canvas>
       <div class="legend" id="legend"></div>
       <canvas id="minimap" class="minimap"></canvas>
+      <div class="los-key" id="los-key" hidden><span class="k0">In sight</span><span class="k1">Cover I</span><span class="k2">II</span><span class="k3">III</span><span class="k4">IV</span><span class="kx" title="Out of sight, or more than 20 cells away">Out of sight</span></div>
+      <div class="fp-hint" id="fp-hint" hidden>Arrows or WASD: walk and turn · Q/E: sidestep · Enter: door ahead · click a sprite to select it · 3 or Esc: back to the map</div>
       <details class="view-menu">
         <summary title="View options">View</summary>
         <div class="view-menu-pop">
           <label class="check" title="SNES-style isometric view (I)"><input type="checkbox" id="iso-toggle"> Isometric view</label>
+          <label class="check" title="Walk the map at eye level (3)"><input type="checkbox" id="fp-toggle"> First person</label>
+          <label class="check" title="Shade what the selected token or marker (or the runner you see as) can see, and the cover there (L)"><input type="checkbox" id="los-toggle"> Line of sight</label>
           <label class="check"><input type="checkbox" id="legend-toggle" checked> Legend</label>
           <label class="check"><input type="checkbox" id="rooms-toggle" checked> Room names</label>
-          <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map. <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
+          <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map. <kbd>3</kbd> walks it in first person. <kbd>L</kbd> shades the line of sight of the selected token or marker. <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
         </div>
       </details>
-      <div class="statusbar" id="statusbar"><span id="st-cell">–</span><span id="st-room"></span><span id="st-marker"></span><span id="st-door"></span></div>
+      <div class="statusbar" id="statusbar"><span id="st-cell">–</span><span id="st-room"></span><span id="st-marker"></span><span id="st-door"></span><span id="st-los"></span></div>
     </div>
     <section class="dock" id="dice-panel" data-mode="play" aria-label="Dice and table log">
       <div class="dock-head"><span class="dock-title">Dice &amp; table log</span><span class="dock-last" id="dock-last"></span><button type="button" class="dock-toggle ghost" aria-label="Toggle the dice panel">▾</button></div>
@@ -215,6 +219,12 @@
     <div class="row" id="settings-door-palette"></div>
     <h3>Rendering</h3>
     <label class="check"><input type="checkbox" id="set-grid"> Show grid lines</label>
+    <h3>Runners' sight</h3>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="set-sight"> Reveal what runners can see as they move</label>
+      <label class="inline">up to <input type="number" id="set-sight-r" min="1" max="20" style="width:4.5em"> cells</label>
+    </div>
+    <p class="hint">Walls and closed doors block sight; secret cells stay hidden. Their normal reveal radius still applies.</p>
     <h3>Map</h3>
     <div class="row">
       <label>Game <select id="set-campaign"><option value="">No game</option></select></label>
@@ -265,6 +275,7 @@
 <script src="{{ asset('layout.js') }}"></script>
 <script src="{{ asset('srui.js') }}"></script>
 <script src="{{ asset('gridcore.js') }}"></script>
+<script src="{{ asset('fpview.js') }}"></script>
 <script src="{{ asset('editor.js') }}"></script>
 </body>
 </html>

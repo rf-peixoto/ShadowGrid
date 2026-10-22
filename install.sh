@@ -191,6 +191,9 @@ fi
 say "Installing dependencies"
 "$PY" -m pip install --quiet --disable-pip-version-check --upgrade pip
 "$PY" -m pip install --quiet --disable-pip-version-check -r "$ROOT/requirements.txt"
+# gevent serves every open page from one event loop; optional (waitress takes over without it)
+"$PY" -m pip install --quiet --disable-pip-version-check -r "$ROOT/requirements-fast.txt" \
+    || echo "  gevent could not be installed here; ShadowGrid will use waitress (fine for one table)."
 ok "Dependencies installed in .venv"
 
 # music needs ffmpeg with the Opus encoder: the imageio-ffmpeg package ships one for most systems

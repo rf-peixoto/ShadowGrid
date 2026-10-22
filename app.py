@@ -5,6 +5,10 @@ Play on your home network:    ./local.sh     (same as python app.py, reachable f
 Serve on the internet:        ./serve.sh
 Set the gamemaster password:  python app.py set-password
 """
+if __name__ == "__main__":
+    import aio
+    aio.patch()     # first: makes sockets, locks and sleeps cooperative under gevent
+
 import getpass
 import os
 import re
@@ -14,6 +18,8 @@ import time
 
 from flask import Response, jsonify, make_response, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+
+import aio
 
 import backup  # noqa: F401  (registers routes)
 import fight  # noqa: F401  (registers routes)
@@ -100,7 +106,7 @@ def login_post():
     db = get_db()
     nxt = b.get("next") if isinstance(b.get("next"), str) and re.fullmatch(r"/(?![/\\])[A-Za-z0-9_\-./#?=&]*", b.get("next")) else None
     if username.lower() == "gamemaster":
-        if not check_password_hash(kv_get(db, "gamemaster_password"), pw):
+        if not aio.offload(check_password_hash, kv_get(db, "gamemaster_password"), pw):
             time.sleep(0.5)
             gate_fail()
             return err("Wrong username or password.", 401)
@@ -111,7 +117,7 @@ def login_post():
         session["gamemaster"] = True
         return jsonify({"ok": True, "next": nxt if nxt and not nxt.startswith("/play") else "/"})
     row = db.execute("SELECT * FROM players WHERE username=?", (username,)).fetchone()
-    if not row or not check_password_hash(row["pw_hash"], pw):
+    if not row or not aio.offload(check_password_hash, row["pw_hash"], pw):
         time.sleep(0.5)
         gate_fail()
         return err("Wrong username or password.", 401)

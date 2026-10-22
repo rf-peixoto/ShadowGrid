@@ -9,6 +9,8 @@ import secrets
 from flask import jsonify, request, send_file, session
 from PIL import Image, UnidentifiedImageError
 
+import aio
+
 from core import (UPLOAD_DIR, app, body, current_player_row, err, get_db, new_id, now, player_required)
 from security import gamemaster_required, rate_limited
 
@@ -86,7 +88,7 @@ def upload_image(cid):
         return err("Choose an image.")
     cleanup_orphans()
     try:
-        name = store_image(f.filename, f.read(MAX_UPLOAD + 1))
+        name = aio.offload(store_image, f.filename, f.read(MAX_UPLOAD + 1))
     except ValueError as e:
         return err(str(e))
     return jsonify({"image": name}), 201

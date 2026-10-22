@@ -13,6 +13,7 @@ from functools import wraps
 from flask import Flask, abort, g, jsonify, redirect, request, session, url_for
 from werkzeug.security import generate_password_hash
 
+import aio
 from security import apply_security_headers, csrf_ok
 from sr import rules as R
 
@@ -54,10 +55,18 @@ app.after_request(apply_security_headers)
 
 # ====================================================================== the web server
 def run_server(default_port):
-    """Serve the app with waitress (keep-alive, a thread pool; one thread per open live-update stream).
-    Falls back to Flask's development server only if waitress is missing."""
+    """Serve the app: gevent's WSGI server when aio.patch() ran (one event loop; an open live-update stream
+    is a greenlet), else waitress (keep-alive, a thread pool, one thread per open stream). Falls back to
+    Flask's development server only if neither is installed."""
     host = os.environ.get("SHADOWGRID_HOST", "127.0.0.1")
     port = int(os.environ.get("SHADOWGRID_PORT", str(default_port)))
+    if aio.MODE == "gevent":
+        from gevent.pool import Pool
+        from gevent.pywsgi import WSGIServer
+        conns = int(os.environ.get("SHADOWGRID_CONNECTIONS", "1000"))
+        print(f"ShadowGrid on http://{host}:{port} (gevent, up to {conns} connections)", flush=True)
+        WSGIServer((host, port), app, spawn=Pool(conns), log=None).serve_forever()
+        return
     try:
         from waitress import serve
     except ImportError:
@@ -101,6 +110,33 @@ def gzip_bytes(data, level=6):
     return gzip.compress(data, compresslevel=level, mtime=0)
 
 
+# static JS and CSS are minified once, in memory, the first time they are served (no build step; the files
+# on disk stay readable). Needs rjsmin/rcssmin (requirements-fast.txt); without them files go out as they are.
+try:
+    import rcssmin
+    import rjsmin
+except ImportError:
+    rjsmin = rcssmin = None
+MINIFY = rjsmin is not None and os.environ.get("SHADOWGRID_MINIFY", "1") != "0"
+_MIN_STATIC = {}     # (path, etag) -> minified bytes
+
+
+def _minify_static(resp, path):
+    kind = "js" if resp.mimetype in ("application/javascript", "text/javascript") else "css" if resp.mimetype == "text/css" else None
+    if not kind or path.endswith(".min.js") or path.endswith(".min.css"):
+        return
+    key = (path, resp.headers.get("ETag"))
+    body = _MIN_STATIC.get(key)
+    if body is None:
+        resp.direct_passthrough = False
+        src = resp.get_data().decode("utf-8")
+        body = (rjsmin.jsmin(src) if kind == "js" else rcssmin.cssmin(src)).encode("utf-8")
+        if len(_MIN_STATIC) < 200:
+            _MIN_STATIC[key] = body
+    resp.direct_passthrough = False
+    resp.set_data(body)
+
+
 @app.after_request
 def _cache_and_compress(resp):
     path = request.path
@@ -109,11 +145,13 @@ def _cache_and_compress(resp):
             resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         elif path.startswith("/static/fonts/"):
             resp.headers["Cache-Control"] = "public, max-age=604800"
+    static = resp.direct_passthrough
+    if MINIFY and static and resp.status_code == 200 and path.startswith("/static/"):
+        _minify_static(resp, path)
     if (resp.status_code != 200 or resp.mimetype not in GZIP_TYPES or resp.is_streamed and not resp.direct_passthrough
             or "Content-Encoding" in resp.headers or "gzip" not in (request.headers.get("Accept-Encoding") or "").lower()
             or request.method == "HEAD"):
         return resp
-    static = resp.direct_passthrough
     key = (path, resp.headers.get("ETag")) if static else None
     if key and key in _GZ_STATIC:
         body = _GZ_STATIC[key]
@@ -147,6 +185,8 @@ DEFAULT_SETTINGS = {
     },
     "doorPalette": ["#2de2e6", "#ff2f7d", "#6dff9c", "#ffb02e", "#b98cff", "#ffffff"],
     "legendVisible": True, "showGrid": True, "showRoomLabels": True,
+    # reveal what runners can see (line of sight, walls and closed doors block it) as they move
+    "sightReveal": False, "sightRadius": 8,
 }
 PLAYER_COLORS = ["#ff2f7d", "#2de2e6", "#6dff9c", "#ffb02e", "#b98cff", "#ff6b3d", "#3dffd0", "#ffffff"]
 GM_COLOR = "#ffd23f"
@@ -347,8 +387,10 @@ def load_char(row):
     try:
         c = json.loads(row["character"])
     except (TypeError, ValueError):
-        c = R.new_character()
-    return R.normalize(c)
+        return R.normalize(R.new_character())
+    c = R.normalize(c)
+    R.remember_source(c, row["character"])
+    return c
 
 
 def display_name(row, c=None):
@@ -473,7 +515,8 @@ class Bus:
 
 
 BUS = Bus()
-MAX_STREAMS = int(os.environ.get("SHADOWGRID_MAX_STREAMS", "150"))
+# open live-update streams: each holds a waitress thread, but only a greenlet under gevent
+MAX_STREAMS = int(os.environ.get("SHADOWGRID_MAX_STREAMS", "900" if aio.MODE == "gevent" else "150"))
 
 
 @app.after_request

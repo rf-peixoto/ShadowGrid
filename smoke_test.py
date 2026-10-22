@@ -1112,6 +1112,53 @@ r = gm.delete(f"/api/music/{t2}", headers=H)
 check(r.status_code == 200 and j(r)["playing"] is None and not os.path.exists(os.path.join(MU.MUSIC_DIR, f"{t2}.webm")), "deleting the playing track stops it and removes its files")
 gm.delete(f"/api/campaigns/{g2}", headers=H)
 
+# ---------------------------------------------------------------- sight, derive memo, minified assets, server mode
+print("\n== sight and speed")
+import geometry as GEO  # noqa: E402
+sc = {f"{c},{r}": {"fill": "#123"} for c in range(0, 20) for r in range(0, 8) if c != 10 or r == 4}
+sc["9,4"]["doors"] = {"1": {"color": "#fff", "open": False}}
+sc["15,1"]["secret"] = True
+gsq = {"gridType": "square", "width": 20, "height": 8}
+vis = GEO.visible_cells(gsq, sc, (4, 4), 8)
+check("8,4" in vis and "11,4" not in vis, "a closed door blocks sight")
+sc["9,4"]["doors"]["1"]["open"] = True
+vis = GEO.visible_cells(gsq, sc, (4, 4), 8)
+check("11,4" in vis and "12,4" in vis and "12,0" not in vis, "an open door lets sight through, the wall beside it doesn't")
+check(all(GEO.cell_distance("square", (4, 4), tuple(map(int, k.split(",")))) <= 8 for k in vis), "sight stops at its radius")
+vis = GEO.visible_cells({"gridType": "square", "width": 20, "height": 8}, sc, (14, 1), 6)
+check("15,1" not in vis, "secret cells are never revealed by sight")
+smap = j(gm.post("/api/maps", json={"name": "Sight test", "campaignId": cid, "width": 20, "height": 8, "data": {"cells": sc, "markers": [], "rooms": []}}, headers=H))["id"]
+gm.post(f"/api/players/{pid}/place", json={"mapId": smap, "c": 2, "r": 4}, headers=H)
+def explored_of(mid_):
+    ps = j(gm.get(f"/api/maps/{mid_}/context"))["players"]
+    return set(next(x for x in ps if x["id"] == pid)["state"]["maps"][mid_]["explored"])
+check("8,4" not in explored_of(smap), "without the setting, only the reveal radius is explored")
+m = j(gm.get(f"/api/maps/{smap}"))
+r = gm.put(f"/api/maps/{smap}", json={"settings": dict(m["settings"], sightReveal=True, sightRadius=99)}, headers=H)
+check(j(gm.get(f"/api/maps/{smap}"))["settings"]["sightRadius"] == 20, "the sight radius is clamped")
+gm.post(f"/api/players/{pid}/place", json={"mapId": smap, "c": 3, "r": 4}, headers=H)
+ex = explored_of(smap)
+check("8,4" in ex and "3,0" in ex and "13,4" in ex and "12,0" not in ex, "with 'reveal what runners can see', what is in sight is explored (through the open door), not behind the wall")
+check("15,1" not in ex, "and secret cells stay hidden")
+gm.delete(f"/api/maps/{smap}", headers=H)
+from sr import rules as RR  # noqa: E402
+pc = RR.new_character()
+d0 = RR.derive(pc)
+with RR.derive_memo():
+    d1 = RR.derive(pc); d2 = RR.derive(pc)
+    c2 = json.loads(json.dumps(pc)); RR.remember_source(c2, "same-json"); RR.remember_source(pc, "same-json")
+check(d1 is d2 and json.dumps(d1, sort_keys=True, default=str) == json.dumps(d0, sort_keys=True, default=str), "the derive memo returns the same values, computed once")
+check(RR.derive(pc) is not RR.derive(pc), "outside the memo every derive is fresh")
+import core as CORE  # noqa: E402
+if CORE.MINIFY:
+    r = gm.get("/static/play.js")
+    raw = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "play.js"), "rb").read()
+    check(r.status_code == 200 and len(r.data) < len(raw) * 0.95 and b"(()=>{" in r.data[:20], "static JS is served minified")
+    r = gm.get("/static/style.css")
+    check(r.status_code == 200 and b"\n\n" not in r.data, "and so is the CSS")
+import aio as AIO  # noqa: E402
+check(AIO.offload(lambda a, b=0: a + b, 2, b=3) == 5, "offload runs work directly outside gevent")
+
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "All checks passed.")
 sys.exit(1 if FAILS else 0)

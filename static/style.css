@@ -251,6 +251,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); tex
 .player-list li { grid-template-columns: 1fr auto; }
 dialog .row label { flex-direction: column; align-items: flex-start; gap: .2rem; }
 dialog > form > label:first-of-type { flex-direction: column; align-items: stretch; }
+dialog > form > label.check:first-of-type, dialog .row label.inline { flex-direction: row; align-items: center; }
 
 /* ---------- v2.3: generator, status bar, dice, misc ---------- */
 dialog.wide { width: min(1000px, 96vw); }
@@ -1077,3 +1078,27 @@ body.shell #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 
 .at-def { display: flex; flex-direction: column; gap: .2rem; }
 .at-def label.check { font-size: .8rem; margin: 0; }
 .vehicle-box { margin-top: .5rem; padding-top: .4rem; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: .25rem; }
+
+/* ===================================================================== first-person view */
+.canvas-wrap.fp canvas#map { cursor: pointer; image-rendering: pixelated; }
+.fp-hint { position: absolute; left: 50%; bottom: .6rem; transform: translateX(-50%); z-index: 3; pointer-events: none;
+  background: rgb(0 0 0 / .6); color: var(--muted); font-size: .78rem; padding: .2rem .6rem; border-radius: 2px; white-space: nowrap; }
+.fp-hint[hidden] { display: none; }
+@media (max-width: 700px) { .fp-hint { white-space: normal; width: 90%; text-align: center; } }
+.canvas-wrap.bump { animation: fp-bump .18s ease-out; }
+@keyframes fp-bump { 0%, 100% { transform: none; } 30% { transform: translateX(-4px); } 60% { transform: translateX(3px); } }
+@media (prefers-reduced-motion: reduce) { .canvas-wrap.bump { animation: none; } }
+
+/* line-of-sight key: what the shading on the map means */
+.los-key { position: absolute; left: 50%; bottom: .6rem; transform: translateX(-50%); z-index: 3; pointer-events: none;
+  display: flex; gap: .15rem; padding: .25rem; border-radius: 2px; background: rgba(5, 9, 9, .82); border: 1px solid var(--line, #1f3236);
+  font-size: .78rem; color: var(--text, #d8e8e6); white-space: nowrap; }
+.los-key[hidden], .canvas-wrap.fp .los-key { display: none; }
+.los-key span { padding: .1rem .45rem; border-radius: 2px; }
+.los-key .k0 { box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+.los-key .k1 { background: rgba(255,214,90,.22); }
+.los-key .k2 { background: rgba(255,176,46,.36); }
+.los-key .k3 { background: rgba(255,120,40,.5); }
+.los-key .k4 { background: rgba(255,60,60,.6); }
+.los-key .kx { background: rgba(0,0,0,.8); color: var(--muted, #8aa3a0); }
+@media (max-width: 700px) { .los-key { font-size: .7rem; bottom: 2.6rem; } }

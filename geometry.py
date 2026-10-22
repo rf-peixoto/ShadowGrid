@@ -243,6 +243,30 @@ def line_of_sight(m, cells, a, b):
     return {"los": True, "cover": cover, "clear": clear, "rays": total}
 
 
+def visible_cells(m, cells, start, radius, explored=None):
+    """Room cells within `radius` steps that can be seen from `start` (walls and closed doors block sight).
+    A cell counts as seen if any sight line reaches it: the centre-to-centre ray first, then rays from the
+    four corners of our own cell. Secret cells stay hidden unless already explored. Returns cell keys."""
+    explored = explored or {}
+    gt = m["gridType"]
+    a = tuple(start)
+    out = {key(*a)}
+    src = _samples(gt, a[0], a[1], 0.6)
+    for c in range(a[0] - radius - 1, a[0] + radius + 2):
+        for r in range(a[1] - radius - 1, a[1] + radius + 2):
+            b = (c, r)
+            if b == a or not in_bounds(m, c, r) or not is_room(cells, c, r):
+                continue
+            if cell_distance(gt, a, b) > radius:
+                continue
+            if is_secret(cells, c, r) and not explored.get(key(c, r)):
+                continue
+            q = cell_center(gt, c, r)
+            if any(ray_clear(m, cells, p, q, a, b) for p in src):
+                out.add(key(c, r))
+    return out
+
+
 def cell_distance(grid_type, a, b):
     """Steps between two cells (Chebyshev on squares, hex distance on hexes)."""
     if grid_type != "hex":

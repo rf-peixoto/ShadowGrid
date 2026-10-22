@@ -50,6 +50,17 @@ game masters, with screenshots.
   description the GM writes; the GM can see the map as any runner.
 - **Isometric view** in the style of the SNES Shadowrun, or a flat top-down
   view. Toggle with <kbd>I</kbd>.
+- **First-person view**: walk the map at eye level, like an early-90s dungeon
+  crawler (<kbd>V</kbd> or <kbd>3</kbd>). Players walk their own runner, and
+  doors open from the cell in front. The GM gets a free camera that walks
+  through rooms and closed doors without moving anyone, sees hidden markers
+  faintly, and selects a marker or runner by clicking it.
+- **Line of sight overlay** (<kbd>L</kbd>): shades what a runner can see from
+  their token, with the cover each cell gives (Cover I–IV) worked out the same
+  way as in combat. Players see their own; the GM sees it from the selected
+  token or marker, or from the runner they are seeing the map as. Each map can
+  also reveal what runners can see as they move (walls and closed doors block
+  it), set under Colors &amp; settings.
 - **SR6 dice roller**: pools from the sheet, hits and glitches, thresholds, the
   Wild Die, Edge Boosts, firing modes and ranges, Matrix actions against a
   target's rating, and drain or fading after casting. Every roll goes to a
@@ -129,7 +140,9 @@ The installer:
 
 1. creates a virtual environment in `.venv` and installs the dependencies,
    including a copy of ffmpeg for music (if there's none for your system, it
-   offers to install ffmpeg with the package manager);
+   offers to install ffmpeg with the package manager) and the optional
+   speed-ups in `requirements-fast.txt` (gevent and the minifiers; the app runs
+   without them if they can't be installed);
 2. asks you for the gamemaster password;
 3. asks whether to install and configure nginx for internet play. If yes, it
    installs and hardens nginx, gets an HTTPS certificate (Let's Encrypt for a domain
@@ -159,7 +172,8 @@ computers and phones on it. The script prints the addresses to open.
 ```
 
 `python app.py` does the same, but only this computer can connect. Both use
-the same production web server (waitress) as `serve.sh`.
+the same production web server as `serve.sh` (gevent, or waitress if gevent
+could not be installed).
 
 Over plain HTTP on a home network (`http://192.168.x.x:5000`), browsers
 withhold some features they keep for HTTPS. ShadowGrid doesn't need them:
@@ -220,8 +234,11 @@ can also set them yourself when running `app.py` or `serve.py` directly.
 | `SHADOWGRID_FFMPEG` | Path to the ffmpeg to use for music (default: the bundled one, then the system's) |
 | `SHADOWGRID_SHELL=0` | Open each screen as a page of its own instead of inside the persistent frame that keeps the music playing (for debugging) |
 | `SHADOWGRID_SERVER_IDENT` | `Server` response header (default `nginx`) |
-| `SHADOWGRID_THREADS` / `SHADOWGRID_CONNECTIONS` | Worker threads and connection limit of `serve.py` (64 and 200) |
-| `SHADOWGRID_MAX_STREAMS` | Live-update connections allowed at once (default 150) |
+| `SHADOWGRID_SERVER=waitress` | Use waitress and its thread pool even when gevent is installed |
+| `SHADOWGRID_CONNECTIONS` | Open connections at once (gevent 1000, waitress 200) |
+| `SHADOWGRID_THREADS` | Waitress worker threads (64) |
+| `SHADOWGRID_MAX_STREAMS` | Live-update connections allowed at once (gevent 900, waitress 150) |
+| `SHADOWGRID_MINIFY=0` | Serve scripts and styles as they are on disk instead of minified |
 
 ### Speed
 
@@ -231,6 +248,15 @@ can also set them yourself when running `app.py` or `serve.py` directly.
   server starts and cached by browsers.
 - Live updates only send what changed: unchanged map cells, for example,
   are not sent again.
+- The server runs on gevent: every connection, including each open page's
+  live-update stream, is a lightweight task in one event loop rather than a
+  thread, so hundreds of open pages cost little. Password checks and image
+  uploads run on worker threads so they don't hold up other requests.
+  Without gevent, waitress serves with a thread pool.
+- Scripts and styles are minified in memory the first time they are served
+  (the files on disk stay readable), then compressed.
+- A character's derived values are worked out once per request, even when the
+  sheet, the player card and the dice pools all ask for them.
 - Music is compressed once on upload to Opus at 48 kbps (about 20 MB for an
   hour), loudness-normalised so tracks play at a similar volume. Players
   stream it in small ranges, so a track starts within a second.
@@ -426,7 +452,8 @@ so a table can check them against its books and change them in one place.
   updates, CLI
 - `music.py`: music uploads, compression with ffmpeg, the shared timeline per
   game
-- `serve.py`: production server (waitress)
+- `serve.py`: production server (gevent, or waitress)
+- `aio.py`: picks the server mode and runs heavy work off the event loop
 - `core.py`: app setup, database schema, shared helpers, player auth, live
   update bus
 - `maps.py`: map editor API, fog of war, doors, markers, snapshots, and the
@@ -453,14 +480,16 @@ so a table can check them against its books and change them in one place.
 - `sr/wiki.py`: the rules wiki
 - `sr/dice.py`: SR6 dice engine
 - `security.py`: auth decorators, proof of work, rate limits, security headers
-- `geometry.py`: grid adjacency, door blocking, line of sight
+- `geometry.py`: grid adjacency, door blocking, line of sight, what a runner
+  can see
 - `static/`: front end, with no build step. The main files are:
   - `api.js`: shared helpers, live updates, Markdown
   - `play.js`: the player app
   - `sheet.js`: the character sheet
   - `editor.js`: the GM map editor and combat
   - `gamepage.js`: the GM game dashboard
-  - `gridcore.js`: the map renderer
+  - `gridcore.js`: the map renderer, line of sight and cover
+  - `fpview.js`: the first-person view
   - `srui.js`: the dice and condition widgets
   - `layout.js`: the map screen layout (side panel tabs, dice panel)
   - `print.js`, `print.css`: the printable sheet

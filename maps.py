@@ -34,8 +34,10 @@ def merged_settings(user):
                         s["colors"][ck] = clean_color(cv, s["colors"][ck])
             elif k == "doorPalette" and isinstance(v, list):
                 s[k] = [clean_color(c, "#ffffff") for c in v[:12]]
-            elif k in ("legendVisible", "showGrid", "showRoomLabels"):
+            elif k in ("legendVisible", "showGrid", "showRoomLabels", "sightReveal"):
                 s[k] = bool(v)
+            elif k == "sightRadius":
+                s[k] = clamp_int(v, 1, 20, s[k])
     return s
 
 
@@ -198,6 +200,10 @@ def place_player(p, m, c, r, path=None):
     for step in (path or []) + [(c, r)]:
         for k in geo.reveal_from(m, m["data"]["cells"], step, p["radius"], ms["explored"]):
             ms["explored"][k] = True
+    st = m.get("settings") or {}
+    if st.get("sightReveal"):
+        for k in geo.visible_cells(m, m["data"]["cells"], (c, r), st.get("sightRadius") or 8, ms["explored"]):
+            ms["explored"][k] = True
 
 
 def is_link(mk):
@@ -316,6 +322,7 @@ def _this_map_only(p, map_id):
 
 @app.route("/api/maps/<map_id>/context", methods=["GET"])
 @gamemaster_required
+@R.memo_view
 def map_context(map_id):
     """Everything the editor needs in one call."""
     db = get_db()

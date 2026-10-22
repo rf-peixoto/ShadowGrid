@@ -15,7 +15,7 @@ const S = {
   fogQueue: null, fogTimer: null,
   version: null, pollTimer: null, pollInterval: 20000, playersSig: '', rollsSig: '', follow: false, pingFrame: null, iso: {}, sceneIso: null,
   rt: { doors: new Set(), markers: new Set(), all: false },   // runtime fields the editor itself changed since the last save
-  tracker: null, templateNpc: null,
+  tracker: null, templateNpc: null, fp: false, fpCam: null,
 };
 
 const canvas = $('map'), ctx2d = canvas.getContext('2d'), wrap = $('canvas-wrap');
@@ -30,6 +30,86 @@ function setIso(on, remember = true) {
   invalidate();
 }
 $('iso-toggle').onchange = e => setIso(e.target.checked);
+
+/* first-person view: a free GM camera that walks the rooms (and through closed doors); it never moves tokens */
+function fpPref() { try { return localStorage.getItem('sg.fp.gm') === '1'; } catch { return false; } }
+function fpStart() {
+  const p = player(), t = p && pms(p).token;
+  if (t) return { c: t.c, r: t.r };
+  if (S.selected && cells()[key(S.selected.c, S.selected.r)]?.fill) return { c: S.selected.c, r: S.selected.r };
+  for (const q of S.ctx.players) { const tk = (q.state.maps || {})[MAP_ID]?.token; if (tk && q.currentMapId === MAP_ID) return { c: tk.c, r: tk.r }; }
+  // a room cell in the open (most painted neighbours), so the first look is not into a corner
+  const g = G(); let k = null, best = -1;
+  for (const kk of Object.keys(cells())) {
+    if (!cells()[kk].fill) continue;
+    const [c, r] = kk.split(',').map(Number); let n = 0;
+    for (let e = 0; e < g.edgeCount; e++) { const nb = g.neighbor(c, r, e); if (cells()[key(nb.c, nb.r)]?.fill) n++; }
+    if (n > best) { best = n; k = kk; if (n === g.edgeCount) break; }
+  }
+  if (!k) return null;
+  const [c, r] = k.split(',').map(Number); return { c, r };
+}
+function setFp(on) {
+  if (on && !S.fpCam) S.fpCam = fpStart();
+  if (on && !S.fpCam) { toast('Paint a room first: the first-person camera walks on room cells.'); on = false; }
+  S.fp = on; $('fp-toggle').checked = on; wrap.classList.toggle('fp', on); $('fp-hint').hidden = !on;
+  try { localStorage.setItem('sg.fp.gm', on ? '1' : '0'); } catch { /* ignore */ }
+  invalidate();
+}
+/* line of sight overlay: from the selected token or marker, else the runner we are seeing as */
+const LOS_RADIUS = 20;
+function losSource() {
+  if (S.selected) {
+    const { c, r } = S.selected;
+    if (markerAt(c, r)) return { c, r, who: (markerAt(c, r).label || (MARKER_BY_ID[markerAt(c, r).type] || MARKER_TYPES[0]).name) };
+    const p = S.ctx.players.find(q => q.currentMapId === MAP_ID && (q.state.maps || {})[MAP_ID]?.token && q.state.maps[MAP_ID].token.c === c && q.state.maps[MAP_ID].token.r === r);
+    if (p) return { c, r, who: p.name };
+  }
+  const p = player(), t = p && pms(p).token;
+  return t ? { c: t.c, r: t.r, who: p.name } : null;
+}
+function losField() {
+  const src = S.los && losSource();
+  return src ? GridCore.sightField(S.map, src, LOS_RADIUS, 'gm' + (S.geoSeq || 0)) : null;
+}
+function setLos(on) {
+  S.los = on; $('los-toggle').checked = on; $('los-key').hidden = !on;
+  try { localStorage.setItem('sg.los.gm', on ? '1' : '0'); } catch { /* ignore */ }
+  if (on && !losSource()) toast('Select a token or marker (or see the map as a runner) to show what it can see.');
+  requestDraw();
+}
+$('los-toggle').onchange = e => setLos(e.target.checked);
+function fpBump() { wrap.classList.remove('bump'); void wrap.offsetWidth; wrap.classList.add('bump'); }
+const fpc = FPView.controller({
+  map: () => S.map, mapId: () => MAP_ID, at: () => S.fpCam, storeKey: 'sg.fp.gmface.', redraw: () => requestDraw(),
+  step: cell => { const k = key(cell.c, cell.r); if (G().inBounds(cell.c, cell.r) && cells()[k] && cells()[k].fill) { S.fpCam = { c: cell.c, r: cell.r }; requestDraw(); } else fpBump(); },
+  door: edge => { const at = S.fpCam; if (at && doorOnEdge(G(), cells(), at.c, at.r, edge)) toggleDoorAt(at.c, at.r, edge, false); else fpBump(); },
+});
+$('fp-toggle').onchange = e => setFp(e.target.checked);
+function fpSprites(view) {
+  const out = [], g = G(), gm = view.mode !== 'player';
+  for (const m of markers()) {
+    if (!gm && (m.hidden || GridCore.visibility(view, key(m.c, m.r), cells()[key(m.c, m.r)]) !== 'full')) continue;
+    const p = g.cellCenter(m.c, m.r);
+    out.push({ kind: 'marker', x: p.x, y: p.y, type: m.type, color: m.color, hidden: !!m.hidden, label: m.label || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name, cm: m.cm, statuses: m.statuses, at: { c: m.c, r: m.r } });
+  }
+  for (const t of view.tokens || []) {
+    if (!gm && GridCore.visibility(view, key(t.c, t.r), cells()[key(t.c, t.r)]) !== 'full') continue;
+    if (S.fpCam && t.c === S.fpCam.c && t.r === S.fpCam.r) continue;     // whoever we are standing on
+    const p = g.cellCenter(t.c, t.r);
+    out.push({ kind: 'token', x: p.x, y: p.y, color: t.color, name: t.name, label: t.name, cm: t.cm, statuses: t.statuses, at: { c: t.c, r: t.r } });
+  }
+  return out;
+}
+function drawFirstPerson(dpr, W, H) {
+  if (S.sceneDirty) renderSceneCache();
+  const view = currentView(), cam = fpc.camera(performance.now());
+  if (!cam) { setFp(false); return; }
+  FPView.render(ctx2d, W, H, dpr, { map: S.map, view, cam, sprites: fpSprites(view) });
+  const c = G().cellCenter(S.fpCam.c, S.fpCam.r); vp.centerOn(c.x, c.y); vp.drawMinimap(mini);
+  updateStatus();
+  if (cam.animating) requestDraw();
+}
 
 // ------------------------------------------------------------ accessors
 const cells = () => S.map.data.cells;
@@ -72,7 +152,7 @@ function hoverLabel() {
 }
 
 // ------------------------------------------------------------ drawing (scene cached; overlays per frame)
-function invalidate() { S.sceneDirty = true; requestDraw(); }
+function invalidate() { S.sceneDirty = true; S.geoSeq = (S.geoSeq || 0) + 1; requestDraw(); }
 function requestDraw() { if (!S.frame) S.frame = requestAnimationFrame(() => { S.frame = null; draw(); }); }
 function renderSceneCache() {
   const pixel = false, view = currentView(), { w, h } = G().mapPixelSize();
@@ -91,6 +171,7 @@ function draw() {
   if (!S.map) return;
   const dpr = window.devicePixelRatio || 1, W = wrap.clientWidth, H = wrap.clientHeight;
   if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); }
+  if (S.fp && S.fpCam) { drawFirstPerson(dpr, W, H); return; }
   const pixel = false;
   if (S.sceneDirty || Math.abs(vp.zoom - S.sceneZoom) > 0.5 || S.sceneIso !== vp.iso) renderSceneCache();
   const view = currentView();
@@ -101,6 +182,8 @@ function draw() {
   if (vp.iso) GridCore.drawIsoLayers(ctx2d, S.iso, vp, dpr, G().cs);
   else { ctx2d.setTransform(...vp.matrix(dpr)); const q = scene._q || 1; ctx2d.drawImage(scene, 0, 0, scene.width / q, scene.height / q); }
   ctx2d.setTransform(...vp.matrix(dpr));
+  const lf = losField();
+  if (lf) GridCore.drawSight(ctx2d, S.map, lf, vp.zoom);
 
   const g = G();
   ctx2d.lineWidth = 2 / vp.zoom;
@@ -162,6 +245,14 @@ function updateStatus() {
   let doorTxt = '';
   if (c && S.hoverPt) { const e = g.nearestEdge(c.c, c.r, S.hoverPt.x, S.hoverPt.y), d = doorOnEdge(g, cells(), c.c, c.r, e); if (d) doorTxt = `${g.edgeNames[e]} door: ${d.locked ? 'locked' : d.open ? 'open' : 'closed'}`; }
   $('st-door').textContent = doorTxt;
+  let losTxt = '';
+  const lf = c && losField();
+  if (lf && (c.c !== lf.from.c || c.r !== lf.from.r)) {
+    const k = key(c.c, c.r), who = losSource().who;
+    if (lf.seen.has(k)) { const cv = lf.seen.get(k); losTxt = cv ? `${who}: Cover ${GridCore.COVER_NAMES[cv]}` : `${who}: in plain sight`; }
+    else if (lf.hidden.has(k)) losTxt = `${who}: out of sight`;
+  }
+  $('st-los').textContent = losTxt;
 }
 function dragCells() {
   if (S.dragging.kind === 'room') return [...S.dragging.set];
@@ -393,6 +484,13 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', ev => {
   canvas.setPointerCapture(ev.pointerId);
   const { sx, sy } = vp.canvasPoint(ev);
+  if (S.fp && S.fpCam) {
+    if (ev.button !== 0) return;
+    const hit = FPView.pick(sx, sy);
+    if (hit) { S.selected = hit.at; renderInspector(); requestDraw(); }
+    else fpc.tap(sx, sy, wrap.clientWidth, wrap.clientHeight);
+    return;
+  }
   if (ev.button === 1 || ev.button === 2 || S.spaceDown) { S.dragging = { kind: 'pan', sx, sy, px: vp.panX, py: vp.panY }; canvas.classList.add('panning'); return; }
   if (ev.button !== 0) return;
   const pt = vp.screenToMap(sx, sy);
@@ -413,6 +511,7 @@ canvas.addEventListener('pointerdown', ev => {
 });
 canvas.addEventListener('pointermove', ev => {
   const { sx, sy } = vp.canvasPoint(ev), pt = vp.screenToMap(sx, sy);
+  if (S.fp && S.fpCam) { canvas.style.cursor = FPView.pick(sx, sy) ? 'pointer' : ''; return; }
   S.hoverPt = pt; S.hover = G().pointToCell(pt.x, pt.y);
   S.hoverSprite = S.dragging ? null : GridCore.pickSprite(S.map, currentView(), vp, sx, sy);
   if (S.dragging) {
@@ -437,7 +536,7 @@ function endDrag() {
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
 canvas.addEventListener('pointerleave', () => { S.hover = null; requestDraw(); });
-canvas.addEventListener('wheel', ev => { ev.preventDefault(); const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
+canvas.addEventListener('wheel', ev => { ev.preventDefault(); if (S.fp) return; const { sx, sy } = vp.canvasPoint(ev); vp.zoomAt(sx, sy, Math.exp(-ev.deltaY * 0.0015)); requestDraw(); }, { passive: false });
 
 // ------------------------------------------------------------ keyboard
 const TOOL_KEYS = { edit: { p: 'paint', r: 'rect', e: 'erase', s: 'secret', d: 'door', m: 'marker', g: 'room', v: 'select' },
@@ -448,6 +547,9 @@ window.addEventListener('keydown', ev => {
   const k = ev.key.toLowerCase();
   if ((ev.ctrlKey || ev.metaKey) && k === 'z') { ev.preventDefault(); undo(); return; }
   if (ev.ctrlKey || ev.metaKey) return;
+  if (k === '3') { setFp(!S.fp); return; }
+  if (k === 'l' && !S.fp) { setLos(!S.los); return; }
+  if (S.fp && S.fpCam && !ev.altKey) { if (k === 'escape') { setFp(false); return; } if (fpc.key(ev)) return; }
   if (k === 'f') { vp.fit(); invalidate(); return; }
   if (k === 'i') { setIso(!vp.iso); return; }
   if (k === 'escape') { S.selected = null; renderInspector(); requestDraw(); return; }
@@ -481,7 +583,7 @@ function setMode(m) {
 }
 $('mode-edit').onclick = () => setMode('edit');
 $('mode-play').onclick = () => setMode('play');
-function setViewAs(id) { flushFog(); S.viewAs = id; renderViewAs(); renderPlayers(); refreshFogPanel(); renderInspector(); renderLegend(); invalidate(); }
+function setViewAs(id) { flushFog(); S.viewAs = id; if (S.fp) { const p = player(), t = p && pms(p).token; if (t) S.fpCam = { c: t.c, r: t.r }; } renderViewAs(); renderPlayers(); refreshFogPanel(); renderInspector(); renderLegend(); invalidate(); }
 function renderViewAs() {
   const el = $('view-as'); el.innerHTML = '';
   const mk = (id, label, color) => {
@@ -1282,11 +1384,14 @@ function openSettings() {
   for (const cp of S.ctx.campaigns || []) { const o = document.createElement('option'); o.value = cp.id; o.textContent = cp.name; sc.appendChild(o); }
   sc.value = S.map.campaignId || '';
   $('set-grid').checked = !!S.map.settings.showGrid;
+  $('set-sight').checked = !!S.map.settings.sightReveal; $('set-sight-r').value = S.map.settings.sightRadius || 8;
   $('set-w').value = S.map.width; $('set-h').value = S.map.height; $('set-cs').value = S.map.cellSize;
   $('settings-dialog').showModal();
 }
 $('btn-settings').onclick = openSettings;
 $('set-grid').onchange = e => { S.map.settings.showGrid = e.target.checked; markDirty(); };
+$('set-sight').onchange = e => { S.map.settings.sightReveal = e.target.checked; markDirty(); };
+$('set-sight-r').onchange = e => { S.map.settings.sightRadius = Math.max(1, Math.min(20, +e.target.value || 8)); e.target.value = S.map.settings.sightRadius; markDirty(); };
 $('set-w').onchange = e => { S.map.width = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };
 $('set-h').onchange = e => { S.map.height = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };
 $('set-cs').onchange = e => { S.map.cellSize = Math.max(8, Math.min(128, +e.target.value || 8)); markDirty(); };
@@ -1422,6 +1527,8 @@ async function boot() {
   if (q.get('view')) { setMode('play'); setViewAs(q.get('view')); S.follow = q.get('follow') === '1'; $('follow-player').checked = S.follow; history.replaceState(null, '', location.pathname); }
   else if (q.get('play')) { setMode('play'); history.replaceState(null, '', location.pathname); }
   else setMode('edit');
+  if (fpPref()) setFp(true);
+  try { if (localStorage.getItem('sg.los.gm') === '1') { S.los = true; $('los-toggle').checked = true; $('los-key').hidden = false; } } catch { /* ignore */ }
   vp.fit(); invalidate();
 }
 new ResizeObserver(() => requestDraw()).observe(wrap);

@@ -1,0 +1,4 @@
+# optional speed-ups (see aio.py and core.py); ShadowGrid runs without them
+gevent>=24.2
+rjsmin>=1.2
+rcssmin>=1.1
