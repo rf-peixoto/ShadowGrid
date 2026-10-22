@@ -402,7 +402,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Side panel</strong> (left): your condition monitors, Edge and what's around you (doors, people nearby, travel). Hide it with <span class="ui">‹</span> or <kbd>[</kbd>.</li>
         <li><strong>Initiative strip</strong> (top): appears when the GM shares the order. Whoever is acting glows, your own chip is outlined, and a short note tells you when it's your turn. The marks on your chip are the actions you have left this round: a diamond for the Major, dots for the Minors.</li>
         <li><strong>Dice panel</strong> (bottom): the roller on the left, the table log on the right. Collapse it with <span class="ui">▾</span> or <kbd>]</kbd>; the header still shows the last roll.</li>
-        <li><span class="ui">View</span> (top right of the map): isometric view and legend.</li>
+        <li><span class="ui">View</span> (top right of the map): isometric view, first person, line of sight and legend.</li>
       </ul>
       <figure>
         <a class="shot" href="img/player-map.png"><img src="img/player-map.png" width="1440" height="900" alt="Player map screen: side panel with condition monitors, the initiative strip with the current combatant highlighted, the isometric map and the dice panel with a pistol selected" loading="lazy"></a>
@@ -424,6 +424,18 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Details</strong>: hover over a marker or a runner for its name, or right-click it for a card with what you can tell: what it is, how hurt it looks, its statuses, where a portal leads, and anything the GM wrote about it. <kbd>Esc</kbd> closes it.</li>
         <li><strong>View</strong>: <span class="ui">Isometric view</span> switches between the tilted view and a flat one.</li>
       </ul>
+      <h4 id="first-person">First person</h4>
+      <p><span class="ui">First person</span> in the View menu (or <kbd>V</kbd>) puts the camera on your token, at eye level. The arrow keys or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> walk forward and back and turn; <kbd>Q</kbd> and <kbd>E</kbd> sidestep on square maps. <kbd>Enter</kbd> opens or closes the door in front of you. On a phone, tap the left or right third of the map to turn and the middle to step. Every step is a normal move, so the fog lifts and the table sees you walk. Walls you haven't mapped yet are drawn plain with a dashed edge; click a marker or a runner for its details. The minimap still shows the whole map.</p>
+      <figure>
+        <a class="shot" href="img/player-first-person.png"><img src="img/player-first-person.png" width="1140" height="450" alt="First-person view down the loading bay, facing west: Cass Wandering Horse and Bobby Tables standing on the floor grid with their condition bars, a crate marker on a post, walls with neon trim fading into the dark" loading="lazy"></a>
+        <figcaption>First person: the runners and markers stand in the room; the compass shows which way you face.</figcaption>
+      </figure>
+      <h4 id="line-of-sight">Line of sight</h4>
+      <p><span class="ui">Line of sight</span> (or <kbd>L</kbd>) shades the map from your token: cells in plain sight stay clear, cells you can see only partly carry the cover a target there would have (Cover I to IV, worked out the same way as in combat), and cells out of sight darken. Drag your token and the shading follows it, so you can check a spot before you move.</p>
+      <figure>
+        <a class="shot" href="img/player-line-of-sight.png"><img src="img/player-line-of-sight.png" width="1140" height="450" alt="Flat map with line of sight on: from Ana at the end of the loading bay the corridor is clear, the far room fans out with cells marked Cover III and IV beside the doorway, and the rest of that room is darkened" loading="lazy"></a>
+        <figcaption>Looking down the corridor: the cells beside the doorway give cover, the rest of the room is out of sight.</figcaption>
+      </figure>
 
       <h3 id="dice">Dice, combat and healing</h3>
       <p>The roller is in the dice panel under the map and in the <strong>Combat</strong> section of your sheet. Pick a pool from your sheet: a skill (with specialization or expertise), a weapon, a spell, Defense, Damage resistance and more. Your wound modifier is applied automatically. Natural weapons (claws, horns, bite) from your metatype or Infected powers are in the list too.</p>
@@ -558,6 +570,17 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <a class="shot narrow" href="img/gm-drone-marker.png"><img src="img/gm-drone-marker.png" width="275" height="706" alt="Selected tab for a GM-Nissan Doberman marker: stats, Speed 10 m per round with −10, +10 and Stop, the Speed Interval note, Weapon mounts 1 of 1 used with an HK-227 rolling 6 dice (Sensor + Targeting 3), and its condition monitor" loading="lazy"></a>
         </figure>
       </div>
+      <p><span class="ui">Colors &amp; settings</span> also has <strong>Reveal what runners can see as they move</strong>: with it on, a runner who moves or opens a door explores every room cell they can see, up to the distance you set (8 cells by default). Walls and closed doors block it and secret cells stay hidden. Without it, runners explore only the cells around them.</p>
+      <div class="pair">
+        <figure>
+          <a class="shot" href="img/gm-first-person.png"><img src="img/gm-first-person.png" width="1140" height="450" alt="GM first-person camera in the loading bay facing south: Cass Wandering Horse, Bobby Tables and a crate marker, the room's walls with neon trim" loading="lazy"></a>
+          <figcaption>The GM's first-person camera.</figcaption>
+        </figure>
+        <figure>
+          <a class="shot" href="img/gm-line-of-sight.png"><img src="img/gm-line-of-sight.png" width="1140" height="450" alt="GM map with line of sight from the Lieutenant in the far room: the corridor cells carry Cover I, III and IV, the loading bay is darkened, and the status bar reads Lieutenant: out of sight" loading="lazy"></a>
+          <figcaption>Line of sight from a selected enemy.</figcaption>
+        </figure>
+      </div>
       <p>Delete a map from its card on the <span class="ui">Maps</span> tab or from <span class="ui">Colors &amp; settings</span> in the editor.</p>
       <p>Changes save automatically, and <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes them. Autosave never undoes what happened live meanwhile: doors players opened and damage or statuses from combat are kept.</p>
 
@@ -603,7 +626,7 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Side panel</strong> (left). In Edit mode it holds the drawing tools. In Play mode it has three tabs: <span class="ui">Map</span> (viewing as, tools, fog, snapshots), <span class="ui">Runners</span> (each runner's condition, Edge, statuses and attack buttons) and <span class="ui">Selected</span> (the inspector of whatever you clicked; a dot marks it when something is selected). <span class="ui">‹</span> or <kbd>[</kbd> hides it.</li>
         <li><strong>Combat strip</strong> (top of the map): the initiative order and the combat buttons, always in view during a fight.</li>
         <li><strong>Dice panel</strong> (bottom): your roller and the table log. <span class="ui">▾</span> or <kbd>]</kbd> collapses it to one line with the last roll.</li>
-        <li><span class="ui">View</span> (top right of the map): isometric view, legend and room names.</li>
+        <li><span class="ui">View</span> (top right of the map): isometric view, first person, line of sight, legend and room names.</li>
       </ul>
       <figure>
         <a class="shot" href="img/gm-combat.png"><img src="img/gm-combat.png" width="1440" height="900" alt="GM Play mode: Runners tab in the side panel, the combat strip with Ganger acting, the isometric map and the dice panel with the table log" loading="lazy"></a>
@@ -620,6 +643,8 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
         <li><strong>Select</strong> (the tool Play mode starts with) and <strong>Markers</strong>: drag a marker to move it, in either view (grab the icon itself in the isometric view). Click one to open its inspector in the <span class="ui">Selected</span> tab: its NPC stat block, its condition monitor, its statuses, attack buttons, and a description players read when they right-click it.</li>
         <li><strong>Statuses</strong>: under each runner in the Runners tab and in a marker's inspector, add Prone, Burning, Zapped, Cover and the rest. Their icons appear on the map for everyone. Only you can set and clear them.</li>
         <li><strong>Snapshots</strong>: save and restore the whole game state (positions, exploration and doors).</li>
+        <li><strong>First person</strong> (<kbd>3</kbd>): walk the map at eye level, the way your players can. The camera starts on the runner you're seeing the map as (or the selected cell, or the first runner), walks through rooms and closed doors without moving anyone, and shows hidden markers faintly. Click a marker or a runner to select it. <kbd>Enter</kbd> opens the door ahead; <kbd>3</kbd> or <kbd>Esc</kbd> goes back.</li>
+        <li><strong>Line of sight</strong> (<kbd>L</kbd>): shades what the selected marker or runner can see, with the cover on each cell; with nothing selected, it's the runner you're seeing the map as. Hover a cell and the status bar under the map says what they'd get there, for example <em>Sniper: Cover II</em>.</li>
       </ul>
       <figure>
         <a class="shot" href="img/gm-see-as.png"><img src="img/gm-see-as.png" width="1440" height="900" alt="GM Play mode with the Runners tab: See as is active for Bobby Tables, and the map shows what he has explored" loading="lazy"></a>
@@ -911,6 +936,9 @@ footer .inner { max-width: 1180px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
           <tr><td>Right-drag, or <kbd>Space</kbd> + drag</td><td>Pan</td></tr>
           <tr><td><kbd>F</kbd></td><td>Fit the whole map</td></tr>
           <tr><td><kbd>I</kbd></td><td>Toggle the isometric view</td></tr>
+          <tr><td><kbd>L</kbd></td><td>Show or hide the line of sight</td></tr>
+          <tr><td><kbd>3</kbd></td><td>First person (players can also use <kbd>V</kbd>)</td></tr>
+          <tr><td>Arrows or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, <kbd>Q</kbd>/<kbd>E</kbd>, <kbd>Enter</kbd></td><td>In first person: walk and turn, sidestep, open the door ahead</td></tr>
           <tr><td><kbd>[</kbd></td><td>Hide or show the side panel</td></tr>
           <tr><td><kbd>]</kbd></td><td>Collapse or open the dice panel</td></tr>
         </tbody>
