@@ -10,8 +10,8 @@ import sightmap as SM
 import stealth as ST
 
 from core import (GM_COLOR, add_roll, app, body, clamp_int, display_name, err, get_db, load_char, now,
-                  roll_rows, save_char)
-from security import gamemaster_required
+                  player_required, roll_rows, save_char)
+from security import gamemaster_required, rate_limited
 from sr import actions6e as ACT
 from sr import catalog as CAT
 from sr import combat as X
@@ -277,6 +277,58 @@ def tracker_view(t, gm):
             "current": current if current in shown else None}
 
 
+def step_turn(db, cid, t, op="next"):
+    """Pass the turn to the next combatant (or back), starting a new round after the last one."""
+    n = len(t["entries"])
+    if n and op == "next":
+        cur = ordered(t)[min(t.get("turn", 0), n - 1)]
+        if cur.get("aim") and cur.get("aimTouch") != t["round"]:
+            cur["aim"] = 0                       # a turn without Take Aim or an attack: the aim is lost
+    if n:
+        t["turn"] = t.get("turn", 0) + (1 if op == "next" else -1)
+        if t["turn"] >= n:
+            t["turn"] = 0
+            new_round(t)
+            round_start(db, cid, t)
+        elif t["turn"] < 0:
+            t["turn"] = n - 1
+            t["round"] = max(1, t["round"] - 1)
+        order = ordered(t)
+        if op == "next" and order:
+            order[t["turn"]]["dirt"] = False      # Hit the Dirt penalty ends as their turn comes up
+
+
+def current_entry(t):
+    order = ordered(t)
+    return order[max(0, min(t.get("turn", 0), len(order) - 1))] if order else None
+
+
+def my_combat(cid, pid, c=None):
+    """A runner's place in the fight, for their screen: is it their turn, what's left, can they act."""
+    t = load_tracker(cid)
+    e = entry_for(t, "player", pid)
+    if e is None:
+        return {"inCombat": False}
+    cur = current_entry(t)
+    major, minor = actions_left(e)
+    out = {"inCombat": True, "rolled": e.get("total") is not None, "myTurn": bool(cur and cur["id"] == e["id"]),
+           "round": t.get("round"), "majorLeft": major, "minorLeft": minor,
+           "canAttack": major > 0 or minor >= ACT.MINOR_PER_MAJOR, "why": "", "canCast": True}
+    if c is not None:
+        f = X.Fighter.from_char(e["name"], c)
+        out["canCast"] = out["canAttack"] and not act_block(f, attack=True, spell=True)
+        why = act_block(f, attack=True)
+        if why:
+            out["why"] = why
+            out["canAttack"] = False
+    if out["myTurn"] and not out["canAttack"] and not out["why"]:
+        out["why"] = "You have no Major Action left this round"
+    if e.get("surprised") and t.get("round") == 1:
+        out["why"] = out["why"] or "You're surprised: no actions in the first round"
+        out["canAttack"] = out["canCast"] = False
+    return out
+
+
 def player_tracker(cid):
     t = load_tracker(cid)
     if not (t["active"] and t["visible"]):
@@ -449,23 +501,7 @@ def combat_op(cid):
                 release_grapple(db, t, gone)
             t["entries"] = [x for x in t["entries"] if x["id"] != b.get("id")]
         elif op in ("next", "prev"):
-            n = len(t["entries"])
-            if n and op == "next":
-                cur = ordered(t)[min(t.get("turn", 0), n - 1)]
-                if cur.get("aim") and cur.get("aimTouch") != t["round"]:
-                    cur["aim"] = 0                       # a turn without Take Aim or an attack: the aim is lost
-            if n:
-                t["turn"] = t.get("turn", 0) + (1 if op == "next" else -1)
-                if t["turn"] >= n:
-                    t["turn"] = 0
-                    new_round(t)
-                    round_start(db, cid, t)
-                elif t["turn"] < 0:
-                    t["turn"] = n - 1
-                    t["round"] = max(1, t["round"] - 1)
-                order = ordered(t)
-                if op == "next" and order:
-                    order[t["turn"]]["dirt"] = False      # Hit the Dirt penalty ends as their turn comes up
+            step_turn(db, cid, t, op)
         elif op == "round":
             t["turn"] = 0
             new_round(t)
@@ -767,13 +803,41 @@ def _ref_key(ref):
     return f"{(ref or {}).get('kind')}:{(ref or {}).get('id')}"
 
 
+OUT_COLD = ("Unconscious", "Dying", "Dead", "Destroyed")
+NO_ACTIONS = ("Petrified", "Stilled")
+
+
+def act_block(f, attack=False, spell=False):
+    """Why this combatant can't act (or attack) right now, from their condition monitor and statuses; "" if
+    they can."""
+    if f.char is not None:
+        cond = (f.d or R.derive(f.char)).get("status")
+    else:
+        cond = X.marker_status(f.cm, f.npc)
+    if cond in OUT_COLD:
+        return f"{f.name} is {cond.lower()}"
+    for st in NO_ACTIONS:
+        if f.status(st):
+            return f"{f.name} is {st} and can't act"
+    if attack and f.status("Panicked"):
+        return f"{f.name} is Panicked and can only flee"
+    if attack and f.status("Restrained") and not spell:
+        return f"{f.name} is Restrained: they can only try to break free (or cast)"
+    return ""
+
+
 @app.route("/api/maps/<map_id>/attack", methods=["POST"])
 @gamemaster_required
 def gm_attack(map_id):
     """The GM resolves an attack (one target, or several with Multiple Attacks), rolling every test:
     attack, each target's Defense (with their defensive interrupt, cover, counterspelling), soak.
     Actions are taken from the initiative tracker and Edge for AR vs DR is awarded (2 per round at most)."""
-    b = body()
+    return resolve_attack_request(map_id, body())
+
+
+def resolve_attack_request(map_id, b, player=None, check=None):
+    """The attack itself, for the GM or (player = their id) a runner on their own turn. check(db, t, att,
+    targets) may refuse it with a message."""
     db = get_db()
     db.execute("BEGIN IMMEDIATE")
     try:
@@ -840,6 +904,14 @@ def gm_attack(map_id):
                     if w.get("category") == "Ram":
                         weapon["dv"] -= pen                # +1 DV per current Speed Interval
                         notes.append(f"ram at speed: +{-pen} DV")
+        if not force:
+            why = act_block(att, attack=True, spell=bool(weapon.get("spell")))
+            if why:
+                return _fail(db, why + "." + ("" if player else " Tick “Ignore action limits” to allow it anyway."))
+        if check:
+            why = check(db, t, att, targets)
+            if why:
+                return _fail(db, why)
         n = len(targets)
         called = ACT.CALLED_SHOTS.get(b.get("called") or "")
         if called and called.get("melee") and not weapon.get("melee"):
@@ -1169,7 +1241,10 @@ def gm_attack(map_id):
             if n > 1:
                 res["multi"] = f"{i + 1}/{n}"
             if cid:
-                add_roll(cid, None, "GM", GM_COLOR, "attack", res, hidden=bool(b.get("hidden")))
+                if player:          # the runner's own attack goes to the log under their name
+                    add_roll(cid, player, att.name, cache[player][0]["color"] if player in cache else GM_COLOR, "attack", res)
+                else:
+                    add_roll(cid, None, "GM", GM_COLOR, "attack", res, hidden=bool(b.get("hidden")))
             out.append(res)
         if b.get("apply", True):
             # attacking, or being attacked, ends stealth
@@ -1185,7 +1260,7 @@ def gm_attack(map_id):
     except BaseException:
         db.rollback()
         raise
-    return jsonify({"result": out[0], "results": out, "rolls": roll_rows(cid, gamemaster=True) if cid else []})
+    return jsonify({"result": out[0], "results": out, "rolls": roll_rows(cid, gamemaster=not player) if cid else []})
 
 
 def edge_once(t, entry, name, force=False):
@@ -1288,16 +1363,19 @@ def resolve_ongoing(db, cid, t):
 @gamemaster_required
 def gm_attack_options(map_id):
     """What a combatant can attack with (for the GM's attack dialog)."""
-    b = body()
+    try:
+        return jsonify(attack_options(map_id, body().get("who")))
+    except R.RuleError as e:
+        return err(str(e))
+
+
+def attack_options(map_id, who):
     db = get_db()
     mrow = db.execute("SELECT * FROM maps WHERE id=?", (map_id,)).fetchone()
     if not mrow:
-        return err("Map not found.", 404)
+        raise R.RuleError("Map not found.")
     data = json.loads(mrow["data"])
-    try:
-        f, ref = _fighter(db, mrow["campaign_id"], data, b.get("who"), {})
-    except R.RuleError as e:
-        return err(str(e))
+    f, ref = _fighter(db, mrow["campaign_id"], data, who, {})
     out = []
     if ref[0] == "player":
         c, d = f.char, f.d
@@ -1375,7 +1453,7 @@ def gm_attack_options(map_id):
     except R.RuleError:
         mdr = None
     t = load_tracker(cid) if cid else {"active": False}
-    return jsonify({"options": out, "dr": f.dr, "matrixDr": mdr, "astralDr": f.astral_dr(), "name": f.name, "edge": f.edge(), "defense": defense,
+    return ({"options": out, "dr": f.dr, "matrixDr": mdr, "block": act_block(f, attack=True), "blockSpell": act_block(f, attack=True, spell=True), "astralDr": f.astral_dr(), "name": f.name, "edge": f.edge(), "defense": defense,
                     "inCombat": e is not None, "majorLeft": major, "minorLeft": minor, "fullDefense": bool(e and e.get("fd")),
                     "dirt": bool(e and e.get("dirt")), "statuses": f.statuses, "cover": f.status("Cover"),
                     "counterspell": counterspell_on(t, e), "edgeSpent": bool(e and e.get("edgeRound") == t.get("round")),
@@ -1385,6 +1463,108 @@ def gm_attack_options(map_id):
                     "tacticalRoll": bool(e and t.get("active") and e.get("troll") is not None and t.get("round", 0) <= e["troll"] + 1),
                     "restrained": bool(f.status("Restrained")), "grapple": (e or {}).get("grapple"),
                     "wrestAgility": f.rank("Close Combat") + R._int(f.attrs.get("Agility"), 1), "strength": R._int(f.attrs.get("Strength"), 1)})
+
+
+# ====================================================================== a runner's own attacks and turn
+def _player_turn_check(db, t, att, targets):
+    if not t.get("active") or att.entry is None:
+        return "Attacks are made in combat: wait for the GM to start it."
+    if att.entry.get("total") is None:
+        return "Roll your initiative first."
+    cur = current_entry(t)
+    if not cur or cur["id"] != att.entry["id"]:
+        return "It's not your turn yet."
+    return ""
+
+
+def _visible_targets(me):
+    """[(ref, name)] of what this runner can see on their map and could attack."""
+    import maps as MP                       # maps imports this module
+    view = MP.player_view(me)
+    out = []
+    for mk in (view.get("map") or {}).get("markers") or []:
+        if mk.get("type") in SM.CREATURE_TYPES or mk.get("cm"):
+            out.append(({"kind": "marker", "id": mk["id"]}, mk.get("label") or "Enemy", mk.get("color")))
+    for o in view.get("others") or []:
+        out.append(({"kind": "player", "id": o["id"]}, o["name"], o.get("color")))
+    return out
+
+
+@app.route("/api/me/attack-options", methods=["GET"])
+@player_required
+@rate_limited("player_attack_opts", 60)
+def player_attack_options(me):
+    """The runner's weapons and spells, and who they can see to attack, with the sight line to each."""
+    if not me["current_map_id"]:
+        return err("You're not on a map.")
+    me_ref = {"kind": "player", "id": me["id"]}
+    try:
+        opts = attack_options(me["current_map_id"], me_ref)
+    except R.RuleError as e:
+        return err(str(e))
+    db = get_db()
+    mrow = db.execute("SELECT * FROM maps WHERE id=?", (me["current_map_id"],)).fetchone()
+    data = json.loads(mrow["data"])
+    sm = SM.map_sight(_map_dict(mrow, data), db)
+    targets = []
+    for ref, name, color in _visible_targets(me):
+        sg = sight(db, mrow, me_ref, ref, data, sm)
+        if not sg:
+            continue
+        mk = next((m for m in data.get("markers") or [] if m["id"] == ref["id"]), None) if ref["kind"] == "marker" else None
+        targets.append({"ref": ref, "name": name, "color": color, "los": sg["los"], "cover": sg["cover"], "meters": sg["meters"],
+                        "band": sg["band"], "see": sg["view"]["see"], "dark": sg["view"].get("dark"), "blind": sg["view"]["blind"],
+                        "light": sg.get("light"), "status": X.marker_status(mk.get("cm"), mk.get("npc")) if mk else None})
+    opts.pop("dr", None)
+    opts["targets"] = targets
+    opts["combat"] = my_combat(me["campaign_id"], me["id"], load_char(me))
+    return jsonify(opts)
+
+
+@app.route("/api/me/attack", methods=["POST"])
+@player_required
+@rate_limited("player_attack", 30)
+def player_attack(me):
+    """A runner attacks on their own turn: the same resolution as the GM's, against what they can see."""
+    b = body()
+    if not me["current_map_id"]:
+        return err("You're not on a map.")
+    seen = {(r["kind"], r["id"]) for r, _n, _c in _visible_targets(me)}
+    refs = []
+    for r in (b.get("targets") or [])[:8]:
+        k = ((r or {}).get("kind"), str((r or {}).get("id") or ""))
+        if k not in seen:
+            return err("You can't see that target.")
+        refs.append({"kind": k[0], "id": k[1]})
+    if not refs:
+        return err("Pick a target.")
+    clean = {"attacker": {"kind": "player", "id": me["id"]}, "targets": refs, "weapon": b.get("weapon"), "mode": b.get("mode"),
+             "range": "auto", "called": b.get("called"), "edgeAction": b.get("edgeAction"), "anticipation": bool(b.get("anticipation")),
+             "aimNow": bool(b.get("aimNow")), "trip": bool(b.get("trip")), "grapple": bool(b.get("grapple")),
+             "amp": clamp_int(b.get("amp"), 0, 10, 0), "astralType": b.get("astralType"), "wild": bool(b.get("wild")),
+             "apply": True, "hidden": False, "autoEdge": True}
+    return resolve_attack_request(me["current_map_id"], clean, player=me["id"], check=_player_turn_check)
+
+
+@app.route("/api/me/end-turn", methods=["POST"])
+@player_required
+@rate_limited("player_end_turn", 30)
+def player_end_turn(me):
+    """A runner done acting passes the turn on."""
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    t = load_tracker(me["campaign_id"])
+    e = entry_for(t, "player", me["id"])
+    cur = current_entry(t) if t.get("active") else None
+    if e is None or not cur or cur["id"] != e["id"]:
+        return _fail(db, "It's not your turn.")
+    step_turn(db, me["campaign_id"], t, "next")
+    save_tracker(me["campaign_id"], t)
+    nxt = current_entry(t)
+    add_roll(me["campaign_id"], me["id"], e["name"], e["color"], "note",
+             {"text": "ends their turn" + (f"; {nxt['name']} is next" if nxt and not nxt.get("hidden") and t.get("visible") else "") + "."})
+    db.commit()
+    return jsonify({"ok": True})
 
 
 # ====================================================================== statuses

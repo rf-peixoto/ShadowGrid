@@ -1212,6 +1212,7 @@ def player_view(me_row):
         cur_e = order[max(0, min(t.get("turn", 0), len(order) - 1))] if order else None
         ch = load_char(me_row)
         out["movement"] = MV.overlay(t, e, ch, R.derive(ch), cell_m, bool(cur_e and cur_e["id"] == e["id"]))
+    out["combat"] = fight.my_combat(p["campaignId"], p["id"], load_char(me_row)) if e is not None else {"inCombat": False}
     out["flashlight"] = {"has": bool(p.get("hasFlashlight")), "on": bool(ms.get("flashlight"))}
     out["templates"] = m["data"].get("templates") or []
     out["stealth"] = ST.player_info(p, m, {x["id"] for x in markers})

@@ -79,6 +79,18 @@ window.FPView = (() => {
         v.wallBase = v.floor;                          // walls keep the room's colour; overlays tint the floor only
         const ov = overlay && overlay.get(k);
         if (ov && ov[3] > 0.01) v.floor = mixc(v.floor, ov, Math.min(0.85, ov[3] * 1.35));
+        // edges that open onto what this runner hasn't explored: the fog creeps in over the floor there
+        if (view.mode === 'player') {
+          let m = 0;
+          for (let e = 0; e < G.edgeCount; e++) {
+            const n = G.neighbor(c, r, e), nk = key(n.c, n.r), nc = G.inBounds(n.c, n.r) ? cells[nk] : null;
+            if (nc && nc.fill && visibility(view, nk, nc) !== 'hidden') continue;
+            if (wallAt(v, e, n.c, n.r)) continue;
+            const d = GridCore.doorOnEdge(G, cells, c, r, e);
+            if (!d || d.open) m |= 1 << e;
+          }
+          v.fogE = m;
+        }
       }
       cellInfo.set(k, v);
       return v;
@@ -119,10 +131,10 @@ window.FPView = (() => {
       const door = from.room ? W.doorBetween(from, to) : null;
       const hx = px + dx * dist, hy = py + dy * dist;
       const u = side === 0 ? hy - Math.floor(hy) : hx - Math.floor(hx);
-      if (door && !door.open) return { dist, kind: 'door', door, u, side, from, smoke };
+      if (door && !door.open) return { dist, kind: 'door', door, u, side, from, smoke, hx, hy };
       if (!to.room) {
         const e = side === 0 ? (stepC > 0 ? 1 : 3) : (stepR > 0 ? 2 : 0);
-        return { dist, kind: to.unknown && !W.wallAt(from, e, c, r) ? 'fog' : 'wall', u, side, from, openDoor: door, smoke };
+        return { dist, kind: to.unknown && !W.wallAt(from, e, c, r) ? 'fog' : 'wall', u, side, from, openDoor: door, smoke, hx, hy };
       }
       if (to.smoke) smoke++;
       from = to;
@@ -152,13 +164,30 @@ window.FPView = (() => {
       const nb = G.neighbor(cur.c, cur.r, be), to = W.info(nb.c, nb.r);
       const door = from.room ? GridCore.doorOnEdge(G, W.cells, cur.c, cur.r, be) : null;
       if (door && !door.open) return { dist: best, kind: 'door', door, u: bu, side: be, edge: be, from, smoke };
-      if (!to.room) return { dist: best, kind: to.unknown && !W.wallAt(from, be, nb.c, nb.r) ? 'fog' : 'wall', u: bu, side: be, edge: be, from, openDoor: door, smoke };
+      if (!to.room) return { dist: best, kind: to.unknown && !W.wallAt(from, be, nb.c, nb.r) ? 'fog' : 'wall', u: bu, side: be, edge: be, from, openDoor: door, smoke, hx: px + dx * best, hy: py + dy * best };
       if (to.smoke) smoke++;
       cur = nb; from = to; t = best;
     }
     return { dist: MAX_DIST, kind: 'far', smoke };
   }
 
+  /* how much fog covers a floor point near an edge that opens onto unexplored ground (0..0.9) */
+  const HEXDEG = [30, 90, 150, 210, 270, 330];
+  function fogCreep(G, cell, fx, fy, hex) {
+    let k = 0;
+    if (!hex) {
+      const ex = Math.min(1, Math.max(0, fx - cell.c)), ey = Math.min(1, Math.max(0, fy - cell.r)), d = [ey, 1 - ex, 1 - ey, ex];
+      for (let e = 0; e < 4; e++) if (cell.fogE & (1 << e)) k = Math.max(k, 1 - d[e] / 0.75);
+    } else {
+      const ctr = G.cellCenter(cell.c, cell.r), dx = fx - ctr.x / G.cs, dy = fy - ctr.y / G.cs;
+      const ang = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
+      let e = 0, best = 999;
+      for (let i = 0; i < 6; i++) { const dd = Math.abs(((ang - HEXDEG[i] + 540) % 360) - 180); if (dd < best) { best = dd; e = i; } }
+      if (cell.fogE & (1 << e)) k = (Math.hypot(dx, dy) - 0.1) / 0.45;
+    }
+    k = Math.max(0, Math.min(1, k));
+    return k * k * 0.9;
+  }
   /* smooth 2D value noise for the fog curtain */
   function fogNoise(x, y) {
     const h = (i, j) => { const t = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return t - Math.floor(t); };
@@ -238,13 +267,21 @@ window.FPView = (() => {
             const ex = fx - Math.floor(fx), ey = fy - Math.floor(fy), w = 0.025 + rowDist * 0.004;
             if (ex < w || ex > 1 - w || ey < w || ey > 1 - w) floor = mixc(floor, gridC, 0.7);
           }
-        } else { floor = fogC; ceil = sky; }
+          if (cell.fogE) {
+            const k = fogCreep(G, cell, fx, fy, hex);
+            if (k > 0) { floor = mixc(floor, fogC, k); ceil = mixc(ceil, fogC, k); }
+          }
+        } else if (cell.unknown) { floor = fogC; ceil = fogC; }
+        else { floor = fogC; ceil = sky; }
         const f = mixc(floor, fogC, fog), cc = mixc(ceil, fogC, fog);
         let i = (y * RW + x) * 4; data[i] = f[0]; data[i + 1] = f[1]; data[i + 2] = f[2]; data[i + 3] = 255;
         i = (yc * RW + x) * 4; data[i] = cc[0]; data[i + 1] = cc[1]; data[i + 2] = cc[2]; data[i + 3] = 255;
       }
     }
-    if (RH % 2 === 1) { const y = Math.floor(half); for (let x = 0; x < RW; x++) { const i = (y * RW + x) * 4; data[i] = fogC[0]; data[i + 1] = fogC[1]; data[i + 2] = fogC[2]; data[i + 3] = 255; } }
+    // the rows at the horizon the floor pass doesn't reach (the floor is infinitely far there): fog
+    for (let y = Math.max(0, Math.floor(half) - 1); y <= Math.min(RH - 1, Math.floor(half)); y++) {
+      for (let x = 0; x < RW; x++) { const i = (y * RW + x) * 4; data[i] = fogC[0]; data[i + 1] = fogC[1]; data[i + 2] = fogC[2]; data[i + 3] = 255; }
+    }
 
     // ---- walls and doors
     for (let x = 0; x < RW; x++) {
@@ -266,9 +303,9 @@ window.FPView = (() => {
         for (let y = fy0; y <= fy1; y++) {
           const v = (y - (top - ext)) / (bot + ext * 0.25 - (top - ext));
           const edge = Math.min(1, Math.min(v, 1 - v) * 3.2);
-          const n = fogNoise(x * 0.09 + px * 3.1 + a * 9, y * 0.11);
-          const al = Math.min(1, (0.7 + 0.45 * near) * edge * (0.8 + 0.4 * n));
-          const i = (y * RW + x) * 4, c = mixc(fogC, [140, 160, 166], 0.12 + 0.18 * n);
+          const n = fogNoise((hit.hx + hit.hy) * 2.3, v * 3.2);   // anchored to the boundary: no swimming as you turn
+          const al = Math.min(1, edge * 1.6) * (0.9 + 0.1 * n);
+          const i = (y * RW + x) * 4, c = mixc(fogC, [150, 168, 172], 0.03 + 0.09 * n * (0.4 + 0.6 * near));
           data[i] = data[i] + (c[0] - data[i]) * al; data[i + 1] = data[i + 1] + (c[1] - data[i + 1]) * al; data[i + 2] = data[i + 2] + (c[2] - data[i + 2]) * al;
         }
         continue;
@@ -277,10 +314,12 @@ window.FPView = (() => {
       // facets: square walls by side, hex walls by the direction their edge faces (light from the north-west)
       const shade = hex ? 0.7 + 0.3 * Math.max(0, Math.cos((60 * (hit.edge || 0) + 30) * Math.PI / 180 + 2.1)) : (hit.side ? 0.78 : 1);
       const fog = Math.min(1, Math.pow(dist / FOG_DIST, 1.15) + 0.22 * (hit.smoke || 0));
+      // walls fade into the fog where their room opens onto unexplored ground
+      const creep = hit.kind === 'wall' && hit.from && hit.from.fogE && hit.hx != null ? fogCreep(G, hit.from, hit.hx, hit.hy, hex) : 0;
       for (let y = y0; y <= y1; y++) {
         const v = (y - top) / (bot - top);
         let c = wallColor(hit, v, colors);
-        c = mixc([c[0] * shade, c[1] * shade, c[2] * shade], fogC, fog);
+        c = mixc([c[0] * shade, c[1] * shade, c[2] * shade], fogC, Math.min(1, fog + creep));
         const i = (y * RW + x) * 4; data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 255;
       }
     }

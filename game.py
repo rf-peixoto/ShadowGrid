@@ -1276,6 +1276,10 @@ def me_roll(me):
         pool = {}
         if key:
             pool = R.pool_by_key(c, key, d)
+            if key.startswith(("weapon:", "natural:")) or (key.startswith("spell:") and pool.get("combat")):
+                import fight
+                if fight.entry_for(fight.load_tracker(row["campaign_id"]), "player", row["id"]) is not None:
+                    raise R.RuleError("In combat you attack with the Attack button, on your turn: the defense and damage are rolled with it.")
             parts = [list(p) for p in pool["parts"]]
             label = pool["label"]
             if key.startswith("weapon:") and key != "weapon:unarmed":

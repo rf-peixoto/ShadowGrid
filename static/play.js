@@ -117,6 +117,119 @@ function renderHandouts() {
     empty: h('div.card.empty', h('h3', 'No handouts yet'), h('p', 'When your GM shares a dossier, a picture or a message, it appears here.')),
   });
 }
+// ================================================================ combat: attacks on your turn, ending it
+function myCombat() { return (S.st && S.st.view && S.st.view.combat) || { inCombat: false }; }
+/* in combat, weapons and combat spells attack through the attack dialog, and only on your turn */
+function combatGate(pool) {
+  const cb = myCombat();
+  if (!cb.inCombat || !pool || !(pool.weapon || (pool.spell && pool.combat))) return null;
+  const g = { label: pool.spell ? 'Cast at a target…' : 'Attack…', locked: true, reason: '' };
+  if (!cb.rolled) g.reason = 'Roll your initiative first.';
+  else if (!cb.myTurn) g.reason = 'Your attack unlocks on your turn.';
+  else if (!(pool.spell ? cb.canCast : cb.canAttack)) g.reason = cb.why || 'You have no Major Action left this round.';
+  else { g.locked = false; g.onClick = () => attackDialog(pool.key); }
+  return g;
+}
+async function endTurn() {
+  if (!await UI.confirm('End your turn? The next combatant acts.', { ok: 'End turn' })) return;
+  try { await post('end-turn'); toast('Turn ended.'); refresh(true); } catch (e) { toast(e.message); }
+}
+/* the runner defines their attack; the server rolls attack, defense and soak like the GM's dialog */
+async function attackDialog(preset) {
+  let o;
+  try { o = await api('/api/me/attack-options'); } catch (e) { toast(e.message); return; }
+  const RULES = SR.CAT.combat;
+  if (!o.targets.length) { toast('There is nobody in sight to attack.'); return; }
+  const usable = o.options;
+  const weapon = h('select', usable.map(x => option(x.key, `${x.name} · ${x.pool} dice · DV ${x.dv}`, x.key === preset)));
+  const mode = h('select');
+  const cur = () => usable.find(x => x.key === weapon.value) || {};
+  const chosen = new Set();
+  const first = o.targets.find(t => t.los && t.see && !['Dead', 'Dying', 'Unconscious'].includes(t.status)) || o.targets[0];
+  chosen.add(`${first.ref.kind}:${first.ref.id}`);
+  const tgtBox = h('div.attack-targets');
+  const called = h('select', option('', 'No called shot'), Object.entries(RULES.calledShots).map(([k, v]) => option(k, `${v.name}${v.edge ? ` · ${v.edge} Edge` : ''}`)));
+  const eaSel = h('select', option('', 'No Edge action'), Object.entries(RULES.edgeActions || {}).map(([k, v]) => h('option', { value: k, title: v.desc }, `${v.name} · ${v.edge} Edge`)));
+  const chk = title => h('input', { type: 'checkbox', title });
+  const aimNow = chk(RULES.takeAim.desc), trip = chk(RULES.trip.desc), grapple = chk('Unarmed: hold them instead of hurting them'), anticip = chk(RULES.anticipation.desc), wild = chk();
+  const amp = h('input', { type: 'number', min: 0, max: 10, value: 0, style: { width: '4rem' } });
+  const astType = h('select', option('S', 'Stun'), option('P', 'Physical'));
+  const info = h('p.attack-info');
+  const sightText = t => {
+    if (!t.los) return h('span.bad', 'no line of sight');
+    if (!t.see) return h('span.bad', t.dark ? 'too dark to see' : 'you can’t see them');
+    return h('span', `${t.band} · ${t.meters} m`, t.cover ? h('span.warn', ` · Cover ${'I II III IV'.split(' ')[t.cover - 1]}`) : null,
+      t.blind ? h('span.warn', ` · smoke −${3 * t.blind}`) : null, t.light && t.light !== 'bright' ? h('span.hint', ` · ${t.light}`) : null);
+  };
+  function drawTargets() {
+    tgtBox.innerHTML = '';
+    for (const t of o.targets) {
+      const k = `${t.ref.kind}:${t.ref.id}`;
+      const cb = h('input', { type: 'checkbox', checked: chosen.has(k), onchange: e => { if (e.target.checked) chosen.add(k); else chosen.delete(k); describe(); } });
+      tgtBox.append(h('label.check.attack-target', cb, h('span.dot', { style: { background: t.color || '#888' } }), h('b', t.name),
+        t.status && t.status !== 'OK' ? h('span.hint', ` (${t.status})`) : null, ' ', sightText(t)));
+    }
+  }
+  function drawModes() {
+    const w = cur();
+    mode.innerHTML = '';
+    (w.modes || []).forEach(m => mode.append(option(m, `${m} · ${SR.CAT.store.firingModes[m].name}`)));
+    mode.disabled = !(w.modes || []).length;
+    const ranged = !w.melee && !w.spell && !w.astral && !w.matrix;
+    aimNow.disabled = !ranged || !!o.aimedThisRound; if (aimNow.disabled) aimNow.checked = false;
+    trip.disabled = !w.melee; if (trip.disabled) trip.checked = false;
+    grapple.disabled = !(w.melee && /unarmed/i.test(w.key + ' ' + w.name)); if (grapple.disabled) grapple.checked = false;
+    amp.disabled = !w.spell; astType.disabled = !w.astral;
+    // only what this weapon can use
+    modeLab.hidden = mode.disabled; ampLab.hidden = !w.spell; astLab.hidden = !w.astral;
+    aimLab.hidden = !ranged; tripLab.hidden = !w.melee; grappleLab.hidden = grapple.disabled;
+    describe();
+  }
+  function describe() {
+    const w = cur(), n = chosen.size, t0 = o.targets.find(t => chosen.has(`${t.ref.kind}:${t.ref.id}`));
+    const parts = [];
+    if (t0 && w.ar) {
+      const i = SR.RANGES.indexOf(t0.band), fm = !mode.disabled && mode.value ? SR.CAT.store.firingModes[mode.value] : null;
+      let ar = w.ar[i];
+      if (ar != null && fm) ar = Math.max(0, ar + fm.ar);
+      parts.push(ar == null && !w.spell && !w.astral ? `can’t reach ${t0.name} at ${t0.band} range` : `AR ${ar ?? '–'} at ${t0.band}`);
+    }
+    const cs = RULES.calledShots[called.value];
+    let pool = w.pool + (cs ? cs.dice : 0);
+    if (n > 1 && !anticip.checked) pool = Math.floor(pool / n);
+    parts.push(`${pool} dice${n > 1 ? ` per target (${n} targets)` : ''}`);
+    const acts = ['1 Major'].concat(n > 1 && mode.value !== 'FA' ? ['1 Minor (Multiple Attacks)'] : [], cs && cs.minor ? ['1 Minor (called shot)'] : [],
+      o.cover ? ['1 Minor (out of cover)'] : [], trip.checked ? ['1 Minor (Trip)'] : [], aimNow.checked ? ['1 Minor (Take Aim)'] : []);
+    parts.push(`uses ${acts.join(' + ')}; you have ${o.majorLeft ?? '–'} Major, ${o.minorLeft ?? '–'} Minor`);
+    const ea = (RULES.edgeActions || {})[eaSel.value], edge = (cs ? cs.edge : 0) + (n > 1 && anticip.checked ? RULES.anticipation.edge : 0) + (ea ? ea.edge : 0);
+    if (edge) parts.push(`costs ${edge} Edge (you have ${o.edge})`);
+    if (w.clip) parts.push(`${w.loaded}/${w.clip} loaded`);
+    anticip.disabled = n < 2; if (anticip.disabled) anticip.checked = false;
+    info.textContent = parts.join(' · ');
+  }
+  weapon.onchange = drawModes;
+  for (const el of [mode, called, eaSel, aimNow, trip, anticip]) el.addEventListener('change', describe);
+  const modeLab = h('label', 'Firing mode', mode), ampLab = h('label', 'Amp Up', amp), astLab = h('label', 'Astral damage', astType);
+  const aimLab = h('label.check', aimNow, 'Take Aim first (Minor)'), tripLab = h('label.check', trip, 'Trip (Minor)'), grappleLab = h('label.check', grapple, 'Grapple');
+  drawTargets(); drawModes();
+  const body = h('div',
+    h('div.form-grid', h('label', 'Weapon / spell', weapon), modeLab),
+    h('h3.mt', 'Target'), h('p.hint', 'Tick more than one for Multiple Attacks (your dice are split).'), tgtBox, info,
+    h('div.form-grid.mt', h('label', 'Called shot', called), h('label', 'Edge action', eaSel)),
+    h('div.row', aimLab, tripLab, grappleLab,
+      h('label.check', anticip, `Anticipation (${RULES.anticipation.edge} Edge)`), h('label.check', wild, 'Wild Die'), ampLab, astLab),
+    h('p.hint', 'The defense and the damage are rolled at once and land in the table log.'));
+  if (!await UI.modal('Attack', body, { ok: 'Attack', wide: true })) return;
+  const targets = o.targets.filter(t => chosen.has(`${t.ref.kind}:${t.ref.id}`)).map(t => t.ref);
+  if (!targets.length) { toast('Pick a target.'); return; }
+  try {
+    const r = await post('attack', { targets, weapon: weapon.value, mode: mode.disabled ? null : mode.value, called: called.value || null, edgeAction: eaSel.value || null,
+      anticipation: anticip.checked, aimNow: aimNow.checked, trip: trip.checked, grapple: grapple.checked, wild: wild.checked, amp: +amp.value || 0, astralType: astType.value });
+    toast(r.results.map(x => x.summary).join(' '), 7000);
+    refresh(true);
+    if (sheetUI) sheetUI.reload();
+  } catch (e) { toast(e.message, 5000); }
+}
 function onSheet(sh) {
   S.sheet = sh;
   if (S.st) { Object.assign(S.st.me, sh.player); renderChips(); }
@@ -257,6 +370,8 @@ function applyView(v) {
   if (!S.fitted || S.lastMapId !== m.id) { if (S.view === 'map' && wrap.clientWidth && wrap.clientHeight) { focusToken(); S.fitted = true; S.lastMapId = m.id; } }
   applyForcedView();
   renderActions(); renderTactics(); renderLegend(); renderTracker();
+  const csig = JSON.stringify(v.combat || null);
+  if (csig !== S.combatSig) { S.combatSig = csig; if (mapRoller) mapRoller.render(); }
   if (sceneChanged) invalidate(); else requestDraw();
 }
 /* initiative order, when the GM shows it */
@@ -278,6 +393,7 @@ function renderTracker() {
   const note = $('p-turn-note');
   note.className = 'strip-note' + (me && me.current ? ' your-turn' : '');
   note.textContent = !me ? '' : me.total == null ? 'Roll your initiative in the dice panel.' : me.current ? 'Your turn!' : '';
+  if (me && me.current && me.total != null) note.append(' ', h('button.small', { type: 'button', onclick: endTurn, title: 'Done acting: the next combatant goes' }, 'End turn'));
   const cur = el.querySelector('.current'); if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 /* fit the map, then zoom in on our own token so the explored area is readable */
@@ -494,6 +610,16 @@ function renderTactics() {
   $('p-tactics-block').hidden = !(v && v.map && v.token);
   el.innerHTML = '';
   if (!v || !v.map || !v.token) return;
+  // your turn in combat: attack and end the turn here
+  const cb = v.combat || {};
+  if (cb.inCombat && cb.rolled) {
+    el.append(h('div.tac-turn' + (cb.myTurn ? '.mine' : ''),
+      h('span', cb.myTurn ? `Your turn: ${cb.majorLeft} Major, ${cb.minorLeft} Minor left` : 'Waiting for your turn.'),
+      cb.myTurn ? h('div.row.tight',
+        h('button.primary', { type: 'button', disabled: !(cb.canAttack || cb.canCast), title: cb.why || '', onclick: () => attackDialog() }, 'Attack…'),
+        h('button', { type: 'button', onclick: endTurn }, 'End turn')) : null,
+      cb.myTurn && cb.why ? h('p.hint', cb.why + '.') : null));
+  }
   // movement this turn
   const mv = v.movement;
   if (mv) {
@@ -881,7 +1007,7 @@ async function boot() {
       openStore: cat => { if (cat) setStoreCat(cat); setView('store'); }, log: () => (S.st ? S.st.rolls : []), onRolled });
     await sheetUI.load();
     S.sheetRev = S.st.sheetRev;
-    mapRoller = SR.roller({ compact: true, getSheet: () => S.sheet, post, onRolled });
+    mapRoller = SR.roller({ compact: true, getSheet: () => S.sheet, post, onRolled, gate: combatGate });
     $('p-roller').append(mapRoller); mapRoller.render();
     Wiki($('wiki'), CAT.wiki);
     const first = location.hash.slice(1) || (S.st.me.status !== 'approved' && !S.st.view.map ? 'sheet' : 'map');

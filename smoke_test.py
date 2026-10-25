@@ -426,6 +426,7 @@ check(r.status_code == 200 and res["ar"] == 8 and res["dr"] == 6, "GM attack: se
 check(item(j(pl.get("/api/me/sheet")), "Ares Predator VI")["loaded"]["rounds"] == 13, "GM attack spends the runner's ammo")
 mk = next(m for m in j(gm.get(f"/api/maps/{mid}"))["data"]["markers"] if m["id"] == "e2")
 check(mk["cm"]["p"] == res.get("damage", 0) or mk["cm"]["p"] == mk["cm"]["pm"], "damage applied to the marker monitor")
+gm.post(f"/api/maps/{mid}/marker", json={"id": "e2", "cm": dict(mk["cm"], p=0, s=0)}, headers=H)      # back on its feet to shoot back
 r = gm.post(f"/api/maps/{mid}/attack", json={"attacker": {"kind": "marker", "id": "e2"}, "weapon": "0", "range": "Near",
                                              "target": {"kind": "player", "id": pid}, "attackMod": 30}, headers=H)
 res = j(r)["result"]
@@ -526,7 +527,17 @@ gm.post(f"/api/games/{cid}/combat", json={"op": "start", "players": [pid], "mapI
 P, G1, G2, G3, D0 = ({"kind": "player", "id": pid}, {"kind": "marker", "id": "g1"}, {"kind": "marker", "id": "g2"},
                      {"kind": "marker", "id": "g3"}, {"kind": "marker", "id": "d0"})
 gun = f"weapon:{pred['uid']}"
-atk = lambda **kw: gm.post(f"/api/maps/{arena}/attack", json=dict({"range": "Near", "mode": "SA"}, **kw), headers=H)  # noqa: E731
+def atk(**kw):
+    """The GM's attack in the arena; the attacker is patched up first (the out cold can't attack)."""
+    a_ = kw.get("attacker") or {}
+    if a_.get("kind") == "player":
+        for tr_ in ("physical", "stun"):
+            gm.post(f"/api/players/{a_['id']}/sheet/action", json={"action": "set_damage", "track": tr_, "value": 0}, headers=H)
+    elif a_.get("kind") == "marker":
+        mk_ = next((m for m in j(gm.get(f"/api/maps/{arena}"))["data"]["markers"] if m["id"] == a_["id"]), {})
+        if mk_.get("cm"):
+            gm.post(f"/api/maps/{arena}/marker", json={"id": a_["id"], "cm": dict(mk_["cm"], p=0, s=0)}, headers=H)
+    return gm.post(f"/api/maps/{arena}/attack", json=dict({"range": "Near", "mode": "SA"}, **kw), headers=H)
 entry = lambda ref: next(e for e in j(gm.get(f"/api/games/{cid}/combat"))["tracker"]["entries"] if e["ref"] == ref)  # noqa: E731
 r = atk(attacker=P, weapon=gun, targets=[D0])
 check(r.status_code == 200 and entry(pid)["majorLeft"] == 0, "an attack uses the attacker's Major Action")
@@ -631,6 +642,8 @@ r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": DK, "weapon": "matrix
 res = j(r)["result"]
 check(r.status_code == 200 and res["track"] == "matrix" and any(p_[0] == "Rating × 2" for p_ in res["defense"]["parts"]), "Data Spike vs IC: Matrix defense and damage")
 check(j(gm.get(f"/api/players/{dkid}/sheet"))["derived"]["matrix"]["os"] == res["defense"]["hits"], "attacking IC raises Overwatch")
+ic = next(m for m in j(gm.get(f"/api/maps/{arena}"))["data"]["markers"] if m["id"] == "d0")
+gm.post(f"/api/maps/{arena}/marker", json={"id": "d0", "cm": dict(ic["cm"], p=0, s=0)}, headers=H)       # the spike may have crashed it
 r = gm.post(f"/api/maps/{arena}/attack", json={"attacker": D0, "weapon": "0", "targets": [DK], "attackMod": 20}, headers=H)
 res = j(r)["result"]
 dsh = j(gm.get(f"/api/players/{dkid}/sheet"))
@@ -1387,6 +1400,72 @@ r = pl.post("/api/me/move", json={"c": 1, "r": 1}, headers=H)
 check(r.status_code == 400, "and nobody walks through it")
 gm.post(f"/api/players/{pid}/place", json={"mapId": mid, "c": 2, "r": 2}, headers=H)
 gm.delete(f"/api/maps/{wm}", headers=H)
+# a runner's own turn: attack, actions, condition, ending the turn
+for tr_ in ("physical", "stun"):
+    gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_damage", "track": tr_, "value": 0}, headers=H)
+for st_ in ("Prone", "Blinded", "Restrained", "Panicked", "Petrified", "Stilled"):
+    gm.post(f"/api/maps/{mid}/status", json={"target": {"kind": "player", "id": pid}, "status": st_, "on": False}, headers=H)
+cm_ = {f"{c},{r}": {"fill": "#123"} for c in range(1, 8) for r in range(1, 4)}
+am = j(gm.post("/api/maps", json={"name": "Arena", "campaignId": cid, "width": 9, "height": 5, "data": {"cells": cm_, "markers": [
+    {"id": "foe", "c": 3, "r": 2, "type": "danger", "label": "Foe", "cm": {"pm": 10, "sm": 10, "p": 0, "s": 0},
+     "npc": {"attrs": {"Body": 3, "Agility": 3, "Reaction": 3, "Strength": 3, "Willpower": 3, "Logic": 3, "Intuition": 3, "Charisma": 3}, "dr": 2, "skills": {}}}], "rooms": []}}, headers=H))["id"]
+gm.post(f"/api/players/{pid}/place", json={"mapId": am, "c": 2, "r": 2}, headers=H)
+gm.post(f"/api/maps/{am}/reveal", json={"players": [pid], "cells": list(cm_), "action": "reveal"}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": "melee-combat-axe"}, headers=H)
+axe = next(i for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i["name"] == "Combat Axe")
+r = pl.post("/api/me/attack", json={"targets": [{"kind": "marker", "id": "foe"}], "weapon": "weapon:" + axe["uid"]}, headers=H)
+check(r.status_code == 400 and "combat" in j(r)["error"], "outside combat, runners don't resolve attacks", j(r))
+gm.post(f"/api/games/{cid}/combat", json={"op": "start", "players": [pid], "mapId": am, "markers": ["foe"], "roll": True, "visible": True}, headers=H)
+cv = j(pl.get("/api/me/state"))["view"]["combat"]
+check(cv["inCombat"] and not cv["rolled"], "in combat, the runner rolls initiative first", cv)
+pl.post("/api/me/initiative", json={}, headers=H)
+ents = j(gm.get(f"/api/games/{cid}/combat"))["tracker"]["entries"]
+me_e = next(e for e in ents if e["ref"] == pid)
+foe_e = next(e for e in ents if e["ref"] == "foe")
+gm.post(f"/api/games/{cid}/combat", json={"op": "turn", "id": foe_e["id"]}, headers=H)
+cv = j(pl.get("/api/me/state"))["view"]["combat"]
+check(cv["rolled"] and not cv["myTurn"], "the runner waits for their turn", cv)
+r = pl.post("/api/me/attack", json={"targets": [{"kind": "marker", "id": "foe"}], "weapon": "weapon:" + axe["uid"]}, headers=H)
+check(r.status_code == 400 and "not your turn" in j(r)["error"], "no attacking out of turn", j(r))
+r = pl.post("/api/me/end-turn", json={}, headers=H)
+check(r.status_code == 400, "nor ending someone else's turn")
+gm.post(f"/api/games/{cid}/combat", json={"op": "turn", "id": me_e["id"]}, headers=H)
+cv = j(pl.get("/api/me/state"))["view"]["combat"]
+check(cv["myTurn"] and cv["canAttack"], "on their turn the attack unlocks", cv)
+ao = j(pl.get("/api/me/attack-options"))
+check(any(t_["ref"]["id"] == "foe" and t_["los"] for t_ in ao["targets"]) and "dr" not in ao, "the attack dialog lists who they can see (not the enemy's stats)", ao.get("targets"))
+r = pl.post("/api/me/roll", json={"key": "weapon:" + axe["uid"]}, headers=H)
+check(r.status_code == 400 and "Attack button" in j(r)["error"], "in combat, a weapon isn't rolled bare from the dice panel", j(r))
+r = pl.post("/api/me/attack", json={"targets": [{"kind": "marker", "id": "nobody"}], "weapon": "weapon:" + axe["uid"]}, headers=H)
+check(r.status_code == 400, "only targets the runner can see")
+r = pl.post("/api/me/attack", json={"targets": [{"kind": "marker", "id": "foe"}], "weapon": "weapon:" + axe["uid"]}, headers=H)
+res = j(r).get("result") or {}
+check(r.status_code == 200 and res.get("summary") and "attack" in res, "the runner attacks: defense and damage rolled at once", j(r))
+check(not any(x.get("hidden") for x in j(r)["rolls"]), "and gets the players' log back, not the GM's")
+cv = j(pl.get("/api/me/state"))["view"]["combat"]
+check(cv["majorLeft"] == 0 and not cv["canAttack"] and "Major" in cv["why"], "the Major Action is spent: no second attack", cv)
+r = pl.post("/api/me/attack", json={"targets": [{"kind": "marker", "id": "foe"}], "weapon": "weapon:" + axe["uid"]}, headers=H)
+check(r.status_code == 400 and "Major" in j(r)["error"], "the server agrees", j(r))
+r = gm.post(f"/api/maps/{am}/attack", json={"attacker": {"kind": "player", "id": pid}, "weapon": "weapon:" + axe["uid"], "target": {"kind": "marker", "id": "foe"}}, headers=H)
+check(r.status_code == 400 and "Major" in j(r)["error"], "the GM can't attack with them either", j(r))
+r = gm.post(f"/api/maps/{am}/attack", json={"attacker": {"kind": "player", "id": pid}, "weapon": "weapon:" + axe["uid"], "target": {"kind": "marker", "id": "foe"}, "ignoreActions": True, "apply": False}, headers=H)
+check(r.status_code == 200, "unless the GM ignores the action limits")
+r = pl.post("/api/me/end-turn", json={}, headers=H)
+t_ = j(gm.get(f"/api/games/{cid}/combat"))["tracker"]
+check(r.status_code == 200 and t_["current"] != me_e["id"], "the runner ends their turn", t_.get("current"))
+gm.post(f"/api/maps/{am}/marker", json={"id": "foe", "cm": {"pm": 10, "sm": 10, "p": 0, "s": 10}}, headers=H)
+r = gm.post(f"/api/maps/{am}/attack", json={"attacker": {"kind": "marker", "id": "foe"}, "weapon": "-1", "target": {"kind": "player", "id": pid}}, headers=H)
+check(r.status_code == 400 and "unconscious" in j(r)["error"], "an unconscious enemy can't attack", j(r))
+gm.post(f"/api/maps/{am}/marker", json={"id": "foe", "cm": {"pm": 10, "sm": 10, "p": 0, "s": 0}}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "round"}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "turn", "id": me_e["id"]}, headers=H)
+gm.post(f"/api/maps/{am}/status", json={"target": {"kind": "player", "id": pid}, "status": "Stilled", "on": True}, headers=H)
+cv = j(pl.get("/api/me/state"))["view"]["combat"]
+check(not cv["canAttack"] and "Stilled" in cv["why"], "Stilled: no attack", cv)
+gm.post(f"/api/maps/{am}/status", json={"target": {"kind": "player", "id": pid}, "status": "Stilled", "on": False}, headers=H)
+gm.post(f"/api/games/{cid}/combat", json={"op": "end"}, headers=H)
+gm.post(f"/api/players/{pid}/place", json={"mapId": mid, "c": 2, "r": 2}, headers=H)
+gm.delete(f"/api/maps/{am}", headers=H)
 from sr import npc6e as N6  # noqa: E402
 from sr import combat as X  # noqa: E402
 check(X.npc_vision(X.parse_template(next(t for t in N6.NPC_TEMPLATES if t["name"].startswith("Sons of Sauron")))) == ["Low-light"], "an ork NPC sees in low light")

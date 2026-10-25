@@ -875,7 +875,7 @@ function renderPlayers() {
   Layout.refresh();
   if (S.viewAs && !S.ctx.players.some(p => p.id === S.viewAs)) S.viewAs = '';
   renderViewAs(); refreshFogPanel();
-  const sig = JSON.stringify([S.viewAs, S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses, p.state && p.state.stealth])]);
+  const sig = JSON.stringify([S.viewAs, S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses, p.state && p.state.stealth]), S.tracker && S.tracker.active ? S.tracker.entries.map(e => [e.ref, e.majorLeft, e.minorLeft]) : null]);
   const typing = document.activeElement && $('player-list').contains(document.activeElement) && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (sig === S.playersSig || typing) return;
   S.playersSig = sig;
@@ -893,7 +893,7 @@ function renderPlayers() {
       h('div.row.tight', { style: { flexWrap: 'nowrap' } }, sw, h('a.grow', { href: `/game/${S.ctx.campaign.id}/sheet/${p.id}`, target: '_blank', title: 'Open the character sheet' }, p.name), rad),
       p.status !== 'approved' ? h('div', SR.statusTag(p.status)) : null,
       cmLine, stLine, stealthLine(p),
-      here ? h('div.row.tight', h('button.small', { type: 'button', onclick: () => attackDialog({ kind: 'player', id: p.id }) }, '⚔ Attack…'),
+      here ? h('div.row.tight', attackButton('player', p.id),
         h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, { kind: 'player', id: p.id }) }, 'Attack them…')) : null,
       h('div.row.tight.between', h('span.hint', here ? 'On this map' : elsewhere ? `On ${elsewhere.name}` : 'Not placed'),
         h('span.row.tight',
@@ -1022,7 +1022,7 @@ function renderInspector() {
     }));
     if (S.ctx.campaign && (m.type === 'npc' || m.npc)) row.appendChild(h('div.row.tight', h('button.small.ghost', { type: 'button', title: 'Every runner in the game gets them as a contact (free, confirmed); you set Connection, Loyalty and what they can source',
       onclick: () => SR.editSharedContact(S.ctx.campaign.id, { name: m.label || '', notes: m.info || '', connection: 1, loyalty: 1, supply: [] }).catch(e => toast(e.message)) }, '🤝 Give as a contact to every runner')));
-    if (S.mode === 'play' && S.ctx.campaign) row.appendChild(h('div.row.tight', h('button.small', { type: 'button', onclick: () => attackDialog({ kind: 'marker', id: m.id }) }, '⚔ Attack…'),
+    if (S.mode === 'play' && S.ctx.campaign) row.appendChild(h('div.row.tight', attackButton('marker', m.id),
       h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, { kind: 'marker', id: m.id }) }, 'Attack it…'),
       S.tracker && S.tracker.active && !S.tracker.entries.some(e => e.ref === m.id) ? h('button.small.ghost', { type: 'button', onclick: () => trackerOp('add', { mapId: MAP_ID, markers: [m.id], roll: true }) }, '+ Initiative') : null));
     if (S.mode === 'edit') {
@@ -1144,7 +1144,7 @@ async function setStatus(target, status, on, value) {
 // ------------------------------------------------------------ combat: initiative tracker
 async function trackerOp(op, body = {}) {
   if (!S.ctx.campaign) return;
-  try { const r = await api(`/api/games/${S.ctx.campaign.id}/combat`, 'POST', { op, ...body }); S.tracker = r.tracker; renderCombat(); if (r.message) toast(r.message); }
+  try { const r = await api(`/api/games/${S.ctx.campaign.id}/combat`, 'POST', { op, ...body }); S.tracker = r.tracker; renderCombat(); renderPlayers(); if (S.selected) renderInspector(); if (r.message) toast(r.message); }
   catch (e) { toast(e.message); }
 }
 function combatants() {
@@ -1213,7 +1213,7 @@ function chipMenu(e, anchor) {
     h('button', { type: 'button', onclick: act(() => { trackerOp('turn', { id: e.id }); focusCombatant(e); }) }, 'Make it their turn'),
     h('button', { type: 'button', onclick: act(() => focusCombatant(e)) }, 'Show on the map'),
     h('button', { type: 'button', onclick: act(() => trackerOp('roll', { id: e.id })) }, 'Roll initiative'),
-    e.kind !== 'custom' ? h('button', { type: 'button', onclick: act(() => attackDialog({ kind: e.kind, id: e.ref })) }, '⚔ Attack with them…') : null,
+    e.kind !== 'custom' ? (() => { const why = attackBlock(e.kind, e.ref); return h('button', { type: 'button', disabled: !!why, title: why, onclick: act(() => attackDialog({ kind: e.kind, id: e.ref })) }, '⚔ Attack with them…' + (why ? ` (${why})` : '')); })() : null,
     e.kind !== 'custom' ? h('button', { type: 'button', onclick: act(() => attackDialog(null, { kind: e.kind, id: e.ref })) }, 'Attack them…') : null,
     e.kind !== 'custom' ? h('button', { type: 'button', title: SR.CAT.combat.takeAim.desc, disabled: e.aimRound === (S.tracker || {}).round,
       onclick: act(() => trackerOp('aim', { id: e.id })) }, `🎯 Take Aim${e.aim ? ` (+${e.aim} now)` : ''}`) : null,
@@ -1312,6 +1312,22 @@ function cellDistance(a, b) {
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
 }
 function bandFor(m) { return m <= 3 ? 'Close' : m <= 50 ? 'Near' : m <= 250 ? 'Medium' : m <= 500 ? 'Far' : 'Extreme'; }
+/* why a combatant can't attack now (in combat: no Major Action left; any time: out cold, Petrified, Stilled…) */
+function attackBlock(kind, id) {
+  const e = S.tracker && S.tracker.active ? (S.tracker.entries || []).find(x => x.kind === kind && x.ref === id) : null;
+  let cond, st;
+  if (kind === 'player') { const p = S.ctx.players.find(x => x.id === id); cond = p && p.cm && p.cm.status; st = (p && p.statuses) || {}; }
+  else { const m = markers().find(x => x.id === id); cond = m ? GridCore.cmStatus(m.cm) : null; st = (m && m.statuses) || {}; }
+  if (['Unconscious', 'Dying', 'Dead'].includes(cond)) return `${cond}: can't act`;
+  for (const k of ['Petrified', 'Stilled']) if (st[k]) return `${k}: can't act`;
+  if (st.Panicked) return 'Panicked: can only flee';
+  if (e && e.majorLeft <= 0 && e.minorLeft < SR.CAT.combat.minorPerMajor) return 'No Major Action left this round';
+  return '';
+}
+function attackButton(kind, id) {
+  const why = attackBlock(kind, id);
+  return h('button.small', { type: 'button', disabled: !!why, title: why || 'Resolve an attack by this combatant', onclick: () => attackDialog({ kind, id }) }, '⚔ Attack…');
+}
 async function attackDialog(attacker, target, more) {
   if (!S.ctx.campaign) { toast('Assign this map to a game first.'); return; }
   const list = combatants();
@@ -1344,7 +1360,7 @@ async function attackDialog(attacker, target, more) {
   const astLabel = h('label', { hidden: true }, 'Astral damage', astType);
   const tgtBox = h('div.attack-targets');
   const addSel = h('select', { 'aria-label': 'Add a target' });
-  let options = [], attOpts = {};
+  let options = [], attOpts = {}, okBtn = null;
 
   const cur = () => options.find(x => x.key === weapon.value) || {};
   function suggestRange() {
@@ -1516,11 +1532,17 @@ async function attackDialog(attacker, target, more) {
     const defEdge = targets.filter(t => t.edgeAction).map(t => `${(pos(t.key) || {}).name}: ${RULES.defenseEdgeActions[t.edgeAction].name}`);
     if (defEdge.length) parts.push(defEdge.join(', '));
     info.textContent = parts.join(' · ');
+    // no Major Action left, or a condition that stops them acting: the attack waits for "Ignore action limits"
+    const noMajor = attOpts.inCombat && (attOpts.majorLeft || 0) <= 0 && (attOpts.minorLeft || 0) < RULES.minorPerMajor;
+    const block = (o.spell ? attOpts.blockSpell : attOpts.block) || (noMajor ? `${attOpts.name} has no Major Action left this round` : '');
+    attInfo.textContent = block ? `${block}.${ignoreActions.checked ? ' Allowed anyway (Ignore action limits).' : ' Tick “Ignore action limits” to allow it.'}` : '';
+    attInfo.className = block ? 'warn' : 'hint';
+    if (okBtn) okBtn.disabled = !!block && !ignoreActions.checked;
   }
   attSel.onchange = () => { const k = attSel.value; const i = targets.findIndex(t => t.key === k); if (i >= 0) targets.splice(i, 1); loadAttacker(); };
   weapon.onchange = () => { picked = true; drawModes(); };
   for (const el of [mode, range, amp, called, anticip, eaSel, intercept, aimNow, trip, grapple]) el.addEventListener('change', describe);
-  ignoreActions.onchange = drawTargets;
+  ignoreActions.onchange = () => { drawTargets(); describe(); };
   const body = h('div',
     h('div.form-grid', h('label', 'Attacker', attSel), h('label', 'Weapon / spell', weapon), h('label', 'Firing mode', mode),
       h('label', h('span', 'Range ', distInfo), range)),
@@ -1540,7 +1562,7 @@ async function attackDialog(attacker, target, more) {
       h('label.check', { title: 'Give 1 Edge to whoever wins AR vs DR by 4+ (the highest DR with several targets), at most 2 per round; none when attacking from cover' }, autoEdge, 'Award Edge'),
       h('label.check', { title: 'Indirect fire, scent, sound…' }, ignoreSight, 'Ignore line of sight'),
       h('label.check', { title: 'Allow the attack even without actions left this round' }, ignoreActions, 'Ignore action limits')));
-  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: async () => { if (firstTarget) await addTarget(firstTarget); for (const t of more || []) await addTarget(`${t.kind}:${t.id}`); await loadAttacker(); } });
+  const okP = UI.modal('Attack', body, { ok: 'Roll attack', wide: true, onOpen: async d => { okBtn = d.querySelector('button[value=ok]'); if (firstTarget) await addTarget(firstTarget); for (const t of more || []) await addTarget(`${t.kind}:${t.id}`); await loadAttacker(); } });
   if (!await okP) return;
   if (!targets.length) { toast('Pick a target.'); return; }
   const defenses = {}, cover = {}, wrest = {}, tactical = {};

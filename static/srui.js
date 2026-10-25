@@ -343,7 +343,7 @@ function roller(opts) {
       const t = totalOf();
       totalEl.textContent = t;
       if (S.mode === 'pool') breakEl.textContent = breakdownText();
-      if (rollBtn) { rollBtn.textContent = rollLabel(t); rollBtn.disabled = t <= 0 && !S.push; }
+      if (rollBtn && !rollBtn.dataset.gate) { rollBtn.textContent = rollLabel(t); rollBtn.disabled = t <= 0 && !S.push; }
     };
     const modeTabs = h('div.tabs-inline',
       h('button.small' + (S.mode === 'pool' ? '.active' : ''), { type: 'button', onclick: () => { S.mode = 'pool'; save(); render(); } }, 'From sheet'),
@@ -421,7 +421,12 @@ function roller(opts) {
       const verb = pool && S.mode === 'pool' ? (pool.weapon ? 'Attack' : pool.spell ? 'Cast' : pool.form ? 'Thread' : pool.heal ? (pool.heal.startsWith('natural') ? 'Rest' : 'Heal') : 'Roll') : 'Roll';
       return `${verb}: ${t + (S.push ? sh.derived.edge_max : 0)} dice`;
     }
-    rollBtn = h('button.primary', { type: 'button', onclick: roll, disabled: total <= 0 && !S.push }, rollLabel(total));
+    // in combat an attack is made through the attack dialog, on your own turn (opts.gate decides)
+    const gate = opts.gate && S.mode === 'pool' ? opts.gate(pool, { mode: S._fmode, range: S.range }) : null;
+    rollBtn = gate ? h('button.primary', { type: 'button', onclick: gate.onClick, disabled: !!gate.locked, title: gate.reason || '' }, gate.label)
+      : h('button.primary', { type: 'button', onclick: roll, disabled: total <= 0 && !S.push }, rollLabel(total));
+    if (gate) rollBtn.dataset.gate = '1';
+    if (gate && gate.reason) root.append(h('p.hint.gate-note', gate.reason));
     const dv = sh.derived;
     root.append(h('div.actions', rollBtn,
       h('button', { type: 'button', onclick: initiative, title: `Initiative ${dv.initiative_score} + ${dv.initiative_dice}d6 · 1 Major, ${dv.minor_actions} Minor` }, 'Initiative')));

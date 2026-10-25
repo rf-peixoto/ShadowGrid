@@ -95,6 +95,11 @@ game masters, with screenshots.
   cells in sight take the colour of its range bands, with its Attack Rating
   for each. The GM's attacks take the range from the map, in meters (2 m per
   cell unless the GM sets another scale).
+- **Your turn**: in combat a runner attacks on their own turn from an attack
+  dialog (weapon, target in sight, called shots, Edge actions), resolved like
+  the GM's, and ends their turn themselves. Attacks lock without a Major
+  Action left or when the condition monitor or a status stops them acting,
+  for runners and NPCs alike.
 - **Movement in combat** (<kbd>M</kbd>): the overlay shows how far a runner can
   Move and Sprint this turn, from their metatype, statuses and the actions
   they have left. Their own moves are checked on their turn: the first spends
