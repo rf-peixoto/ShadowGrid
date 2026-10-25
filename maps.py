@@ -17,6 +17,7 @@ from core import (DEFAULT_SETTINGS, add_roll, app, body, campaign_version, clamp
 import fight
 import movement as MV
 import sightmap as SM
+import stealth as ST
 from security import gamemaster_required, rate_limited
 from sr import combat as X
 from sr import rules as R
@@ -462,6 +463,8 @@ def update_map(map_id):
             cid = None
     db.execute("UPDATE maps SET name=?,campaign_id=?,width=?,height=?,cell_size=?,settings=?,data=?,updated_at=? WHERE id=?",
                (name, cid, width, height, cell_size, json.dumps(settings), json.dumps(data), now(), map_id))
+    if "data" in b and cid:
+        stealth_sweep(dict(old, data=data, settings=settings, campaignId=cid, updatedAt=None))
     db.commit()
     return jsonify({"ok": True, "updatedAt": now()})
 
@@ -574,6 +577,8 @@ def paint_light(map_id):
         if not cell:
             del cells[f"{c},{r}"]
     save_map_data(map_id, m["data"])
+    if m.get("campaignId"):
+        stealth_sweep(dict(m, updatedAt=None))
     db.commit()
     return jsonify({"ok": True, "cells": {k: cells.get(k) for k in keys if k in cells}})
 
@@ -1093,6 +1098,16 @@ def _visible_cells(m, explored, station, sight=None):
                 o["light"] = geo.LIGHT_LEVELS[lv]
         if cell.get("smoke"):
             o["smoke"] = cell["smoke"]
+        # which edges are walls (the first-person view draws those and fog elsewhere): no room beyond,
+        # the map's edge, or a secret cell this runner hasn't found
+        c, r = (int(x) for x in k.split(","))
+        w = 0
+        for e in range(geo.edge_count(m["gridType"])):
+            nc, nr = geo.neighbor(m["gridType"], c, r, e)
+            nk = f"{nc},{nr}"
+            if not geo.in_bounds(m, nc, nr) or not geo.is_room(all_cells, nc, nr) or (geo.is_secret(all_cells, nc, nr) and not explored.get(nk)):
+                w |= 1 << e
+        o["w"] = w
         cells[k] = o
     # doors stored on a hidden neighbour but facing a visible cell: mirror them onto the visible cell
     edges = geo.edge_count(m["gridType"])
@@ -1169,7 +1184,8 @@ def player_view(me_row):
         c2 = load_char(r2)
         if tok and explored.get(f"{tok['c']},{tok['r']}"):
             out["others"].append({"id": r2["id"], "name": display_name(r2, c2), "color": r2["color"], "c": tok["c"], "r": tok["r"],
-                                  "cm": R.condition_summary(c2), "statuses": c2.get("statuses") or {}})
+                                  "cm": R.condition_summary(c2), "statuses": c2.get("statuses") or {},
+                                  "sneaking": bool((json.loads(r2["state"]).get("stealth") or {}).get("on"))})
         ping = json.loads(r2["ping"]) if r2["ping"] else None
         if ping and ping.get("mapId") == m["id"] and now() - ping.get("t", 0) < 10:
             out["pings"].append({"name": display_name(r2, c2), "color": r2["color"], "c": ping["c"], "r": ping["r"], "t": ping["t"]})
@@ -1198,6 +1214,7 @@ def player_view(me_row):
         out["movement"] = MV.overlay(t, e, ch, R.derive(ch), cell_m, bool(cur_e and cur_e["id"] == e["id"]))
     out["flashlight"] = {"has": bool(p.get("hasFlashlight")), "on": bool(ms.get("flashlight"))}
     out["templates"] = m["data"].get("templates") or []
+    out["stealth"] = ST.player_info(p, m, {x["id"] for x in markers})
     st_ = m["settings"]
     out["map"] = {"id": m["id"], "name": m["name"], "gridType": m["gridType"], "width": m["width"],
                   "height": m["height"], "cellSize": m["cellSize"],
@@ -1256,6 +1273,8 @@ def player_move(me):
     link = link_at(m, c, r)
     if link:
         travel_player(p, m, link)
+    elif ST.state_of(p):
+        ST.check(p, m)                      # enemies that now see the sneaking runner roll Perception
     save_player(p)
     get_db().commit()
     return jsonify(player_view(_me_fresh(me)))
@@ -1277,13 +1296,21 @@ def player_door(me):
     door = geo.door_on_edge(m["gridType"], m["data"]["cells"], tok["c"], tok["r"], e)
     if not door:
         return err("No door there.")
-    if door.get("locked"):
+    # a door can be stored on either cell of the edge (old maps sometimes have both): a locked copy wins
+    nc, nr = geo.neighbor(m["gridType"], tok["c"], tok["r"], e)
+    other = ((m["data"]["cells"].get(f"{nc},{nr}") or {}).get("doors") or {}).get(str(geo.opposite_edge(m["gridType"], e)))
+    copies = [d for d in (((m["data"]["cells"].get(f"{tok['c']},{tok['r']}") or {}).get("doors") or {}).get(str(e)), other) if d]
+    if any(d.get("locked") for d in copies):
+        get_db().rollback()
         return err("That door is locked.")
     door["open"] = not door.get("open")
+    for d in copies:
+        d["open"] = door["open"]
     save_map_data(m["id"], m["data"])
     if door["open"]:
         place_player(p, m, tok["c"], tok["r"])
         save_player(p)
+        stealth_sweep(dict(m, updatedAt=None))      # an opened door can show a sneaking runner
     get_db().commit()
     return jsonify(player_view(_me_fresh(me)))
 
@@ -1328,9 +1355,71 @@ def player_flashlight(me):
     tok = ms.get("token")
     if on and tok:
         place_player(p, m, tok["c"], tok["r"])
+        if ST.state_of(p):
+            save_player(p)                    # the light counts once it's saved
+            ST.check(p, fetch_map(m["id"]))   # a lit flashlight shows a sneaking runner to anyone looking
     save_player(p)
     get_db().commit()
     return jsonify(player_view(_me_fresh(me)))
+
+
+def stealth_sweep(m):
+    """Enemies the GM moved (or lit up) may now see a sneaking runner: they roll Perception."""
+    db = get_db()
+    for row in db.execute("SELECT * FROM players WHERE campaign_id=? AND current_map_id=?", (m["campaignId"], m["id"])).fetchall():
+        p = row_to_player(row)
+        if ST.state_of(p):
+            before = json.dumps(p["state"].get("stealth"), sort_keys=True)
+            ST.check(p, m)
+            if json.dumps(p["state"].get("stealth"), sort_keys=True) != before:
+                save_player(p)
+
+
+@app.route("/api/me/stealth", methods=["POST"])
+@player_required
+@rate_limited("player_stealth", 30)
+def player_stealth(me):
+    """Tick Stealth to start sneaking (Stealth + Agility is rolled at once and enemies who can see the runner
+    roll Perception), untick it to stop."""
+    p = locked_player(me["id"])
+    on = bool(body().get("on"))
+    m = fetch_map(p["currentMapId"]) if p["currentMapId"] else None
+    if on:
+        if ST.state_of(p):
+            get_db().rollback()
+            return jsonify(player_view(_me_fresh(me)))
+        ch = load_char(me)
+        status = R.condition_summary(ch).get("status")
+        if status in ("Unconscious", "Dying", "Dead"):
+            get_db().rollback()
+            return err("You can't sneak while you're out cold.")
+        ST.start(p, m, ch)
+    else:
+        ST.stop(p, "stopped sneaking")
+    save_player(p)
+    get_db().commit()
+    return jsonify(player_view(_me_fresh(me)))
+
+
+@app.route("/api/players/<pid>/stealth", methods=["POST"])
+@gamemaster_required
+def gamemaster_stealth(pid):
+    """The GM ends a runner's stealth ("end") or has every enemy in view roll again ("check")."""
+    p = locked_player(pid)
+    op = str(body().get("op") or "")
+    if op == "end":
+        ST.stop(p, "the GM ended it")
+    elif op == "check":
+        if not ST.state_of(p) or not p["currentMapId"]:
+            get_db().rollback()
+            return err("That runner isn't sneaking on a map.")
+        ST.check(p, fetch_map(p["currentMapId"]), recheck=True)
+    else:
+        get_db().rollback()
+        return err("Unknown action.")
+    save_player(p)
+    get_db().commit()
+    return jsonify({"player": row_to_player(get_db().execute("SELECT * FROM players WHERE id=?", (pid,)).fetchone())})
 
 
 @app.route("/api/me/ping", methods=["POST"])

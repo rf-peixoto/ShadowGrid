@@ -787,6 +787,7 @@ function mount(root, cfg) {
       stat('Gear value', money(dv.gear_value)), stat('Nuyen', money(ch.nuyen)), S.sheet.approved ? stat('Store pays', `${S.sheet.sellPct}%`) : null),
       h('div.row.mt', cfg.openStore ? h('button.primary', { type: 'button', onclick: () => cfg.openStore() }, 'Buy gear in the store ›') : null,
         cfg.gm ? h('button', { type: 'button', onclick: gmGive }, 'Give an item…') : null,
+        canHandOver() ? h('button', { type: 'button', onclick: () => handOver(null) }, 'Give nuyen…') : null,
         h('span.hint', cfg.gm ? 'GM changes are free.' : draft() ? 'Returning an item refunds its full price while you create the character.' :
           `Selling pays ${S.sheet.sellPct}% of the price, through a contact who could get that item.`))));
     if ((dv.vehicles || []).length) out.append(vehiclesCard());
@@ -852,6 +853,7 @@ function mount(root, cfg) {
     if (it.focus) btns.push(h('button.small' + (it.bonded ? '.good' : ''), { type: 'button', disabled: it.bonded && locked(), onclick: () => act('bond_focus', { uid: it.uid }) }, it.bonded ? '✓ Bonded' : 'Bond'));
     if (it.sub === 'Software' && (it.ref || '').startsWith('cyberdecks-software-cyberprogram')) btns.push(h('button.small.ghost', { type: 'button', onclick: () => go('matrix') }, 'Programs ›'));
     btns.push(h('button.small.ghost', { type: 'button', onclick: () => editGear(it) }, 'Edit'));
+    if (canHandOver() && !it.implant) btns.push(h('button.small.ghost', { type: 'button', title: 'Hand it to another runner', onclick: () => handOver(it) }, 'Give…'));
     if (draft() && !cfg.gm) btns.push(h('button.small.danger', { type: 'button', title: 'Full refund during creation', onclick: () => act('remove_item', { uid: it.uid }) }, 'Return'));
     else if (!cfg.gm) {
       const acc = S.sheet.store[it.ref];
@@ -887,6 +889,21 @@ function mount(root, cfg) {
       pick = sel.value;
     }
     act('reload', { uid: it.uid, ammo: pick });
+  }
+  /* runners hand nuyen or gear to each other (both sheets approved) */
+  function canHandOver() { return !cfg.gm && cfg.transferUrl && S.sheet.approved && (S.sheet.allies || []).length > 0; }
+  async function handOver(it) {
+    const to = h('select', (S.sheet.allies || []).map(a => option(a.id, a.name)));
+    const stack = it && (it.unit || it.consumable) && (it.qty || 1) > 1;
+    const amount = h('input', { type: 'number', min: 1, max: it ? (it.qty || 1) : c().nuyen, value: it ? (it.qty || 1) : '', required: true });
+    const body = h('div', h('label.stack', 'To', to),
+      !it ? h('label.stack', `Nuyen (you have ${money(c().nuyen)})`, amount) : stack ? h('label.stack', `How many? (you have ${it.qty})`, amount) : null,
+      it && it.bonded ? h('p.hint', 'The bond breaks: they bond it again with their own Karma.') : null,
+      it && it.cat && (it.cat === 'Vehicles' || it.cat === 'Drones') ? h('p.hint', 'Weapons on its mounts stay with you.') : null);
+    if (!await UI.modal(it ? `Give ${it.name}` : 'Give nuyen', body, { ok: 'Give', narrow: true })) return;
+    const payload = it ? { to: to.value, uid: it.uid, qty: stack ? +amount.value : undefined } : { to: to.value, nuyen: +amount.value };
+    try { const r = await api(cfg.transferUrl, 'POST', payload); if (r.sheet) set(r.sheet); toast(r.message, 3500); }
+    catch (e) { if (e.message !== 'auth') toast(e.message, 4500); }
   }
   async function sell(it, unit) {
     let qty = it.qty || 1;
@@ -1086,38 +1103,23 @@ function mount(root, cfg) {
     const t = h('table.list', h('thead', h('tr', h('th', 'Name'), h('th', 'Type'), h('th', 'Connection'), h('th', 'Loyalty'), h('th', 'Sources'), h('th', ''))));
     const tb = h('tbody');
     ch.contacts.forEach((ct, i) => tb.append(h('tr.clickable', { onclick: e => { if (!e.target.closest('button')) editContact(i); }, title: ct.notes || '' },
-      h('td', h('b', ct.name), ct.verified === false ? h('span.tag.waiting', { style: { marginLeft: '.4rem' } }, 'Waiting for GM') : null),
+      h('td', h('b', ct.name), ct.verified === false ? h('span.tag.waiting', { style: { marginLeft: '.4rem' } }, 'Waiting for GM') : null,
+        ct.game ? h('span.tag', { style: { marginLeft: '.4rem' }, title: 'The GM gave this contact to every runner' }, 'Shared') : null),
       h('td', ct.type), h('td', ct.connection), h('td', ct.loyalty),
       h('td', (() => { const sup = SR.contactSupply(ct); return sup.length ? h('div.chips-list', sup.map(s => h('span.chip.small', s === 'Fixer' ? 'Anything' : s))) : h('span.hint', 'Nothing (tick what they can source)'); })()),
       h('td.right.nowrap', cfg.gm && ct.verified === false ? h('button.small.primary', { type: 'button', onclick: () => act('verify_contact', { index: i, verified: true }) }, 'Confirm') : null,
-        h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Remove ${ct.name}?`, { danger: true, ok: 'Remove' })) act('remove_contact', { index: i }); } }, '✕')))));
+        ct.game ? null : h('button.small.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Remove ${ct.name}?`, { danger: true, ok: 'Remove' })) act('remove_contact', { index: i }); } }, '✕')))));
     t.append(tb);
     card.append(h('div.table-wrap', t));
     return card;
   }
   async function editContact(i) {
-    const ct = i === null ? { connection: 1, loyalty: 1, supply: [] } : c().contacts[i];
-    const name = h('input', { value: ct.name || '', required: true });
-    const type = h('select', CAT.contactTypes.map(x => option(x, x, x === ct.type)));
-    if (ct.type && !CAT.contactTypes.includes(ct.type)) type.prepend(option(ct.type, ct.type, true));
-    const conn = h('input', { type: 'number', min: 1, max: 12, value: ct.connection || 1 });
-    const loyal = h('input', { type: 'number', min: 1, max: 12, value: ct.loyalty || 1 });
-    const typeSup = () => CAT.contactTypeSupply[type.value] || [];
-    const boxes = CAT.store.supply.map(s => h('label.check', h('input', { type: 'checkbox', value: s, checked: (ct.supply || []).includes(s) }), s === 'Fixer' ? 'Anything (fixer)' : s));
-    const fromType = h('p.hint');
-    const syncType = () => {
-      const ts = typeSup();
-      for (const b of boxes) { const x = b.querySelector('input'); const t = ts.includes(x.value); x.disabled = t; if (t) x.checked = true; else if (x.dataset.auto) x.checked = false; x.dataset.auto = t ? '1' : ''; }
-      fromType.textContent = ts.length ? `A ${type.value.toLowerCase()} sources ${ts.includes('Fixer') ? 'anything' : ts.join(', ')}. Tick more if they have other connections.` : 'Tick what this contact can source.';
-    };
-    type.onchange = syncType; syncType();
-    const notes = h('textarea', { rows: 4 }, ct.notes || '');
-    const ok = await UI.modal(i === null ? 'New contact' : `Edit ${ct.name}`, h('div',
-      h('div.form-grid', h('label', 'Name', name), h('label', 'Type', type), h('label', 'Connection (1-12)', conn), h('label', 'Loyalty (1-12)', loyal)),
-      h('h4.mt', 'Can source'), fromType, h('div.check-grid', boxes), h('label.stack', 'Notes', notes)), { ok: 'Save' });
+    const ct = i === null ? null : c().contacts[i];
+    if (ct && ct.game) { UI.info(ct.name, h('div', h('p', `${ct.type || 'Contact'}, Connection ${ct.connection}, Loyalty ${ct.loyalty}`), ct.notes ? h('p', ct.notes) : null, h('p.hint', 'Every runner in this game has this contact. Only the GM can change them.'))); return; }
+    const f = SR.contactForm(ct);
+    const ok = await UI.modal(i === null ? 'New contact' : `Edit ${ct.name}`, f.node, { ok: 'Save' });
     if (!ok) return;
-    const supply = boxes.map(b => b.querySelector('input')).filter(x => x.checked && !x.disabled).map(x => x.value);
-    act('save_contact', { index: i, contact: { name: name.value, type: type.value, connection: +conn.value, loyalty: +loyal.value, supply, notes: notes.value, verified: true } });
+    act('save_contact', { index: i, contact: Object.assign(f.read(), { verified: true }) });
   }
 
   // ------------------------------------------------------------ background

@@ -1882,6 +1882,47 @@ def a_sell_item(c, p, ctx):
     return f"Sold {it['name']} for {fmt_money(price)}."
 
 
+def hand_over(src, dst, uid, qty=0):
+    """Move an item (or part of a stack) from one runner's inventory to another's: (moved item, notes).
+    Implants stay in the body; a focus's bond breaks; weapons come off their mounts."""
+    it = find_item(src, uid)
+    if it.get("implant"):
+        raise RuleError(f"{it['name']} is installed in your body: it can't be handed over.")
+    stack = bool(it.get("unit") or it.get("consumable"))
+    have = _int(it.get("qty"), 1)
+    qty = max(1, min(have, _int(qty) or have)) if stack else have
+    notes = []
+    moved = copy.deepcopy(it)
+    moved["qty"] = qty
+    if stack and qty < have:
+        it["qty"] = have - qty
+    else:
+        src["inventory"].remove(it)
+        for w in src["inventory"]:                 # weapons on this mount stay behind, off it
+            if w.get("mounted") == uid:
+                w.pop("mounted", None)
+        ms = src.get("matrix_state") or {}
+        if ms.get("device") == uid:
+            ms.pop("device", None)
+    moved.pop("mounted", None)
+    moved.pop("running", None)
+    if moved.get("bonded"):
+        moved["bonded"] = False
+        notes.append("the focus's bond breaks")
+    # stacks of the same thing merge on the other side
+    same = next((x for x in dst["inventory"] if stack and x.get("ref") and x.get("ref") == moved.get("ref")
+                 and x.get("rating") == moved.get("rating") and x.get("ammo_type") == moved.get("ammo_type")
+                 and x.get("name") == moved.get("name")), None)
+    if same:
+        same["qty"] = _int(same.get("qty"), 1) + qty
+    else:
+        if len(dst["inventory"]) >= MAX_LIST:
+            raise RuleError("Their inventory is full.")
+        moved["uid"] = _uid(dst)
+        dst["inventory"].append(moved)
+    return moved, notes
+
+
 def a_reload(c, p, ctx):
     """Fill a weapon from a compatible ammo stack (unloading other ammo types first)."""
     w = find_item(c, p.get("uid"))
@@ -2076,10 +2117,12 @@ def a_save_contact(c, p, ctx):
             raise RuleError("Too many contacts.")
         if ctx.locked:
             contact["verified"] = False
-        c["contacts"].append(contact)
+        # before the game's shared contacts, which always come last
+        c["contacts"].insert(sum(1 for ct in c["contacts"] if not ct.get("game")), contact)
         return f"{name} added." + (" The GM must confirm the new contact before it can source gear." if ctx.locked else "")
     i = _list_index(c["contacts"], p["index"])
     old = c["contacts"][i]
+    _not_shared(old)
     if ctx.locked:
         changed = any(old.get(k) != contact[k] for k in ("type", "connection", "loyalty", "supply"))
         contact["verified"] = old.get("verified", True) and not changed
@@ -2089,14 +2132,21 @@ def a_save_contact(c, p, ctx):
     return "Contact updated." + (" Waiting for the GM to confirm the changes." if not contact["verified"] and not ctx.gamemaster else "")
 
 
+def _not_shared(ct):
+    if ct.get("game"):
+        raise RuleError(f"{ct.get('name') or 'This contact'} is shared with every runner: the GM edits them on the game page.")
+
+
 def a_verify_contact(c, p, ctx):
     i = _list_index(c["contacts"], p.get("index"))
+    _not_shared(c["contacts"][i])
     c["contacts"][i]["verified"] = bool(p.get("verified", True))
     return "Contact confirmed." if c["contacts"][i]["verified"] else "Contact marked as unconfirmed."
 
 
 def a_remove_contact(c, p, ctx):
     i = _list_index(c["contacts"], p.get("index"))
+    _not_shared(c["contacts"][i])
     return f"{c['contacts'].pop(i)['name']} removed."
 
 

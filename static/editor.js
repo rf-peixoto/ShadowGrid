@@ -105,7 +105,14 @@ $('los-toggle').onchange = e => setLos(e.target.checked);
 function fpBump() { wrap.classList.remove('bump'); void wrap.offsetWidth; wrap.classList.add('bump'); }
 const fpc = FPView.controller({
   map: () => S.map, mapId: () => MAP_ID, at: () => S.fpCam, storeKey: 'sg.fp.gmface.', redraw: () => requestDraw(),
-  step: cell => { const k = key(cell.c, cell.r); if (G().inBounds(cell.c, cell.r) && cells()[k] && cells()[k].fill) { S.fpCam = { c: cell.c, r: cell.r }; requestDraw(); } else fpBump(); },
+  // closed and locked doors stop the GM's walk too: open them with Enter (a locked one needs unlocking first)
+  step: cell => {
+    const at = S.fpCam;
+    if (at && GridCore.passable(G(), cells(), at, cell)) { S.fpCam = { c: cell.c, r: cell.r }; requestDraw(); return; }
+    const d = at && (() => { for (let e = 0; e < G().edgeCount; e++) { const n = G().neighbor(at.c, at.r, e); if (n.c === cell.c && n.r === cell.r) return doorOnEdge(G(), cells(), at.c, at.r, e); } return null; })();
+    if (d && d.locked) toast('That door is locked. Unlock it from the cell panel first.');
+    fpBump();
+  },
   door: edge => { const at = S.fpCam; if (at && doorOnEdge(G(), cells(), at.c, at.r, edge)) toggleDoorAt(at.c, at.r, edge, false); else fpBump(); },
 });
 $('fp-toggle').onchange = e => setFp(e.target.checked);
@@ -114,7 +121,7 @@ function fpSprites(view) {
   for (const m of markers()) {
     if (!gm && (m.hidden || GridCore.visibility(view, key(m.c, m.r), cells()[key(m.c, m.r)]) !== 'full')) continue;
     const p = g.cellCenter(m.c, m.r);
-    out.push({ kind: 'marker', x: p.x, y: p.y, type: m.type, color: m.color, hidden: !!m.hidden, label: m.label || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name, cm: m.cm, statuses: m.statuses, at: { c: m.c, r: m.r } });
+    out.push({ kind: 'marker', x: p.x, y: p.y, type: m.type, color: m.color, hidden: !!m.hidden, label: m.label || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name, cm: m.cm, statuses: GridCore.markerStatuses(view, m), at: { c: m.c, r: m.r } });
   }
   for (const t of view.tokens || []) {
     if (!gm && GridCore.visibility(view, key(t.c, t.r), cells()[key(t.c, t.r)]) !== 'full') continue;
@@ -128,7 +135,9 @@ function drawFirstPerson(dpr, W, H) {
   if (S.sceneDirty) renderSceneCache();
   const view = currentView(), cam = fpc.camera(performance.now());
   if (!cam) { setFp(false); return; }
-  FPView.render(ctx2d, W, H, dpr, { map: S.map, view, cam, sprites: fpSprites(view), eyes: player() ? (player().vision || []) : null });
+  const reach = S.mode === 'play' && S.reach ? gmReach() : null;
+  const overlay = GridCore.fpOverlay(S.map, { field: losField(), world: gmWorld(), reach, templates: S.mode === 'play' ? (S.map.data.templates || []) : [] });
+  FPView.render(ctx2d, W, H, dpr, { map: S.map, view, cam, sprites: fpSprites(view), eyes: player() ? (player().vision || []) : null, overlay });
   const c = G().cellCenter(S.fpCam.c, S.fpCam.r); vp.centerOn(c.x, c.y); vp.drawMinimap(mini);
   updateStatus();
   if (cam.animating) requestDraw();
@@ -155,12 +164,23 @@ function currentView() {
   for (const p of S.ctx.players) {
     if (p.currentMapId !== MAP_ID) continue;
     const t = (p.state.maps || {})[MAP_ID]?.token;
-    if (t) tokens.push({ c: t.c, r: t.r, color: p.color, name: p.name, me: p.id === S.viewAs, cm: p.cm, statuses: p.statuses });
+    const sneaking = p.state.stealth && p.state.stealth.on;
+    if (t) tokens.push({ c: t.c, r: t.r, color: p.color, name: p.name, me: p.id === S.viewAs, cm: p.cm, statuses: sneaking ? Object.assign({}, p.statuses || {}, { Sneaking: true }) : p.statuses });
   }
+  const badges = alertedBadges();
   const p = player(), w = gmWorld(), light = (c, r) => w.level(c, r);
-  if (!p) return { mode: 'gm', tokens, rooms: showRooms, light };
+  if (!p) return { mode: 'gm', tokens, rooms: showRooms, light, badges };
   const ms = pms(p);
-  return { mode: 'player', explored: new Set(Object.keys(ms.explored)), mapStation: !!ms.mapStation, tokens, light };
+  return { mode: 'player', explored: new Set(Object.keys(ms.explored)), mapStation: !!ms.mapStation, tokens, light, badges };
+}
+/* enemies that noticed a sneaking runner on this map */
+function alertedBadges() {
+  const out = {};
+  for (const p of S.ctx.players) {
+    const st = p.state && p.state.stealth;
+    if (st && st.on && st.mapId === MAP_ID) for (const id of st.spotted || []) out[id] = { Alerted: true };
+  }
+  return out;
 }
 function hoverLabel() {
   if (!S.hover) return null;
@@ -774,7 +794,7 @@ $('btn-reveal-all-everyone').onclick = () => revealAllEveryone(true);
 $('btn-hide-all-everyone').onclick = () => revealAllEveryone(false);
 $('room-reveal').onchange = e => { const rm = rooms().find(x => x.id === e.target.value), p = player(); e.target.value = ''; if (rm && p) fogAction([p.id], rm.cells, 'reveal', `${rm.name} revealed for ${p.name}.`); };
 $('room-reveal-everyone').onchange = e => { const rm = rooms().find(x => x.id === e.target.value); e.target.value = ''; if (rm) fogAction('all', rm.cells, 'reveal', `${rm.name} revealed for everyone.`); };
-$('legend-toggle').onchange = e => { S.map.settings.legendVisible = e.target.checked; markDirty(); renderLegend(); };
+$('legend-toggle').onchange = e => { S.gmLegend = e.target.checked; try { localStorage.setItem('sg.legend.gm', e.target.checked ? '1' : '0'); } catch { /* ignore */ } renderLegend(); };
 $('rooms-toggle').onchange = e => { S.map.settings.showRoomLabels = e.target.checked; markDirty(); };
 $('map-name').onchange = e => { S.map.name = e.target.value.trim() || 'Untitled map'; document.title = S.map.name + ' · ShadowGrid'; markDirty(); };
 function confirmDialog(text, onOk) {
@@ -855,7 +875,7 @@ function renderPlayers() {
   Layout.refresh();
   if (S.viewAs && !S.ctx.players.some(p => p.id === S.viewAs)) S.viewAs = '';
   renderViewAs(); refreshFogPanel();
-  const sig = JSON.stringify([S.viewAs, S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses])]);
+  const sig = JSON.stringify([S.viewAs, S.ctx.players.map(p => [p.id, p.name, p.color, p.radius, p.currentMapId, p.cm, p.edge, p.status, p.statuses, p.state && p.state.stealth])]);
   const typing = document.activeElement && $('player-list').contains(document.activeElement) && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if (sig === S.playersSig || typing) return;
   S.playersSig = sig;
@@ -872,7 +892,7 @@ function renderPlayers() {
     el.append(h('div.player-row',
       h('div.row.tight', { style: { flexWrap: 'nowrap' } }, sw, h('a.grow', { href: `/game/${S.ctx.campaign.id}/sheet/${p.id}`, target: '_blank', title: 'Open the character sheet' }, p.name), rad),
       p.status !== 'approved' ? h('div', SR.statusTag(p.status)) : null,
-      cmLine, stLine,
+      cmLine, stLine, stealthLine(p),
       here ? h('div.row.tight', h('button.small', { type: 'button', onclick: () => attackDialog({ kind: 'player', id: p.id }) }, '⚔ Attack…'),
         h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, { kind: 'player', id: p.id }) }, 'Attack them…')) : null,
       h('div.row.tight.between', h('span.hint', here ? 'On this map' : elsewhere ? `On ${elsewhere.name}` : 'Not placed'),
@@ -882,6 +902,19 @@ function renderPlayers() {
           h('button.small', { type: 'button', onclick: () => { setMode('play'); setViewAs(p.id); setTool('token'); toast(`Click a room cell to place ${p.name}.`); } }, here ? 'Move' : 'Place')))));
   }
   if (!S.ctx.players.length && hasCampaign) el.innerHTML = '<p class="hint">No runners yet. Invite your players; once they join, place their tokens here.</p>';
+}
+/* a sneaking runner: their hits, who noticed them; the GM can have everyone in view roll again or end it */
+function stealthLine(p) {
+  const st = p.state && p.state.stealth;
+  if (!st || !st.on) return null;
+  const name = id => { const m = markers().find(x => x.id === id); return m ? (m.label || (MARKER_BY_ID[m.type] || MARKER_TYPES[0]).name) : null; };
+  const spotted = st.mapId === MAP_ID ? (st.spotted || []).map(name).filter(Boolean) : [];
+  const op = async which => { try { await api(`/api/players/${p.id}/stealth`, 'POST', { op: which }); if (document.activeElement) document.activeElement.blur(); reloadContext(); } catch (e) { toast(e.message); } };
+  const cb = h('input', { type: 'checkbox', checked: true, title: 'Untick to end their stealth', onchange: () => op('end') });
+  return h('div.stealth-line',
+    h('label.check', cb, ` 🥷 Stealth: ${st.hits} hit${st.hits === 1 ? '' : 's'} on ${st.pool} dice`),
+    h('div.row.tight', h('span.hint', spotted.length ? `Noticed by ${spotted.join(', ')} ❗` : 'No one has noticed them.'), h('span.grow'),
+      h('button.small.ghost', { type: 'button', title: 'A fresh look: every enemy that can see them now rolls Perception + Intuition again', onclick: () => op('check') }, 'Check again')));
 }
 $('btn-add-player').onclick = async () => { await SR.invite(S.ctx.campaign.id, S.ctx.campaign.name); };
 
@@ -987,6 +1020,8 @@ function renderInspector() {
       if (S.mode === 'edit') { const st = Object.assign({}, m.statuses || {}); if (on) st[name] = value; else delete st[name]; updateMarkerLive(m, { statuses: Object.keys(st).length ? st : null }); renderInspector(); return; }
       setStatus({ kind: 'marker', id: m.id }, name, on, value).then(r => { if (r) { m.statuses = r; if (!Object.keys(r).length) delete m.statuses; invalidate(); renderInspector(); } });
     }));
+    if (S.ctx.campaign && (m.type === 'npc' || m.npc)) row.appendChild(h('div.row.tight', h('button.small.ghost', { type: 'button', title: 'Every runner in the game gets them as a contact (free, confirmed); you set Connection, Loyalty and what they can source',
+      onclick: () => SR.editSharedContact(S.ctx.campaign.id, { name: m.label || '', notes: m.info || '', connection: 1, loyalty: 1, supply: [] }).catch(e => toast(e.message)) }, '🤝 Give as a contact to every runner')));
     if (S.mode === 'play' && S.ctx.campaign) row.appendChild(h('div.row.tight', h('button.small', { type: 'button', onclick: () => attackDialog({ kind: 'marker', id: m.id }) }, '⚔ Attack…'),
       h('button.small.ghost', { type: 'button', onclick: () => attackDialog(null, { kind: 'marker', id: m.id }) }, 'Attack it…'),
       S.tracker && S.tracker.active && !S.tracker.entries.some(e => e.ref === m.id) ? h('button.small.ghost', { type: 'button', onclick: () => trackerOp('add', { mapId: MAP_ID, markers: [m.id], roll: true }) }, '+ Initiative') : null));
@@ -1207,9 +1242,11 @@ function combatantPicker(list, checkedFn) {
 async function startCombat() {
   const list = combatants();
   const picker = combatantPicker(list, () => true);
-  const roll = h('input', { type: 'checkbox', checked: true }), vis = h('input', { type: 'checkbox' }), surp = h('input', { type: 'checkbox' });
-  const amb = combatantPicker(list, () => false);
-  const ambBox = h('div.mt', { hidden: true }, h('p.hint', 'Who set up the ambush? They don’t roll.'), amb);
+  // runners still sneaking unnoticed on this map are offered as the ambushers
+  const unseen = new Set(S.ctx.players.filter(p => { const st = p.state && p.state.stealth; return st && st.on && st.mapId === MAP_ID && !(st.spotted || []).length; }).map(p => p.id));
+  const roll = h('input', { type: 'checkbox', checked: true }), vis = h('input', { type: 'checkbox' }), surp = h('input', { type: 'checkbox', checked: unseen.size > 0 });
+  const amb = combatantPicker(list, c => c.kind === 'player' && unseen.has(c.id));
+  const ambBox = h('div.mt', { hidden: !unseen.size }, h('p.hint', unseen.size ? 'Who set up the ambush? They don’t roll. Runners sneaking unnoticed are ticked.' : 'Who set up the ambush? They don’t roll.'), amb);
   surp.onchange = () => { ambBox.hidden = !surp.checked; };
   const ok = await UI.modal('Start combat', h('div', list.length ? picker : h('p.hint', 'No tokens or enemy markers on this map. You can still add combatants later.'),
     h('label.check.mt', roll, 'Roll initiative for the NPCs now'), h('label.check', vis, 'Show the order to players right away'),
@@ -1528,7 +1565,7 @@ async function attackDialog(attacker, target, more) {
 // ------------------------------------------------------------ legend
 function renderLegend() {
   if (S.map) renderAreas();
-  const el = $('legend'); el.hidden = !S.map.settings.legendVisible; el.innerHTML = '';
+  const el = $('legend'); el.hidden = S.gmLegend === false; el.innerHTML = '';
   if (el.hidden) return;
   const view = currentView(), vis = k => GridCore.visibility(view, k, cells()[k]);
   const groups = new Map(), doors = new Map();
@@ -1568,6 +1605,7 @@ function openSettings() {
   $('set-ambient').value = S.map.settings.ambientLight || 'bright'; $('set-cellm').value = S.map.settings.cellMeters || 2;
   $('set-enemies').checked = S.map.settings.enemiesInSight !== false;
   $('set-pview').value = S.map.settings.playerView || 'choose';
+  $('set-legend').checked = S.map.settings.legendVisible !== false;
   $('set-w').value = S.map.width; $('set-h').value = S.map.height; $('set-cs').value = S.map.cellSize;
   $('settings-dialog').showModal();
 }
@@ -1578,6 +1616,7 @@ $('set-ambient').onchange = e => { S.map.settings.ambientLight = e.target.value;
 $('set-cellm').onchange = e => { S.map.settings.cellMeters = Math.max(0.5, Math.min(10, +e.target.value || 2)); e.target.value = S.map.settings.cellMeters; markDirty(); invalidate(); };
 $('set-enemies').onchange = e => { S.map.settings.enemiesInSight = e.target.checked; markDirty(); };
 $('set-pview').onchange = e => { S.map.settings.playerView = e.target.value; markDirty(); };
+$('set-legend').onchange = e => { S.map.settings.legendVisible = e.target.checked; markDirty(); };
 $('set-sight-r').onchange = e => { S.map.settings.sightRadius = Math.max(1, Math.min(20, +e.target.value || 8)); e.target.value = S.map.settings.sightRadius; markDirty(); };
 $('set-w').onchange = e => { S.map.width = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };
 $('set-h').onchange = e => { S.map.height = Math.max(4, Math.min(200, +e.target.value || 4)); markDirty(); };
@@ -1704,7 +1743,8 @@ async function boot() {
   $('paint-color').value = colors().cellDefault; $('paint-border').value = colors().cellBorder;
   $('door-color').value = S.map.settings.doorPalette[0] || colors().doorDefault;
   $('marker-color').value = colors().markerDefault;
-  $('legend-toggle').checked = S.map.settings.legendVisible !== false;
+  try { S.gmLegend = localStorage.getItem('sg.legend.gm') !== '0'; } catch { S.gmLegend = true; }
+  $('legend-toggle').checked = S.gmLegend;
   $('rooms-toggle').checked = S.map.settings.showRoomLabels !== false;
   renderPaintSwatches(); renderDoorSwatches(); renderMarkerTypes(); renderLinkMaps(); renderRoomList(); renderSnapshots(); renderTemplateSelect();
   S.tracker = c.tracker;

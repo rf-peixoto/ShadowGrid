@@ -5,7 +5,7 @@ const $ = id => document.getElementById(id);
 const S = {
   st: null, view: 'map', sheet: null, sheetRev: null, runsSig: '', storeCat: 'All',
   // map
-  map: null, explored: new Set(), hover: null, drag: null, spaceDown: false, busy: false, legend: true,
+  map: null, explored: new Set(), hover: null, drag: null, spaceDown: false, busy: false,
   fitted: false, lastMapId: null, sceneDirty: true, sceneZoom: 1, frame: null, pathCache: null, ghost: null, pingFrame: null, lastTap: 0, clockSkew: 0, iso: {}, sceneIso: null,
 };
 let CAT = null, sheetUI = null, mapRoller = null;
@@ -22,7 +22,7 @@ function setView(v) {
   if (v === 'sheet' && sheetUI) sheetUI.render();
   if (v === 'store') renderStore();
   if (v === 'runs') loadRuns();
-  if (v === 'handouts') renderHandouts(true);
+  if (v === 'handouts') renderHandouts();
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view));
 document.addEventListener('click', e => { const g = e.target.closest('[data-goto]'); if (g) setView(g.dataset.goto); });
@@ -83,33 +83,39 @@ function applyState(st) {
   const sig = JSON.stringify(st.runsSig) + JSON.stringify(st.sessionsSig || []);
   if (sig !== S.runsSig) { S.runsSig = sig; if (S.view === 'runs') loadRuns(); }
   const hsig = JSON.stringify((st.handouts || []).map(x => [x.id, x.updatedAt]));
-  if (hsig !== S.handoutsSig) { S.handoutsSig = hsig; renderHandouts(S.view === 'handouts'); }
+  if (hsig !== S.handoutsSig) { S.handoutsSig = hsig; renderHandouts(); }
 }
 
 // ================================================================ handouts
-function seenHandouts() { try { return JSON.parse(localStorage.getItem('sg.seenHandouts') || '{}'); } catch { return {}; } }
-function renderHandouts(markSeen) {
-  const list = (S.st && S.st.handouts) || [];
-  const seen = seenHandouts();
-  const unseen = list.filter(x => seen[x.id] !== x.updatedAt);
-  if (markSeen) {
-    const next = {}; list.forEach(x => { next[x.id] = x.updatedAt; });
-    try { localStorage.setItem('sg.seenHandouts', JSON.stringify(next)); } catch { /* ignore */ }
-  }
+function seenHandouts() { try { return JSON.parse(localStorage.getItem('sg.seenHandouts') || '{}') || {}; } catch { return {}; } }
+/* handouts are collapsed cards, newest first; one counts as read once it's been opened ([NEW] until then) */
+function handoutBadge() {
+  const list = (S.st && S.st.handouts) || [], seen = seenHandouts();
+  const unread = list.filter(x => seen[x.id] !== x.updatedAt);
   const badge = $('badge-handouts');
-  badge.hidden = markSeen || !unseen.length; badge.textContent = unseen.length;
-  if (unseen.length && !markSeen && S.handoutsSigShown !== undefined) toast(`New handout from your GM: ${unseen[0].title}`, 4500);
-  S.handoutsSigShown = true;
-  const el = $('handouts-list'); el.innerHTML = '';
-  if (!list.length) { el.append(h('div.card.empty', h('h3', 'No handouts yet'), h('p', 'When your GM shares a dossier, a picture or a message, it appears here.'))); return; }
-  for (const ho of list) {
-    const isNew = unseen.includes(ho);
-    el.append(h('div.run-card.handout' + (isNew ? '.fresh' : ''),
-      h('div.head', h('h3', ho.title), isNew ? h('span.tag.active', 'New') : h('span.hint', ho.shownAt ? timeAgo(ho.shownAt) : '')),
-      h('div.handout-body',
-        ho.image ? h('a.handout-img', { href: `/uploads/${ho.image}`, target: '_blank', rel: 'noopener', title: 'Open the full image' }, h('img', { src: `/uploads/${ho.image}`, alt: ho.title, loading: 'lazy' })) : null,
-        ho.body ? renderMarkdown(ho.body) : null)));
-  }
+  badge.hidden = !unread.length; badge.textContent = unread.length;
+  return unread;
+}
+function renderHandouts() {
+  const list = [...((S.st && S.st.handouts) || [])].sort((a, b) => (b.shownAt || 0) - (a.shownAt || 0));
+  const seen = seenHandouts();
+  const unread = handoutBadge();
+  const known = S.handoutIds || null;
+  const arrived = known ? unread.filter(x => !known.has(x.id + x.updatedAt)) : [];
+  if (arrived.length && S.view !== 'handouts') toast(`New handout from your GM: ${arrived[0].title}`, 4500);
+  S.handoutIds = new Set(list.map(x => x.id + x.updatedAt));
+  SR.handoutBrowser($('handouts-list'), list, {
+    storeKey: 'sg.handoutsOpen', state: S.handoutSearch || (S.handoutSearch = { q: '' }),
+    isNew: ho => seen[ho.id] !== ho.updatedAt,
+    onOpen: (ho, card) => {
+      const now = seenHandouts(); now[ho.id] = ho.updatedAt;
+      try { localStorage.setItem('sg.seenHandouts', JSON.stringify(now)); } catch { /* ignore */ }
+      card.classList.remove('fresh'); const tag = card.querySelector('.tag.new'); if (tag) tag.remove();
+      handoutBadge();
+    },
+    meta: ho => h('span.hint', ho.shownAt ? timeAgo(ho.shownAt) : ''),
+    empty: h('div.card.empty', h('h3', 'No handouts yet'), h('p', 'When your GM shares a dossier, a picture or a message, it appears here.')),
+  });
 }
 function onSheet(sh) {
   S.sheet = sh;
@@ -241,7 +247,7 @@ function applyView(v) {
   if (m.cells == null && m.cellsSig && m.cellsSig === S.cellsSig && S.cells) m.cells = S.cells;
   else if (m.cells == null) { S.cellsSig = ''; refresh(true); return; }
   else if (m.cellsSig !== S.cellsSig || m.cells !== S.cells) { S.cells = m.cells; S.cellsSig = m.cellsSig || ''; cellsChanged = true; }
-  const look = JSON.stringify([m.id, m.gridType, m.settings, m.markers, v.token, v.others, m.mapStation]);
+  const look = JSON.stringify([m.id, m.gridType, m.settings, m.markers, v.token, v.others, m.mapStation, v.stealth]);
   const sceneChanged = cellsChanged || look !== S.lookSig;
   S.lookSig = look;
   S.map = { id: m.id, gridType: m.gridType, width: m.width, height: m.height, cellSize: m.cellSize,
@@ -284,9 +290,13 @@ function focusToken() {
 }
 function token() { return S.ghost || (S.st && S.st.view.token); }
 function viewModel() {
-  const tokens = (S.st.view.others || []).map(o => ({ ...o, me: false }));
-  const t = token();
-  if (t) tokens.push({ c: t.c, r: t.r, color: S.st.me.color, name: S.st.me.name, me: true, cm: S.st.me.cm, statuses: S.st.me.statuses });
+  const sneak = s => s ? Object.assign({}, s.statuses || {}, { Sneaking: true }) : null;
+  const tokens = (S.st.view.others || []).map(o => ({ ...o, me: false, statuses: o.sneaking ? sneak(o) : o.statuses }));
+  const t = token(), stl = S.st.view.stealth || {};
+  if (t) tokens.push({ c: t.c, r: t.r, color: S.st.me.color, name: S.st.me.name, me: true, cm: S.st.me.cm, statuses: stl.on ? sneak(S.st.me) : S.st.me.statuses });
+  // while sneaking, enemies in view that have eyes on you carry a badge
+  const badges = {};
+  for (const id of stl.on ? stl.watchers || [] : []) badges[id] = { Watching: true };
   // light as this runner's eyes see it: low-light sees dim light clearly, thermographic and ultrasound see in the dark
   const eyes = eyesOpts().vision, L = GridCore.LIGHT_LEVELS;
   const light = (c, r, cell) => {
@@ -294,7 +304,7 @@ function viewModel() {
     if (!lv) return 0;
     return SightCore.handles(eyes, lv, null, 0) ? (lv === 2 ? 1 : 0) : lv;
   };
-  return { mode: 'player', explored: S.explored, mapStation: !!S.st.view.map.mapStation, tokens, light };
+  return { mode: 'player', explored: S.explored, mapStation: !!S.st.view.map.mapStation, tokens, light, badges };
 }
 function pathTo(cell) {
   const t = S.st.view.token; if (!t || !cell) return null;
@@ -386,7 +396,7 @@ function fpSprites(v, G) {
   for (const m of S.map.data.markers) {
     if (m.hidden || GridCore.visibility(v, key(m.c, m.r), cells[key(m.c, m.r)]) !== 'full') continue;
     const p = G.cellCenter(m.c, m.r);
-    out.push({ kind: 'marker', x: p.x, y: p.y, type: m.type, color: m.color, label: markerName(m), cm: m.cm, statuses: m.statuses, at: { c: m.c, r: m.r } });
+    out.push({ kind: 'marker', x: p.x, y: p.y, type: m.type, color: m.color, label: markerName(m), cm: m.cm, statuses: GridCore.markerStatuses(v, m), at: { c: m.c, r: m.r } });
   }
   for (const t of v.tokens) {
     if (t.me || GridCore.visibility(v, key(t.c, t.r), cells[key(t.c, t.r)]) !== 'full') continue;
@@ -403,7 +413,13 @@ function drawFirstPerson(v, G, W, H, dpr, w, hh) {
     S.sceneDirty = false;
   }
   const cam = fpc.camera(performance.now());
-  FPView.render(ctx2d, W, H, dpr, { map: S.map, view: v, cam, sprites: fpSprites(v, G), eyes: eyesOpts().vision });
+  // the floor carries the same overlays as the flat map: line of sight or range bands, movement, areas
+  const world = GridCore.sightWorld(S.map, {}, sightSig()), mv = S.st.view.movement, t0 = token();
+  const wpn = S.range ? weaponPools().find(p => p.key === S.rangeWeapon) : null;
+  $('reach-key').hidden = !(S.reach && mv && t0); $('range-key').hidden = !wpn;
+  const field = (S.los || wpn) && t0 ? GridCore.sightField(S.map, t0, LOS_RADIUS, sightSig(), eyesOpts(), requestDraw) : null;
+  const overlay = GridCore.fpOverlay(S.map, { field, world, ar: wpn ? wpn.ar : null, reach: S.reach && mv && t0 ? { from: S.st.view.token, mv } : null, templates: S.st.view.templates || [] });
+  FPView.render(ctx2d, W, H, dpr, { map: S.map, view: v, cam, sprites: fpSprites(v, G), eyes: eyesOpts().vision, overlay });
   const t = token(), c = G.cellCenter(t.c, t.r);
   vp.centerOn(c.x, c.y); vp.drawMinimap(mini);
   if (cam.animating) requestDraw();
@@ -500,6 +516,12 @@ function renderTactics() {
     el.append(h('button', { type: 'button', onclick: () => act('flashlight', { on: !v.flashlight.on }) },
       v.flashlight.on ? 'Switch the flashlight off' : 'Switch the flashlight on'));
   }
+  // stealth: ticking it rolls Stealth + Agility; enemies who can see you roll Perception against the hits
+  const stl = v.stealth || {};
+  const sneakCb = h('input', { type: 'checkbox', id: 'stealth-toggle', checked: !!stl.on, onchange: e => act('stealth', { on: e.target.checked }) });
+  el.append(h('div.tac-stealth', h('label.check', { title: 'Stealth + Agility is rolled when you tick it. Attacking or being attacked ends it.' }, sneakCb, ' Stealth'),
+    stl.on ? h('span.hint', [stl.hits != null ? `${stl.hits} hit${stl.hits === 1 ? '' : 's'}` : 'Sneaking',
+      (stl.watchers || []).length ? `${stl.watchers.length} in view ${stl.watchers.length === 1 ? 'has' : 'have'} eyes on you 👀` : 'no one in view has eyes on you'].join(' · ')) : null));
   // vision
   const eyes = v.eyes || {};
   el.append(h('p.hint', 'Your eyes: ' + (['Normal', ...(eyes.vision || [])].join(', ')) + ((eyes.extras || []).length ? ` · ${eyes.extras.join(', ')}` : '') + (eyes.blinded ? ` · Blinded ${'I'.repeat(eyes.blinded)}` : '')));
@@ -554,19 +576,19 @@ function renderActions() {
   if (others.length) el.append(h('p.hint', 'Nearby: ' + others.map(o => o.name + (o.cm && o.cm.status !== 'OK' ? ` (${o.cm.status})` : '')).join(', ')));
 }
 function renderLegend() {
-  const el = $('legend'); el.hidden = !S.legend; el.innerHTML = '';
-  if (el.hidden || !S.map) return;
-  const groups = new Map(), col = S.map.settings.colors;
-  for (const m of S.map.data.markers) { const k = m.type + '|' + (m.color || col.markerDefault); groups.set(k, (groups.get(k) || 0) + 1); }
+  const el = $('legend'); el.hidden = !(S.map && S.map.settings.legendVisible); el.innerHTML = '';
+  if (el.hidden) return;
+  // the GM decides per map whether players get a legend; it names the kinds of markers in view, without counts
+  const groups = new Set(), col = S.map.settings.colors;
+  for (const m of S.map.data.markers) groups.add(m.type + '|' + (m.color || col.markerDefault));
   if (!groups.size) return;
   el.append(h('h4', 'Legend'));
-  for (const [k, n] of groups) {
+  for (const k of groups) {
     const [type, color] = k.split('|');
     const cv = h('canvas', { width: 36, height: 36 }); drawMarker(cv.getContext('2d'), 18, 18, 26, type, color, col.markerText, false);
-    el.append(h('div.legend-row', cv, h('span', (MARKER_BY_ID[type] || MARKER_TYPES[0]).name), h('span.count', '×' + n)));
+    el.append(h('div.legend-row', cv, h('span', (MARKER_BY_ID[type] || MARKER_TYPES[0]).name)));
   }
 }
-$('legend-toggle').onchange = e => { S.legend = e.target.checked; renderLegend(); };
 async function ping(cell) {
   if (!cell) return;
   S.st.view.pings = (S.st.view.pings || []).concat([{ c: cell.c, r: cell.r, t: Date.now() / 1000 - (S.clockSkew || 0), color: S.st.me.color, name: S.st.me.name }]); requestDraw();
@@ -855,7 +877,7 @@ async function boot() {
   try {
     CAT = await SR.catalog();
     await refresh(true);
-    sheetUI = Sheet.mount($('sheet-root'), { gm: false, sheetUrl: '/api/me/sheet', actionUrl: '/api/me/sheet/action', post, onSheet,
+    sheetUI = Sheet.mount($('sheet-root'), { gm: false, sheetUrl: '/api/me/sheet', actionUrl: '/api/me/sheet/action', transferUrl: '/api/me/transfer', post, onSheet,
       openStore: cat => { if (cat) setStoreCat(cat); setView('store'); }, log: () => (S.st ? S.st.rolls : []), onRolled });
     await sheetUI.load();
     S.sheetRev = S.st.sheetRev;

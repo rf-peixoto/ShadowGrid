@@ -54,8 +54,22 @@ function carve(F, c, r, room = -1) { const k = key(c, r); const ex = F.floor.get
 function isFloor(F, c, r) { return F.floor.has(key(c, r)); }
 function roomAt(F, c, r) { const f = F.floor.get(key(c, r)); return f ? f.room : -1; }
 
+/* corridor length between two cells: the cells a corridor carved from a to b runs through, ends excluded
+   (square corridors are L-shaped, so it's the Manhattan distance; hex ones run straight) */
+function corridorLen(g, a, b) {
+  const d = g.hex ? g.dist(a, b) : Math.abs(a.c - b.c) + Math.abs(a.r - b.r);
+  return Math.max(0, d - 1);
+}
+/* the two closest cells of two rooms and the corridor length between them */
+function closestPair(g, A, B) {
+  let best = null;
+  const edgeA = A.cells.filter(p => g.neighbors(p.c, p.r).length < g.G.edgeCount || g.neighbors(p.c, p.r).some(n => !A.set.has(key(n.c, n.r))));
+  const edgeB = B.cells.filter(p => g.neighbors(p.c, p.r).length < g.G.edgeCount || g.neighbors(p.c, p.r).some(n => !B.set.has(key(n.c, n.r))));
+  for (const a of edgeA) for (const b of edgeB) { const d = corridorLen(g, a, b); if (!best || d < best.d) best = { a, b, d }; }
+  return best;
+}
 function placeRooms(g, R, opts, F) {
-  const tries = opts.roomCount * 40, gap = Math.max(1, opts.wallGap);
+  const tries = opts.roomCount * (opts.algo === 'rooms' ? 120 : 40), gap = Math.max(1, opts.wallGap);
   const rooms = [];
   for (let t = 0; t < tries && rooms.length < opts.roomCount; t++) {
     let cells, center, bbox;
@@ -84,8 +98,11 @@ function placeRooms(g, R, opts, F) {
       if (rad >= 2) cells = cells.filter(p => g.dist(center, p) < rad || R.chance(0.7));
       bbox.rad = rad;
     }
+    const room = { cells, center, bbox, rad: bbox.rad ?? 0, set: new Set(cells.map(p => key(p.c, p.r))) };
+    // rooms & corridors: every room after the first lies within one corridor's reach of another
+    if (opts.algo === 'rooms' && rooms.length && !rooms.some(o => closestPair(g, o, room).d <= opts.corridorMax)) continue;
     const idx = rooms.length;
-    rooms.push({ cells, center, bbox, rad: bbox.rad ?? 0 });
+    rooms.push(room);
     for (const p of cells) F.floor.set(key(p.c, p.r), { c: p.c, r: p.r, room: idx });
   }
   F.rooms = rooms;
@@ -93,26 +110,28 @@ function placeRooms(g, R, opts, F) {
 }
 
 function mst(rooms, R, loops, g, opts) {
-  const n = rooms.length, edges = [];
+  const n = rooms.length;
   if (n < 2) return [];
+  // pair distances are corridor lengths between the rooms' closest cells; the tree is the one with the
+  // shortest corridors, so no corridor in it is longer than it must be (and none past the limit, given how
+  // rooms were placed)
+  const pair = new Map(), P = (i, j) => { const k = i < j ? i + ',' + j : j + ',' + i; let v = pair.get(k); if (!v) { v = i < j ? closestPair(g, rooms[i], rooms[j]) : (() => { const x = closestPair(g, rooms[j], rooms[i]); return { a: x.b, b: x.a, d: x.d }; })(); pair.set(k, v); } return v; };
   const inTree = new Set([0]), out = [];
-  const d = (i, j) => g.dist(rooms[i].center, rooms[j].center);
   while (inTree.size < n) {
     let best = null;
-    for (const i of inTree) for (let j = 0; j < n; j++) if (!inTree.has(j)) { const dd = d(i, j); if (!best || dd < best.d) best = { i, j, d: dd }; }
+    for (const i of inTree) for (let j = 0; j < n; j++) if (!inTree.has(j)) { const dd = P(i, j).d; if (!best || dd < best.d) best = { i, j, d: dd }; }
     inTree.add(best.j); out.push([best.i, best.j]);
   }
-  // extra loops among reasonably close pairs
+  const extra = [];
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
     if (out.some(([a, b]) => (a === i && b === j) || (a === j && b === i))) continue;
-    const dd = d(i, j);
-    if (dd > opts.corridorMax + (rooms[i].rad + rooms[j].rad) + opts.roomMax) continue;
-    edges.push([i, j, dd]);
+    const dd = P(i, j).d;
+    if (dd > opts.corridorMax) continue;
+    extra.push([i, j, dd]);
   }
-  edges.sort((a, b) => a[2] - b[2]);
-  const extra = Math.round(edges.length * loops / 100);
-  for (const e of edges.slice(0, extra)) out.push([e[0], e[1]]);
-  return out;
+  extra.sort((a, b) => a[2] - b[2]);
+  for (const e of extra.slice(0, Math.round(extra.length * loops / 100))) out.push([e[0], e[1]]);
+  return out.map(([i, j]) => ({ i, j, a: P(i, j).a, b: P(i, j).b }));
 }
 
 function boundaryCellToward(g, F, room, target) {
@@ -167,10 +186,7 @@ function addDoors(g, F, R, opts, out) {
 function genRooms(g, R, opts) {
   const F = newFloor();
   const rooms = placeRooms(g, R, opts, F);
-  for (const [i, j] of mst(rooms, R, opts.loops, g, opts)) {
-    const a = boundaryCellToward(g, F, rooms[i], rooms[j].center), b = boundaryCellToward(g, F, rooms[j], rooms[i].center);
-    carveCorridor(g, F, R, a, b, opts.corridorWidth);
-  }
+  for (const e of mst(rooms, R, opts.loops, g, opts)) carveCorridor(g, F, R, e.a, e.b, opts.corridorWidth);
   return F;
 }
 
@@ -319,6 +335,7 @@ const DEFAULTS = {
 function generate(userOpts) {
   const opts = { ...DEFAULTS, ...userOpts };
   opts.roomMin = Math.max(1, Math.min(opts.roomMin, opts.roomMax));
+  opts.corridorMax = Math.max(Math.max(1, opts.wallGap), +opts.corridorMax || DEFAULTS.corridorMax);   // rooms keep at least the wall gap apart
   const seed = opts.seed === '' || opts.seed == null ? String(Math.floor(Math.random() * 1e9)) : String(opts.seed);
   const R = rng(seed), g = makeGrid(opts.gridType, opts.width, opts.height);
   const F = opts.algo === 'caves' ? genCaves(g, R, opts) : opts.algo === 'mazes' ? genMazes(g, R, opts) : genRooms(g, R, opts);
@@ -340,5 +357,5 @@ function generate(userOpts) {
   });
   return out;
 }
-return { generate, DEFAULTS };
+return { generate, DEFAULTS, _test: { makeGrid, rng, placeRooms, mst, newFloor } };
 })();

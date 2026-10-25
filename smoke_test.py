@@ -1277,7 +1277,116 @@ v = j(pl.post("/api/me/flashlight", json={"on": True}, headers=H))
 check(v["flashlight"]["on"] and not v["map"]["cells"]["3,2"].get("light") and v["map"]["cells"]["12,2"].get("light") == "dark",
       "a flashlight lights the cells around its holder (10 m)")
 pl.post("/api/me/flashlight", json={"on": False}, headers=H)
+# stealth
+gm.post(f"/api/maps/{lmap}/light", json={"cells": list(lc), "light": "", "smoke": ""}, headers=H)
+gm.post(f"/api/players/{pid}/place", json={"mapId": lmap, "c": 2, "r": 2}, headers=H)
+gm.post(f"/api/maps/{lmap}/marker", json={"id": "d2", "cm": {"pm": 10, "sm": 10, "p": 0, "s": 0}}, headers=H)
+v = j(pl.post("/api/me/stealth", json={"on": True}, headers=H))
+check(v["stealth"]["on"] and "hits" not in v["stealth"], "ticking Stealth starts sneaking (the GM keeps the rolls by default)", v.get("stealth"))
+gst = next(p_ for p_ in j(gm.get(f"/api/maps/{lmap}/context"))["players"] if p_["id"] == pid)["state"].get("stealth") or {}
+check(gst.get("on") and isinstance(gst.get("hits"), int) and {"d1", "d2"} <= set(gst.get("checked") or []), "every enemy in view rolls Perception against the Stealth hits", gst)
+prolls = j(pl.get("/api/me/state"))["rolls"]
+check(not any("Stealth" in (x["data"].get("label") or x["data"].get("text") or "") for x in prolls), "players don't see stealth rolls unless the GM shows them")
+check(any("sneaks past" in (x["data"].get("text") or "") for x in j(gm.get(f"/api/games/{cid}"))["rolls"][:5]), "the GM sees the Perception tests")
+gm.post(f"/api/maps/{lmap}/marker", json={"id": "d2", "npc": {"attrs": {"Body": 3, "Agility": 3, "Reaction": 3, "Strength": 3, "Willpower": 3, "Logic": 3, "Intuition": 12, "Charisma": 3},
+                                                              "skills": {"Perception": 30}, "dr": 3}}, headers=H)
+r = gm.post(f"/api/players/{pid}/stealth", json={"op": "check"}, headers=H)
+gst = j(r)["player"]["state"]["stealth"]
+check(r.status_code == 200 and "d2" in gst["spotted"], "the GM has everyone roll again: a sharp-eyed guard notices the runner", gst)
+v = j(pl.get("/api/me/state"))["view"]
+check("d2" in v["stealth"].get("watchers", []), "the runner sees which enemies in view have eyes on them", v["stealth"])
+gm.post(f"/api/maps/{lmap}/light", json={"cells": list(lc), "light": "dark"}, headers=H)
+if not ({"Thermographic", "Ultrasound"} & set(eyes0)):
+    v = j(pl.get("/api/me/state"))["view"]
+    check("d2" not in v["stealth"].get("watchers", []), "in the dark, a guard with normal eyes can't see the runner", v["stealth"])
+gm.post(f"/api/maps/{lmap}/light", json={"cells": list(lc), "light": ""}, headers=H)
+r = gm.post(f"/api/players/{pid}/stealth", json={"op": "end"}, headers=H)
+check(not j(r)["player"]["state"].get("stealth"), "the GM ends a runner's stealth")
+gm.put(f"/api/games/{cid}/settings", json={"stealthRolls": True}, headers=H)
+v = j(pl.post("/api/me/stealth", json={"on": True}, headers=H))
+check(isinstance(v["stealth"].get("hits"), int), "with stealth rolls shown, the runner sees their hits", v["stealth"])
+check(any((x["data"].get("label") or "").startswith("Stealth + Agility") for x in j(pl.get("/api/me/state"))["rolls"][:5]), "and the table log shows the Stealth test")
+gm.put(f"/api/games/{cid}/settings", json={"stealthRolls": False}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "set_ammo", "uid": wkey[7:], "rounds": 15}, headers=H)
+r = gm.post(f"/api/maps/{lmap}/attack", json={"attacker": {"kind": "player", "id": pid}, "weapon": wkey, "mode": "SA", "range": "auto", "target": {"kind": "marker", "id": "d2"}}, headers=H)
+check(r.status_code == 200 and not j(pl.get("/api/me/state"))["view"]["stealth"]["on"], "attacking ends stealth", j(r).get("error"))
+pl.post("/api/me/stealth", json={"on": True}, headers=H)
+v = j(pl.post("/api/me/stealth", json={"on": False}, headers=H))
+check(not v["stealth"]["on"], "unticking Stealth stops sneaking")
+import stealth as STM  # noqa: E402
+check(STM.perception_parts({"npc": {"attrs": {"Intuition": 4}, "skills": {"Perception": 3}}}, 1)[-1] == ["Blinded 1", -3], "smoke between them: −3 to the guard's Perception")
+# per-map legend
+m_ = j(gm.get(f"/api/maps/{lmap}"))
+gm.put(f"/api/maps/{lmap}", json={"settings": dict(m_["settings"], legendVisible=False)}, headers=H)
+check(j(pl.get("/api/me/state"))["view"]["map"]["settings"]["legendVisible"] is False, "the GM hides the legend from players on a map")
 gm.delete(f"/api/maps/{lmap}", headers=H)
+# shared contacts
+r = gm.post(f"/api/games/{cid}/contacts", json={"op": "save", "contact": {"name": "Mr. Johnson", "type": "Fixer", "connection": 6, "loyalty": 2}}, headers=H)
+shared = j(r)["settings"]["contacts"]
+check(r.status_code == 200 and len(shared) == 1 and shared[0]["connection"] == 6, "the GM gives every runner a contact", j(r))
+cts = j(pl.get("/api/me/sheet"))["char"]["contacts"]
+gct = next((x for x in cts if x.get("game")), None)
+check(gct and gct["name"] == "Mr. Johnson" and gct["verified"], "the shared contact shows on the runner's sheet, confirmed", cts)
+gi = cts.index(gct)
+r = pl.post("/api/me/sheet/action", json={"action": "remove_contact", "index": gi}, headers=H)
+check(r.status_code == 400, "runners can't remove a shared contact")
+r = pl.post("/api/me/sheet/action", json={"action": "save_contact", "index": gi, "contact": {"name": "Mr. J", "connection": 12}}, headers=H)
+check(r.status_code == 400, "or change it")
+gm.post(f"/api/games/{cid}/contacts", json={"op": "save", "contact": dict(shared[0], loyalty=4)}, headers=H)
+check(next(x for x in j(pl.get("/api/me/sheet"))["char"]["contacts"] if x.get("game"))["loyalty"] == 4, "the GM's edit reaches every sheet")
+from sr import catalog as CATM  # noqa: E402
+check(CATM.access({"contacts": [gct]}, 4, "", "Weapons", True)[0], "a shared Fixer sources gear like any contact")
+gm.post(f"/api/games/{cid}/contacts", json={"op": "remove", "id": shared[0]["id"]}, headers=H)
+check(not any(x.get("game") for x in j(pl.get("/api/me/sheet"))["char"]["contacts"]), "removing it takes it from every sheet")
+# runners hand things to each other
+dk_id = j(dk.get("/api/me/state"))["me"]["id"]
+dk_ok = j(gm.get(f"/api/players/{dk_id}/sheet"))["approved"]
+gm.post(f"/api/players/{dk_id}/review", json={"decision": "reopen"}, headers=H)
+dk_ok = False
+if not dk_ok:
+    r = pl.post("/api/me/transfer", json={"to": dk_id, "nuyen": 10}, headers=H)
+    check(r.status_code == 400 and "approved" in j(r)["error"], "nothing goes to a runner whose sheet isn't approved", j(r))
+gm.post(f"/api/players/{dk_id}/review", json={"decision": "approve"}, headers=H)
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "gamemaster_set", "nuyen": 5000}, headers=H)
+n_dk = j(dk.get("/api/me/sheet"))["char"]["nuyen"]
+r = pl.post("/api/me/transfer", json={"to": dk_id, "nuyen": 1200}, headers=H)
+check(r.status_code == 200 and j(r)["sheet"]["char"]["nuyen"] == 3800 and j(dk.get("/api/me/sheet"))["char"]["nuyen"] == n_dk + 1200, "a runner hands nuyen to another", j(r))
+check(any(x.get("reason") == "Given to " + j(dk.get("/api/me/sheet"))["player"]["name"] or "Given to" in (x.get("reason") or "") for x in j(pl.get("/api/me/sheet"))["ledger"][:3]), "it shows in both ledgers")
+r = pl.post("/api/me/transfer", json={"to": dk_id, "nuyen": 999999}, headers=H)
+check(r.status_code == 400, "no more than they have")
+r = pl.post("/api/me/transfer", json={"to": pid, "nuyen": 5}, headers=H)
+check(r.status_code == 400, "not to themselves")
+gm.post(f"/api/players/{pid}/sheet/action", json={"action": "give", "ref": "ammo-explosives-fragmentation-grenade", "qty": 4}, headers=H)
+sg = next(i for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i["name"].startswith("Fragmentation Grenade"))
+r = pl.post("/api/me/transfer", json={"to": dk_id, "uid": sg["uid"], "qty": 1}, headers=H)
+got = [i for i in j(dk.get("/api/me/sheet"))["char"]["inventory"] if i["name"].startswith("Fragmentation Grenade")]
+left = next((i for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i["uid"] == sg["uid"]), None)
+check(r.status_code == 200 and got and got[0]["qty"] == 1 and left and left["qty"] == sg["qty"] - 1, "part of a stack changes hands", (j(r), got, left))
+wpn_ = next(i for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i["cat"] == "Ranged")
+r = pl.post("/api/me/transfer", json={"to": dk_id, "uid": wpn_["uid"]}, headers=H)
+check(r.status_code == 200 and any(i["name"] == wpn_["name"] for i in j(dk.get("/api/me/sheet"))["char"]["inventory"])
+      and not any(i["uid"] == wpn_["uid"] for i in j(pl.get("/api/me/sheet"))["char"]["inventory"]), "a weapon changes hands, loaded as it was")
+imp = next((i for i in j(pl.get("/api/me/sheet"))["char"]["inventory"] if i.get("implant")), None)
+if imp:
+    r = pl.post("/api/me/transfer", json={"to": dk_id, "uid": imp["uid"]}, headers=H)
+    check(r.status_code == 400 and "installed" in j(r)["error"], "implants stay in the body")
+check(any("gives" in (x["data"].get("text") or "") for x in j(gm.get(f"/api/games/{cid}"))["rolls"][:4]), "the table log says who gave what")
+# walls for the first-person view, and locked doors
+wm = j(gm.post("/api/maps", json={"name": "Walls", "campaignId": cid, "width": 6, "height": 4, "data": {"cells": {
+    "1,1": {"fill": "#123", "doors": {"1": {"color": "#fff", "open": False, "locked": True}}}, "2,1": {"fill": "#123", "doors": {"3": {"color": "#fff", "open": False}}},
+    "3,1": {"fill": "#123"}, "1,2": {"fill": "#123", "secret": True}}, "markers": [], "rooms": []}}, headers=H))["id"]
+gm.post(f"/api/players/{pid}/place", json={"mapId": wm, "c": 2, "r": 1}, headers=H)
+gm.post(f"/api/maps/{wm}/reveal", json={"players": [pid], "cells": ["1,1", "2,1"], "action": "reveal"}, headers=H)
+gm.post(f"/api/maps/{wm}/reveal", json={"players": [pid], "cells": ["3,1"], "action": "hide"}, headers=H)
+pc_ = j(pl.get("/api/me/state"))["view"]["map"]["cells"]
+check(pc_["1,1"]["w"] == (1 | 4 | 8) and pc_["2,1"]["w"] == (1 | 4), "explored cells say which edges are walls (an unfound secret cell counts as one)", (pc_["1,1"], pc_["2,1"]))
+check("3,1" not in pc_, "unexplored rooms stay unknown")
+r = pl.post("/api/me/door", json={"edge": 3}, headers=H)
+check(r.status_code == 400 and "locked" in j(r)["error"], "a door locked on the other side's copy stays shut")
+r = pl.post("/api/me/move", json={"c": 1, "r": 1}, headers=H)
+check(r.status_code == 400, "and nobody walks through it")
+gm.post(f"/api/players/{pid}/place", json={"mapId": mid, "c": 2, "r": 2}, headers=H)
+gm.delete(f"/api/maps/{wm}", headers=H)
 from sr import npc6e as N6  # noqa: E402
 from sr import combat as X  # noqa: E402
 check(X.npc_vision(X.parse_template(next(t for t in N6.NPC_TEMPLATES if t["name"].startswith("Sons of Sauron")))) == ["Low-light"], "an ork NPC sees in low light")

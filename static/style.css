@@ -905,6 +905,24 @@ button.strip-chip:hover { border-color: var(--muted); }
 .handout-body:has(.handout-img) { grid-template-columns: minmax(180px, 320px) minmax(0, 1fr); align-items: start; }
 .handout-img img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #050909; border: 1px solid var(--line); }
 .run-card.handout.fresh { border-color: var(--ar); box-shadow: 0 0 0 1px rgba(45, 226, 230, .35); }
+/* handouts fold like forum spoilers: the title bar opens them */
+.handout-tools { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .8rem; }
+.handout-search { flex: 1 1 220px; min-width: 0; }
+details.run-card.handout { display: block; padding: 0; }
+details.run-card.handout > summary { list-style: none; cursor: pointer; padding: .75rem 1rem; display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; border-radius: 10px; }
+details.run-card.handout > summary::-webkit-details-marker { display: none; }
+details.run-card.handout > summary:hover { background: color-mix(in srgb, var(--ar) 6%, transparent); }
+details.run-card.handout > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+details.run-card.handout[open] > summary { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
+details.run-card.handout > :not(summary) { margin: .8rem 1rem; }
+.handout-title { font-family: var(--font-ui); font-weight: 600; font-size: 1.05rem; }
+.handout .chev { width: .55em; height: .55em; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform .15s; align-self: center; flex: none; }
+details.handout[open] .chev { transform: rotate(45deg); }
+.tag.new { color: var(--ar); background: color-mix(in srgb, var(--ar) 14%, transparent); letter-spacing: .04em; }
+.handout-foot { display: flex; flex-direction: column; gap: .5rem; }
+.run-card.handout.dim { opacity: .78; }
+mark.hit { background: color-mix(in srgb, var(--warn) 45%, transparent); color: inherit; border-radius: 2px; padding: 0 .05em; }
+@media (prefers-reduced-motion: reduce) { .handout .chev { transition: none; } }
 .md-edit { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .md-edit textarea { min-height: 220px; font-family: var(--font-body); }
 .md-preview { border: 1px dashed var(--line); padding: .6rem .8rem; min-height: 220px; max-height: 320px; overflow: auto; background: var(--bg); }
@@ -1115,6 +1133,8 @@ body.shell #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 
 /* Tactics (player side panel): movement left, flashlight, range bands, areas */
 .tac-move { margin: 0; color: var(--text); }
 .tac-range select { width: 100%; }
+.tac-stealth { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem; }
+.tac-stealth .hint { margin: 0; }
 .tac-area { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
 .tac-area select { flex: 1 1 8rem; min-width: 0; }
 .tac-tpl { border-left: 3px solid var(--line); padding: .2rem 0 .2rem .5rem; font-size: .88rem; }
@@ -1122,3 +1142,5 @@ body.shell #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 
 .tac-tpl-h .x { margin-left: auto; }
 .tac-hits { display: flex; flex-wrap: wrap; gap: .2rem .6rem; color: var(--muted); }
 .canvas-wrap.placing canvas#map { cursor: crosshair; }
+.stealth-line { border-left: 2px solid var(--magic); padding: .15rem 0 .15rem .5rem; margin: .2rem 0; }
+.stealth-line .hint { margin: 0; }

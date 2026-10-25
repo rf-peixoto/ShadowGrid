@@ -213,7 +213,7 @@
           <label class="check" title="Walk the map at eye level (3)"><input type="checkbox" id="fp-toggle"> First person</label>
           <label class="check" title="Shade what the selected token or marker (or the runner you see as) can see, and the cover there (L)"><input type="checkbox" id="los-toggle"> Line of sight</label>
           <label class="check" title="In combat, show how far the selected runner or marker can Move and Sprint this turn"><input type="checkbox" id="reach-toggle" checked> Movement</label>
-          <label class="check"><input type="checkbox" id="legend-toggle" checked> Legend</label>
+          <label class="check" title="Your own legend; what players see is set in the map settings"><input type="checkbox" id="legend-toggle" checked> Legend</label>
           <label class="check"><input type="checkbox" id="rooms-toggle" checked> Room names</label>
           <p class="hint">Scroll to zoom. Right-drag or space+drag to pan. <kbd>F</kbd> fits the map. <kbd>3</kbd> walks it in first person. <kbd>L</kbd> shades the line of sight of the selected token or marker. <kbd>[</kbd> hides the side panel, <kbd>]</kbd> the dice.</p>
         </div>
@@ -253,6 +253,7 @@
       <label class="inline">Meters per cell <input type="number" id="set-cellm" min="0.5" max="10" step="0.5" style="width:4.5em"></label>
     </div>
     <label class="check"><input type="checkbox" id="set-enemies"> Enemies show to a runner only while that runner can see them</label>
+    <label class="check"><input type="checkbox" id="set-legend"> Players see the legend on this map</label>
     <div class="row"><label class="inline">Players see this map <select id="set-pview"><option value="choose">as they choose</option><option value="top">top-down</option><option value="iso">isometric</option><option value="fp">in first person</option></select></label></div>
     <p class="hint">Paint brighter or darker cells and smoke with the Light tool. The scale sets range bands, movement and area templates.</p>
     <h3>Runners' sight</h3>

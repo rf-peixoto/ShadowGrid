@@ -16,6 +16,7 @@ function setView(v) {
   render();
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => setView(b.dataset.view));
+window.addEventListener('hashchange', () => { if (location.hash.slice(1) !== S.view) setView(location.hash.slice(1)); });
 async function load(force) {
   const d = await api(`/api/games/${CID}?since=${encodeURIComponent(force ? '' : S.version || '')}`);
   if (d.unchanged) return false;
@@ -112,7 +113,12 @@ function renderPlayers() {
     h('button', { type: 'button', onclick: () => edge('all', 'refresh'), title: 'Every runner back to their Edge rating' }, 'Refresh everyone’s Edge'),
     h('button', { type: 'button', onclick: chargeLifestyle, title: 'Start of a new month: every runner pays their lifestyle' }, 'Charge monthly lifestyle'),
     h('button', { type: 'button', onclick: substanceLibrary, title: 'The toxins, drugs and diseases of this game' }, 'Toxins & drugs…'),
+    h('button', { type: 'button', onclick: sharedContacts, title: 'Contacts every runner has: a fixer the crew shares, an NPC they all met' }, `Shared contacts${((S.data.game.settings || {}).contacts || []).length ? ` (${S.data.game.settings.contacts.length})` : ''}…`),
     h('span.grow'),
+    h('label.check', { title: 'Stealth + Agility and the enemies’ Perception tests when a runner sneaks. Off: only you see them.' },
+      h('input', { type: 'checkbox', checked: !!(S.data.game.settings || {}).stealthRolls, onchange: async e => {
+        try { await api(`/api/games/${CID}/settings`, 'PUT', { stealthRolls: e.target.checked }); toast(e.target.checked ? 'Players now see stealth rolls.' : 'Stealth rolls are now yours alone.'); reload(); } catch (err) { toast(err.message); } } }),
+      'Players see stealth rolls'),
     h('button.ghost', { type: 'button', onclick: storeSettings, title: 'How much the store pays for gear players sell' }, `Store buys gear at ${(S.data.game.settings || {}).sellPct ?? 50}%`)));
   const waiting = ps.filter(p => p.status === 'waiting');
   if (waiting.length) root.append(h('div.banner.warn', h('p', h('b', `${waiting.length} sheet${waiting.length > 1 ? 's' : ''} waiting for your approval: `), waiting.map(p => p.name).join(', ')),
@@ -198,6 +204,25 @@ async function chargeLifestyle() {
   if (!await UI.confirm(`Charge one month of lifestyle to every runner (${list})? Runners who can't pay go into debt (negative nuyen).`, { ok: 'Charge' })) return;
   try { const r = await api(`/api/games/${CID}/lifestyle`, 'POST', {}); toast(`Lifestyle charged to ${r.count} runner${r.count > 1 ? 's' : ''}. See the log for amounts.`); reload(); }
   catch (e) { toast(e.message); }
+}
+/* contacts every runner in the game has, now and later */
+async function sharedContacts() {
+  const list = h('div.shared-contacts');
+  const draw = () => {
+    const cts = (S.data.game.settings || {}).contacts || [];
+    list.innerHTML = '';
+    if (!cts.length) list.append(h('p.hint', 'None yet. A shared contact shows on every runner’s sheet, costs no Karma and is confirmed already.'));
+    for (const ct of cts) list.append(h('div.row.tight.shared-contact',
+      h('b', ct.name), h('span.hint', `${ct.type || 'Contact'}, Connection ${ct.connection}, Loyalty ${ct.loyalty}`), h('span.grow'),
+      h('button.small', { type: 'button', onclick: async () => { const r = await SR.editSharedContact(CID, ct).catch(e => { toast(e.message); }); if (r) { S.data.game.settings = r.settings; draw(); } } }, 'Edit'),
+      h('button.small.danger', { type: 'button', onclick: async () => {
+        if (!await UI.confirm(`Take ${ct.name} away from every runner?`, { danger: true, ok: 'Remove' })) return;
+        try { const r = await api(`/api/games/${CID}/contacts`, 'POST', { op: 'remove', id: ct.id }); S.data.game.settings = r.settings; toast(r.message); draw(); } catch (e) { toast(e.message); } } }, 'Remove')));
+  };
+  draw();
+  const add = h('button.primary', { type: 'button', onclick: async () => { const r = await SR.editSharedContact(CID, null).catch(e => { toast(e.message); }); if (r) { S.data.game.settings = r.settings; draw(); } } }, 'Add a shared contact');
+  await UI.modal('Shared contacts', h('div', list, h('div.row.mt', add)), { ok: 'Done', cancel: null });
+  reload();
 }
 async function storeSettings() {
   const cur = (S.data.game.settings || {}).sellPct ?? 50;
@@ -531,19 +556,18 @@ function renderHandouts() {
   root.append(h('p.hint', 'Dossiers, maps, photos and messages for the runners. A handout stays hidden until you show it; then the runners you picked find it in their Handouts tab.'));
   const list = S.data.handouts || [];
   if (!list.length) { root.append(h('div.card.empty', h('h3', 'No handouts yet'), h('p', 'Write a note in Markdown, add a PNG or JPEG image, and choose who gets it.'), h('button.primary', { type: 'button', onclick: () => editHandout(null) }, 'New handout'))); return; }
-  for (const ho of list) root.append(handoutCard(ho, true));
-}
-function handoutCard(ho, gm) {
-  const img = ho.image ? h('a.handout-img', { href: `/uploads/${ho.image}`, target: '_blank', rel: 'noopener', title: 'Open the full image' }, h('img', { src: `/uploads/${ho.image}`, alt: ho.title, loading: 'lazy' })) : null;
-  const actions = gm ? h('div.row.tight',
-    h('button' + (ho.shown ? '' : '.primary'), { type: 'button', onclick: () => saveHandout(ho, { shown: !ho.shown }, ho.shown ? 'Hidden from the runners.' : 'Shown to the runners.') }, ho.shown ? 'Hide from runners' : 'Show to runners'),
-    h('button', { type: 'button', onclick: () => editHandout(ho) }, 'Edit'),
-    h('button.ghost.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete the handout “${ho.title}”?`, { danger: true, ok: 'Delete' })) { await api(`/api/handouts/${ho.id}`, 'DELETE'); reload(); } } }, 'Delete')) : null;
-  return h('div.run-card.handout' + (gm && !ho.shown ? '.dim' : ''),
-    h('div.head', h('h3', ho.title), gm ? h('span.tag.' + (ho.shown ? 'active' : 'abandoned'), ho.shown ? 'Shown' : 'Hidden') : h('span.hint', ho.shownAt ? timeAgo(ho.shownAt) : '')),
-    h('div.handout-body', img, ho.body ? renderMarkdown(ho.body) : null),
-    gm ? h('div.row.tight', h('span.hint', 'For:'), recipientsText(ho.recipients)) : null,
-    actions);
+  const box = h('div'); root.append(box);
+  SR.handoutBrowser(box, list, {
+    storeKey: 'sg.handoutsOpen.gm', state: S.handoutSearch || (S.handoutSearch = { q: '' }),
+    dim: ho => !ho.shown,
+    meta: ho => h('span.tag.' + (ho.shown ? 'active' : 'abandoned'), ho.shown ? 'Shown' : 'Hidden'),
+    footer: ho => h('div.handout-foot',
+      h('div.row.tight', h('span.hint', 'For:'), recipientsText(ho.recipients), h('span.grow'), h('span.hint', ho.shownAt ? `shown ${timeAgo(ho.shownAt)}` : `written ${timeAgo(ho.createdAt)}`)),
+      h('div.row.tight',
+        h('button' + (ho.shown ? '' : '.primary'), { type: 'button', onclick: () => saveHandout(ho, { shown: !ho.shown }, ho.shown ? 'Hidden from the runners.' : 'Shown to the runners.') }, ho.shown ? 'Hide from runners' : 'Show to runners'),
+        h('button', { type: 'button', onclick: () => editHandout(ho) }, 'Edit'),
+        h('button.ghost.danger', { type: 'button', onclick: async () => { if (await UI.confirm(`Delete the handout “${ho.title}”?`, { danger: true, ok: 'Delete' })) { await api(`/api/handouts/${ho.id}`, 'DELETE'); reload(); } } }, 'Delete'))),
+  });
 }
 async function saveHandout(ho, patch, msg) {
   try { await api(`/api/handouts/${ho.id}`, 'PUT', patch); toast(msg); reload(); } catch (e) { toast(e.message); }

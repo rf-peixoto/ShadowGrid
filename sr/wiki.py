@@ -35,6 +35,13 @@ Light is bright, dim or dark; smoke hangs in the air. The GM paints them on the 
 - Dim light costs no dice, but whoever sees clearly while the other side doesn't gains 1 Edge (the book's vision advantage). ShadowGrid gives it in GM-resolved attacks.
 - Vision comes from your metatype (elves and orks low-light, dwarfs and trolls thermographic), qualities, cybereyes and their options, an ultrasound sensor, or glasses, goggles, contacts or a monocle with a vision enhancement. Vision magnification adds 2 to the Attack Rating at Medium range and beyond.
 - On the map, an enemy shows to a runner only while that runner can see it (a GM setting per map), and Line of sight (L) shades what your eyes reach.""",
+    "Stealth": """**Stealth**
+Sneaking is a Stealth + Agility test made at the start of the effort; its hits are the threshold others need to notice you (core book p. 97).
+- Tick Stealth under Tactics on the map: the test is rolled at once, with your Sneaking specialization or expertise, wounds and statuses.
+- Every enemy that can see you (a sight line, and light and smoke their eyes can handle) rolls Perception + Intuition against your hits once, as you come into their view. Darkness hides you from normal eyes; smoke gives them Blinded (−3 per level).
+- Those who reach the threshold notice you. The GM sees who; while you sneak, the enemies in view with eyes on you carry 👀.
+- Sneaking costs no movement. Attacking or being attacked ends it; untick it to stop, and the GM can end it too.
+- Runners nobody has noticed when combat starts are offered to the GM as ambushers: everyone else takes the Surprise test.""",
     "Movement": """**Movement**
 - Move (Minor Action): 10 m (your metatype's walking rate), once per turn.
 - Sprint (Major Action): 15 m plus 1 m per hit on Athletics + Agility, once per turn, never in the same turn as a Move.

@@ -373,7 +373,7 @@ def err(msg, code=400):
 
 
 # ====================================================================== game settings
-GAME_DEFAULTS = {"sellPct": 50, "substances": [], "outOfStock": []}
+GAME_DEFAULTS = {"sellPct": 50, "substances": [], "outOfStock": [], "stealthRolls": False, "contacts": []}
 
 
 def game_settings(cid):
@@ -388,6 +388,37 @@ def game_settings(cid):
 
 
 # ====================================================================== players & characters
+def game_contacts(cid):
+    """The game's shared contacts (the GM gives them to every runner), cached for the request."""
+    if not cid:
+        return []
+    try:
+        cache = g.setdefault("_game_contacts", {})
+    except RuntimeError:                     # outside a request
+        cache = {}
+    if cid not in cache:
+        cache[cid] = [x for x in (game_settings(cid).get("contacts") or []) if isinstance(x, dict) and x.get("id")]
+    return cache[cid]
+
+
+def forget_game_contacts():
+    try:
+        g.pop("_game_contacts", None)
+    except RuntimeError:
+        pass
+
+
+def with_game_contacts(c, cid):
+    """A runner's own contacts plus the game's shared ones (pre-approved, free, not theirs to edit).
+    Shared contacts are never kept on the sheet: they are dropped and added again on every load."""
+    own = [ct for ct in c.get("contacts") or [] if not ct.get("game")]
+    shared = [{"name": x.get("name") or "Contact", "type": x.get("type") or "", "connection": int(x.get("connection") or 1),
+               "loyalty": int(x.get("loyalty") or 1), "supply": list(x.get("supply") or []), "notes": x.get("notes") or "",
+               "verified": True, "game": x["id"]} for x in game_contacts(cid)]
+    c["contacts"] = own + shared
+    return c
+
+
 def load_char(row):
     try:
         c = json.loads(row["character"])
@@ -395,7 +426,11 @@ def load_char(row):
         return R.normalize(R.new_character())
     c = R.normalize(c)
     R.remember_source(c, row["character"])
-    return c
+    try:
+        cid = row["campaign_id"]
+    except (IndexError, KeyError):
+        cid = None
+    return with_game_contacts(c, cid)
 
 
 def display_name(row, c=None):

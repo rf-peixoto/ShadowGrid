@@ -18,6 +18,130 @@ async function catalog() {
 const STATUS_LABEL = { draft: 'Draft', waiting: 'Waiting for approval', approved: 'Approved' };
 function statusTag(status) { return h('span.tag.' + status, STATUS_LABEL[status] || status); }
 /* What a contact can source: their type's defaults plus the ticked boxes (same rule as the server). */
+/* the contact form (sheet and the GM's shared contacts): {node, read()} */
+function contactForm(ct) {
+  ct = ct || { connection: 1, loyalty: 1, supply: [] };
+  const opt = (v, sel) => { const o = document.createElement('option'); o.value = v; o.textContent = v; o.selected = !!sel; return o; };
+  const name = h('input', { value: ct.name || '', required: true });
+  const type = h('select', CAT.contactTypes.map(x => opt(x, x === ct.type)));
+  if (ct.type && !CAT.contactTypes.includes(ct.type)) type.prepend(opt(ct.type, true));
+  const conn = h('input', { type: 'number', min: 1, max: 12, value: ct.connection || 1 });
+  const loyal = h('input', { type: 'number', min: 1, max: 12, value: ct.loyalty || 1 });
+  const boxes = CAT.store.supply.map(s => h('label.check', h('input', { type: 'checkbox', value: s, checked: (ct.supply || []).includes(s) }), s === 'Fixer' ? 'Anything (fixer)' : s));
+  const fromType = h('p.hint');
+  const syncType = () => {
+    const ts = CAT.contactTypeSupply[type.value] || [];
+    for (const b of boxes) { const x = b.querySelector('input'); const t = ts.includes(x.value); x.disabled = t; if (t) x.checked = true; else if (x.dataset.auto) x.checked = false; x.dataset.auto = t ? '1' : ''; }
+    fromType.textContent = ts.length ? `A ${type.value.toLowerCase()} sources ${ts.includes('Fixer') ? 'anything' : ts.join(', ')}. Tick more if they have other connections.` : 'Tick what this contact can source.';
+  };
+  type.onchange = syncType; syncType();
+  const notes = h('textarea', { rows: 4 }, ct.notes || '');
+  const node = h('div',
+    h('div.form-grid', h('label', 'Name', name), h('label', 'Type', type), h('label', 'Connection (1-12)', conn), h('label', 'Loyalty (1-12)', loyal)),
+    h('h4.mt', 'Can source'), fromType, h('div.check-grid', boxes), h('label.stack', 'Notes', notes));
+  const read = () => ({ name: name.value, type: type.value, connection: +conn.value, loyalty: +loyal.value,
+    supply: boxes.map(b => b.querySelector('input')).filter(x => x.checked && !x.disabled).map(x => x.value), notes: notes.value });
+  return { node, read };
+}
+/* the GM gives (or edits) a contact every runner in the game has */
+async function editSharedContact(cid, ct) {
+  await catalog();
+  const f = contactForm(ct);
+  const ok = await UI.modal(ct && ct.id ? `Edit ${ct.name}` : 'Give every runner a contact', h('div', f.node,
+    h('p.hint', 'Every runner in this game gets this contact, runners who join later too. It costs no Karma, needs no confirmation and sources gear like any contact. Only you can change or remove it.')), { ok: ct && ct.id ? 'Save' : 'Give to every runner' });
+  if (!ok) return null;
+  const r = await api(`/api/games/${cid}/contacts`, 'POST', { op: 'save', contact: Object.assign(f.read(), { id: ct && ct.id }) });
+  toast(r.message);
+  return r;
+}
+/* ---- handouts: collapsible cards with a search over titles and text (player tab and the GM page)
+   opts: { storeKey, state: {q}, isNew(ho), onOpen(ho), meta(ho), footer(ho), dim(ho), empty: node } */
+function handoutBrowser(root, list, opts) {
+  const st = opts.state || (opts.state = { q: '' });
+  let open = {};
+  try { open = JSON.parse(localStorage.getItem(opts.storeKey) || '{}') || {}; } catch { open = {}; }
+  const remember = (id, on) => {
+    if (on) open[id] = 1; else delete open[id];
+    try { localStorage.setItem(opts.storeKey, JSON.stringify(open)); } catch { /* ignore */ }
+  };
+  root.innerHTML = '';
+  if (!list.length) { if (opts.empty) root.append(opts.empty); return; }
+  const search = h('input.handout-search', { type: 'search', placeholder: 'Search titles and text', value: st.q, 'aria-label': 'Search handouts' });
+  const count = h('span.hint.handout-count');
+  const cards = h('div.handout-cards');
+  const all = on => { for (const d of cards.querySelectorAll('details.handout')) { if (d.hidden) continue; d.open = on; } };
+  root.append(h('div.handout-tools', search,
+    h('button.small', { type: 'button', onclick: () => all(true) }, 'Expand all'),
+    h('button.small', { type: 'button', onclick: () => all(false) }, 'Collapse all'), count), cards);
+  const items = list.map(ho => {
+    const body = h('div.handout-body',
+      ho.image ? h('a.handout-img', { href: `/uploads/${ho.image}`, target: '_blank', rel: 'noopener', title: 'Open the full image' }, h('img', { src: `/uploads/${ho.image}`, alt: ho.title, loading: 'lazy' })) : null,
+      ho.body ? renderMarkdown(ho.body) : null);
+    const title = h('span.handout-title', ho.title);
+    const fresh = opts.isNew && opts.isNew(ho);
+    const d = h('details.run-card.handout' + (fresh ? '.fresh' : '') + (opts.dim && opts.dim(ho) ? '.dim' : ''), { dataset: { id: ho.id } },
+      h('summary.head', h('span.chev', { 'aria-hidden': 'true' }), title, fresh ? h('span.tag.new', 'NEW') : null, h('span.grow'), opts.meta ? opts.meta(ho) : null),
+      body, opts.footer ? opts.footer(ho) : null);
+    d.open = !!open[ho.id];
+    d.addEventListener('toggle', () => {
+      if (d._auto) { d._auto = false; return; }   // opened or closed by a search, not by the reader
+      remember(ho.id, d.open);
+      if (d.open && opts.onOpen) opts.onOpen(ho, d);
+    });
+    cards.append(d);
+    return { ho, d, title, body, text: (ho.title + '\n' + (ho.body || '')).toLowerCase() };
+  });
+  const apply = () => {
+    const q = search.value.trim().toLowerCase();
+    st.q = search.value;
+    let shown = 0;
+    for (const it of items) {
+      unmark(it.title); unmark(it.body);
+      const hit = !q || it.text.includes(q);
+      it.d.hidden = !hit;
+      if (!hit) continue;
+      shown++;
+      if (q) {
+        mark(it.title, q);
+        const inBody = mark(it.body, q);
+        // a match in the text opens the card while searching, without changing what the reader keeps open
+        if (inBody && !it.d.open) { it.d._auto = true; it.d.open = true; it.d._searchOpened = true; }
+      } else if (it.d._searchOpened) {
+        it.d._searchOpened = false;
+        if (it.d.open !== !!open[it.ho.id]) { it.d._auto = true; it.d.open = !!open[it.ho.id]; }
+      }
+    }
+    count.textContent = q ? (shown ? `${shown} of ${items.length}` : 'Nothing matches.') : '';
+  };
+  search.addEventListener('input', apply);
+  if (st.q) apply();
+}
+function unmark(el) {
+  for (const m of [...el.querySelectorAll('mark.hit')]) { m.replaceWith(document.createTextNode(m.textContent)); }
+  el.normalize();
+}
+/* wrap every case-insensitive occurrence of q in el's text in <mark class="hit">; returns the number found */
+function mark(el, q) {
+  let n = 0;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    const text = node.nodeValue, low = text.toLowerCase();
+    let i = low.indexOf(q);
+    if (i < 0) continue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    while (i >= 0) {
+      frag.append(text.slice(last, i), h('mark.hit', text.slice(i, i + q.length)));
+      last = i + q.length; n++;
+      i = low.indexOf(q, last);
+    }
+    frag.append(text.slice(last));
+    node.replaceWith(frag);
+  }
+  return n;
+}
 function contactSupply(ct) { return [...new Set([...((CAT.contactTypeSupply || {})[ct.type] || []), ...(ct.supply || [])])]; }
 function healthTag(st) { return st && st !== 'OK' ? h('span.tag.status-' + st, st) : null; }
 function pips(cur, max, cap = 7) {
@@ -467,6 +591,6 @@ async function invite(cid, gameName) {
   return res;
 }
 
-return { actionPips, invite, catalog, contactSupply, rollSummary, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
+return { actionPips, invite, catalog, contactSupply, contactForm, editSharedContact, handoutBrowser, rollSummary, get CAT() { return CAT; }, statusTag, healthTag, pips, statusChips, monitor, dieEl, verdict, logEntry, renderLog,
   roller, edgeMenu, editItem, itemStats, availText, arText, breakdown, sum, RANGES };
 })();

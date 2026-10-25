@@ -7,6 +7,7 @@ from flask import jsonify, request
 
 import geometry as geo
 import sightmap as SM
+import stealth as ST
 
 from core import (GM_COLOR, add_roll, app, body, clamp_int, display_name, err, get_db, load_char, now,
                   roll_rows, save_char)
@@ -1170,6 +1171,13 @@ def gm_attack(map_id):
             if cid:
                 add_roll(cid, None, "GM", GM_COLOR, "attack", res, hidden=bool(b.get("hidden")))
             out.append(res)
+        if b.get("apply", True):
+            # attacking, or being attacked, ends stealth
+            if att_ref[0] == "player":
+                ST.stop_pid(db, att_ref[1], "attacked")
+            for _ref, _f, tref in targets:
+                if tref[0] == "player":
+                    ST.stop_pid(db, tref[1], "came under attack")
         db.commit()
     except R.RuleError as e:
         db.rollback()

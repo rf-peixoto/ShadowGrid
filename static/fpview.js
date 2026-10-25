@@ -1,11 +1,13 @@
 /* FPView: a first-person ("pseudo 3D") view of a ShadowGrid map, drawn by ray casting like the early
    90s dungeon crawlers. Rooms are cells with a floor; anything else is wall; doors stand on cell edges.
-   The player's fog of war applies: cells they haven't explored are drawn as dark, unknown walls.
+   The player's fog of war applies: a wall shows only where there is one (the server tells which edges of an
+   explored cell are walls); past the edge of what the runner has explored hangs a fog curtain instead.
 
    Rendered at a low internal resolution into an ImageData (fast, and pixelated on purpose), then scaled
    up; markers and runners are upright sprites, hidden behind walls with a per-column depth buffer.
 
-   FPView.render(ctx, W, H, dpr, o)   o = { map, view, cam: {x, y, a} (map pixels, radians), sprites, gm }
+   FPView.render(ctx, W, H, dpr, o)   o = { map, view, cam: {x, y, a} (map pixels, radians), sprites, eyes,
+                                          overlay: {"c,r": [r, g, b, a]} tints on the floor (sight, range, reach, areas) }
    FPView.pick(sx, sy)                -> the sprite under a CSS-pixel point, nearest first, or null
    FPView.angleOf(map, facing)        -> the angle of a facing (an edge index) on this grid */
 window.FPView = (() => {
@@ -53,12 +55,13 @@ window.FPView = (() => {
     const x = t.tint ? mixc(c3, t.tint, 0.55) : c3;
     return mixc(x, [0, 0, 0], t.k);
   }
-  function world(map, view, eyes) {
+  function world(map, view, eyes, overlayArg) {
     const G = geom(map), cells = map.data.cells, cs = G.cs, col = map.settings.colors;
     const cellInfo = new Map();
     const amb = view.mode === 'player' ? 0 : Math.max(0, ['bright', 'dim', 'dark'].indexOf((map.settings && map.settings.ambientLight) || 'bright'));
     const lightOf = view.light || ((c, r, cell) => cell.light ? Math.max(0, ['bright', 'dim', 'dark'].indexOf(cell.light)) : amb);
     const seesSmoke = kind => !!eyes && typeof SightCore !== 'undefined' && SightCore.handles(eyes, 0, kind, 0);
+    const overlay = overlayArg || null;
     function info(c, r) {
       const k = key(c, r);
       let v = cellInfo.get(k);
@@ -73,6 +76,9 @@ window.FPView = (() => {
               floor: toned(dim ? mixc(fill, rgb(col.revealedTint), 0.6) : fill, t),
               trim: toned(rgb(cell.border || col.cellBorder), t), ceil: toned(mixc(fill, [0, 0, 0], 0.82), t) };
         if (v.smoke) v.floor = mixc(v.floor, [150, 158, 162], 0.35);
+        v.wallBase = v.floor;                          // walls keep the room's colour; overlays tint the floor only
+        const ov = overlay && overlay.get(k);
+        if (ov && ov[3] > 0.01) v.floor = mixc(v.floor, ov, Math.min(0.85, ov[3] * 1.35));
       }
       cellInfo.set(k, v);
       return v;
@@ -85,7 +91,17 @@ window.FPView = (() => {
       }
       return null;
     }
-    return { G, cs, col, info, doorBetween, cells };
+    /* is there a real wall on edge e of an explored cell (from), toward a cell this viewer can't see?
+       Players' cells carry a bitmask of their wall edges ("w"); the GM's copy of the map knows outright.
+       Unexplored secret cells count as walls. */
+    function wallAt(from, e, c, r) {
+      if (!from || !from.room) return true;
+      if (from.cell && from.cell.w != null) return !!(from.cell.w & (1 << e));
+      if (!G.inBounds(c, r)) return true;
+      const t = cells[key(c, r)];
+      return !t || !t.fill || !!t.secret;
+    }
+    return { G, cs, col, info, doorBetween, cells, wallAt };
   }
 
   /* cast one ray from (px, py) in cell units along (dx, dy); square grids walk the cells exactly (DDA),
@@ -104,7 +120,10 @@ window.FPView = (() => {
       const hx = px + dx * dist, hy = py + dy * dist;
       const u = side === 0 ? hy - Math.floor(hy) : hx - Math.floor(hx);
       if (door && !door.open) return { dist, kind: 'door', door, u, side, from, smoke };
-      if (!to.room) return { dist, kind: to.unknown ? 'unknown' : 'wall', u, side, from, openDoor: door, smoke };
+      if (!to.room) {
+        const e = side === 0 ? (stepC > 0 ? 1 : 3) : (stepR > 0 ? 2 : 0);
+        return { dist, kind: to.unknown && !W.wallAt(from, e, c, r) ? 'fog' : 'wall', u, side, from, openDoor: door, smoke };
+      }
       if (to.smoke) smoke++;
       from = to;
     }
@@ -133,13 +152,20 @@ window.FPView = (() => {
       const nb = G.neighbor(cur.c, cur.r, be), to = W.info(nb.c, nb.r);
       const door = from.room ? GridCore.doorOnEdge(G, W.cells, cur.c, cur.r, be) : null;
       if (door && !door.open) return { dist: best, kind: 'door', door, u: bu, side: be, edge: be, from, smoke };
-      if (!to.room) return { dist: best, kind: to.unknown ? 'unknown' : 'wall', u: bu, side: be, edge: be, from, openDoor: door, smoke };
+      if (!to.room) return { dist: best, kind: to.unknown && !W.wallAt(from, be, nb.c, nb.r) ? 'fog' : 'wall', u: bu, side: be, edge: be, from, openDoor: door, smoke };
       if (to.smoke) smoke++;
       cur = nb; from = to; t = best;
     }
     return { dist: MAX_DIST, kind: 'far', smoke };
   }
 
+  /* smooth 2D value noise for the fog curtain */
+  function fogNoise(x, y) {
+    const h = (i, j) => { const t = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return t - Math.floor(t); };
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const a = h(x0, y0) + (h(x0 + 1, y0) - h(x0, y0)) * sx, b = h(x0, y0 + 1) + (h(x0 + 1, y0 + 1) - h(x0, y0 + 1)) * sx;
+    return a + (b - a) * sy;
+  }
   function wallColor(hit, v, colors) {
     // v: 0 at the top of the wall, 1 at the bottom
     const u = hit.u;
@@ -149,18 +175,8 @@ window.FPView = (() => {
       const frame = u < 0.07 || u > 0.93 || v < 0.06;
       return slit ? mixc(dc, [0, 0, 0], 0.75) : frame ? mixc(dc, [255, 255, 255], 0.25) : mixc(dc, [0, 0, 0], 0.35 + 0.1 * ((v * 6) % 1 < 0.08));
     }
-    if (hit.kind === 'unknown') {
-      // the edge of what this runner has mapped: a plain wall in muted tones, dashed trim
-      const from = hit.from && hit.from.room ? hit.from : null;
-      const base = from ? mixc(mixc(from.floor, [8, 14, 16], 0.5), rgb(colors.revealedTint), 0.25) : [26, 38, 42];
-      const dash = (u * 8) % 1 < 0.55;
-      if ((v < 0.03 || v > 0.965) && dash) return mixc(base, rgb(colors.revealedTint), 0.8);
-      if (Math.abs(u - 0.5) < 0.012 || u < 0.012 || u > 0.988) return mixc(base, [0, 0, 0], 0.45);
-      const n = ((Math.sin(u * 91.7 + v * 47.3) * 43758.5) % 1 + 1) % 1;
-      return mixc(base, [0, 0, 0], n * 0.18);
-    }
     const from = hit.from && hit.from.room ? hit.from : null;
-    const base = from ? mixc(mixc(from.floor, [8, 14, 16], 0.3), from.trim, 0.08) : [30, 50, 56];
+    const base = from ? mixc(mixc(from.wallBase || from.floor, [8, 14, 16], 0.3), from.trim, 0.08) : [30, 50, 56];
     const trim = from ? from.trim : rgb(colors.cellBorder);
     if (v < 0.035 || (v > 0.955)) return trim;                                  // neon trim top and bottom
     if (Math.abs(u - 0.5) < 0.012 || u < 0.012 || u > 0.988) return mixc(base, [0, 0, 0], 0.45);   // panel seams
@@ -190,7 +206,7 @@ window.FPView = (() => {
   }
 
   function render(ctx, W, H, dpr, o) {
-    const map = o.map, colors = map.settings.colors, Wd = world(map, o.view, o.eyes || null), G = Wd.G, cs = G.cs;
+    const map = o.map, colors = map.settings.colors, Wd = world(map, o.view, o.eyes || null, o.overlay || null), G = Wd.G, cs = G.cs;
     const RW = Math.max(200, Math.min(560, Math.round(W * dpr / (W > 1100 ? 3 : 2.4)))), RH = Math.max(120, Math.round(RW * H / W));
     if (buf.width !== RW || buf.height !== RH) { buf.width = RW; buf.height = RH; img = bctx.createImageData(RW, RH); zbuf = new Float32Array(RW); }
     const px = o.cam.x / cs, py = o.cam.y / cs, a = o.cam.a;
@@ -242,6 +258,21 @@ window.FPView = (() => {
       if (hit.kind === 'far') continue;
       const d = Math.max(0.05, dist);
       const top = half - f * (WALL_H - EYE) / d, bot = half + f * EYE / d;
+      if (hit.kind === 'fog') {
+        // the edge of what this runner has explored: a soft bank of fog, no wall; it thins out at the top
+        // and bottom and drifts a little (value noise across the screen)
+        const ext = (bot - top) * 0.35, fy0 = Math.max(0, Math.ceil(top - ext)), fy1 = Math.min(RH - 1, Math.floor(bot + ext * 0.25));
+        const near = Math.max(0, 1 - dist / FOG_DIST);
+        for (let y = fy0; y <= fy1; y++) {
+          const v = (y - (top - ext)) / (bot + ext * 0.25 - (top - ext));
+          const edge = Math.min(1, Math.min(v, 1 - v) * 3.2);
+          const n = fogNoise(x * 0.09 + px * 3.1 + a * 9, y * 0.11);
+          const al = Math.min(1, (0.7 + 0.45 * near) * edge * (0.8 + 0.4 * n));
+          const i = (y * RW + x) * 4, c = mixc(fogC, [140, 160, 166], 0.12 + 0.18 * n);
+          data[i] = data[i] + (c[0] - data[i]) * al; data[i + 1] = data[i + 1] + (c[1] - data[i + 1]) * al; data[i + 2] = data[i + 2] + (c[2] - data[i + 2]) * al;
+        }
+        continue;
+      }
       const y0 = Math.max(0, Math.ceil(top)), y1 = Math.min(RH - 1, Math.floor(bot));
       // facets: square walls by side, hex walls by the direction their edge faces (light from the north-west)
       const shade = hex ? 0.7 + 0.3 * Math.max(0, Math.cos((60 * (hit.edge || 0) + 30) * Math.PI / 180 + 2.1)) : (hit.side ? 0.78 : 1);

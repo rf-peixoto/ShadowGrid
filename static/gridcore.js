@@ -181,7 +181,14 @@ function cmStatus(cm) {
 /* status effects (Prone, Burning…) drawn as a row of small icons above a token or marker */
 const STATUS_ICONS = { Blinded: '👁', Burning: '🔥', Chilled: '❄', Confused: '❓', Corrosive: '🧪', Cover: '🛡', Dazed: '💫',
   Deafened: '🔇', Fatigued: '😩', Frightened: '😱', Hazed: '🌫', Hobbled: '🦶', Immobilized: '⛓', Invisible: '👻',
-  Nauseated: '🤢', Panicked: '🏃', Petrified: '🗿', Poisoned: '☠', Prone: '⬇', Silent: '🤫', Stilled: '⏸', Wet: '💧', Zapped: '⚡' };
+  Nauseated: '🤢', Panicked: '🏃', Petrified: '🗿', Poisoned: '☠', Prone: '⬇', Silent: '🤫', Stilled: '⏸', Wet: '💧', Zapped: '⚡',
+  // shown only, never set as statuses: a sneaking runner, an enemy who noticed one, an enemy with eyes on you
+  Sneaking: '🥷', Alerted: '❗', Watching: '👀' };
+/* a marker's statuses plus the view's display-only badges (view.badges = {markerId: {Alerted: true}}) */
+function markerStatuses(view, m) {
+  const b = view && view.badges && view.badges[m.id];
+  return b ? Object.assign({}, m.statuses || {}, b) : m.statuses;
+}
 function drawStatuses(g, x, y, size, statuses) {
   const names = Object.keys(statuses || {});
   if (!names.length) return;
@@ -226,10 +233,14 @@ function drawCM(g, x, y, size, cm, pixel) {
 function drawToken(g, x, y, d, tok, col, pixel) {
   const R = v => pixel ? Math.round(v) : v;
   const st = cmStatus(tok.cm);
+  const sneaking = !!(tok.statuses && tok.statuses.Sneaking);
   if (st === 'Dead' || st === 'Dying' || st === 'Unconscious') g.globalAlpha = 0.6;
+  else if (sneaking) g.globalAlpha = 0.62;
   g.beginPath(); g.arc(R(x), R(y), R(d / 2), 0, Math.PI * 2);
   g.fillStyle = tok.color; g.fill();
-  g.lineWidth = Math.max(1.5, d / 8); g.strokeStyle = tok.me ? col.tokenOutline : 'rgba(0,0,0,.6)'; g.stroke();
+  g.lineWidth = Math.max(1.5, d / 8); g.strokeStyle = tok.me ? col.tokenOutline : 'rgba(0,0,0,.6)';
+  if (sneaking) g.setLineDash([Math.max(2, d / 7), Math.max(2, d / 10)]);
+  g.stroke(); g.setLineDash([]);
   g.fillStyle = '#111'; g.font = `bold ${Math.round(d * 0.55)}px ${pixel ? 'monospace' : FONT}`;
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText((tok.name || '?').trim().charAt(0).toUpperCase(), R(x), R(y + d * 0.04));
@@ -353,7 +364,8 @@ function renderScene(g, map, view, opts) {
     if (m.hidden) g.globalAlpha = 0.45;
     drawMarker(g, x, y, size * 0.62, m.type, m.color || col.markerDefault, col.markerText, pixel);
     if (m.cm) drawCM(g, x, y + size * 0.45, size * 0.62, m.cm, pixel);
-    if (m.statuses) drawStatuses(g, x, y - size * 0.5, size * 0.62, m.statuses);
+    const mst = markerStatuses(view, m);
+    if (mst) drawStatuses(g, x, y - size * 0.5, size * 0.62, mst);
     if (m.hidden) {
       g.globalAlpha = 1; g.strokeStyle = col.highlight; g.lineWidth = Math.max(1, size / 20); g.setLineDash([3, 2]);
       g.beginPath(); g.arc(Math.round(x), Math.round(y), size * 0.4, 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
@@ -402,7 +414,8 @@ function renderSprites(g, map, view, vp, opts = {}) {
       g.globalAlpha = 1;
       if (m.hidden) { g.strokeStyle = col.highlight; g.lineWidth = 1.5; g.setLineDash([3, 2]); g.beginPath(); g.arc(p.x, p.y - lift, d * 0.66, 0, Math.PI * 2); g.stroke(); g.setLineDash([]); }
       if (m.cm) drawCM(g, p.x, p.y - lift - d * 0.85, d, m.cm, false);
-      if (m.statuses) drawStatuses(g, p.x, p.y - lift - d * (m.cm ? 1.25 : 0.95), d, m.statuses);
+      const mst = markerStatuses(view, m);
+      if (mst) drawStatuses(g, p.x, p.y - lift - d * (m.cm ? 1.25 : 0.95), d, mst);
     } });
   }
   for (const t of (view.tokens || [])) {
@@ -507,7 +520,12 @@ function passable(G, cells, a, b) {
   if (!G.inBounds(b.c, b.r) || !cell || !cell.fill) return false;
   for (let e = 0; e < G.edgeCount; e++) {
     const n = G.neighbor(a.c, a.r, e);
-    if (n.c === b.c && n.r === b.r) { const d = doorOnEdge(G, cells, a.c, a.r, e); return !(d && !d.open); }
+    if (n.c === b.c && n.r === b.r) {
+      // a door may be stored on either cell of the edge (or, in old maps, on both): any closed copy blocks
+      const opp = G.hex ? (e + 3) % 6 : (e + 2) % 4;
+      const da = ((cells[key(a.c, a.r)] || {}).doors || {})[e], db = (cell.doors || {})[opp];
+      return !((da && !da.open) || (db && !db.open));
+    }
   }
   return false;
 }
@@ -942,6 +960,47 @@ function drawTemplates(ctx, map, world, templates, zoom, opts) {
     ctx.restore();
   }
 }
+/* ---- the same overlays for the first-person view: a tint per floor cell, {"c,r": [r, g, b, a]}.
+   o = { field (sight), world, ar (range bands of a weapon), reach: {from, mv}, templates } */
+const parseRgba = (() => { const memo = new Map(); return s => { let v = memo.get(s); if (!v) { const m = String(s).match(/[\d.]+/g) || [0, 0, 0, 0]; v = [+m[0], +m[1], +m[2], m[3] == null ? 1 : +m[3]]; memo.set(s, v); } return v; }; })();
+const COVER_TINT = ['', 'rgba(255,214,90,.16)', 'rgba(255,176,46,.28)', 'rgba(255,120,40,.40)', 'rgba(255,60,60,.52)'];
+function fpOverlay(map, o) {
+  const out = new Map();
+  const lay = (k, rgba) => {      // "over" compositing of translucent tints
+    const t = typeof rgba === 'string' ? parseRgba(rgba) : rgba, cur = out.get(k);
+    if (!cur) { out.set(k, t.slice()); return; }
+    const a = t[3] + cur[3] * (1 - t[3]);
+    for (let i = 0; i < 3; i++) cur[i] = a ? (t[i] * t[3] + cur[i] * cur[3] * (1 - t[3])) / a : 0;
+    cur[3] = a;
+  };
+  const f = o.field;
+  if (f) {
+    for (const k of f.hidden) lay(k, 'rgba(0,0,0,.58)');
+    for (const k of f.far || []) lay(k, 'rgba(0,0,0,.42)');
+    const a = [f.from.c, f.from.r];
+    for (const [k, cv] of f.seen) {
+      if (o.ar && o.world) {
+        const [c, r] = k.split(',').map(Number);
+        if (c === a[0] && r === a[1]) continue;
+        const b = bandOf(o.world.distM(a, [c, r]));
+        lay(k, o.ar[b] == null ? 'rgba(0,0,0,.5)' : BAND_TINT[b]);
+      } else if (cv) lay(k, COVER_TINT[cv]);
+    }
+  }
+  if (o.reach) {
+    const mv = o.reach.mv, cm = mv.cellM || 2;
+    const w = Math.floor((mv.walk || 0) / cm + 1e-6), s = Math.floor((mv.sprint || 0) / cm + 1e-6), sx = Math.floor((mv.sprintMax || 0) / cm + 1e-6);
+    for (const [k, d] of reachSteps(map, o.reach.from, Math.max(w, s, sx))) {
+      if (!d) continue;
+      lay(k, d <= w ? 'rgba(255,255,255,.16)' : d <= s ? 'rgba(255,176,46,.22)' : d <= sx ? 'rgba(255,176,46,.11)' : 'rgba(0,0,0,0)');
+    }
+  }
+  for (const t of o.templates || []) {
+    if (!o.world) break;
+    for (const x of templateCells(o.world, t)) lay(key(x.c, x.r), t.kind === 'blast' ? RING_TINT[ringOf(x.d)] : t.kind === 'smoke' ? 'rgba(190,200,204,.25)' : 'rgba(185,140,255,.22)');
+  }
+  return out;
+}
 /* who an area catches: things = [{c, r, name}] -> [{name, ring: 'Ground zero'|'Close'|'Near'|null, dv}] */
 function templateTargets(world, t, things) {
   const inside = new Map(templateCells(world, t).map(x => [key(x.c, x.r), x.d]));
@@ -955,6 +1014,6 @@ function templateTargets(world, t, things) {
   return out.sort((x, y) => x.d - y.d);
 }
 
-return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT, lineOfSight, sightField, sightWorld, sightMap, lightSources, drawSight, COVER_NAMES, LIGHT_LEVELS,
+return { MARKER_TYPES, MARKER_BY_ID, key, mix, geom, tracePoly, drawMarker, drawToken, drawTokenSprite, drawLabel, drawDoor, drawCM, cmStatus, drawStatuses, STATUS_ICONS, markerStatuses, fpOverlay, STATUS_COLOR, drawPing, paintedBounds, renderScene, renderSprites, pickSprite, buildIsoLayers, drawIsoLayers, visibility, makeViewport, doorOnEdge, passable, findPath, FONT, lineOfSight, sightField, sightWorld, sightMap, lightSources, drawSight, COVER_NAMES, LIGHT_LEVELS,
          drawRange, bandOf, RANGE_BANDS, reachSteps, drawReach, drawTemplates, templateTargets, templateCells };
 })();

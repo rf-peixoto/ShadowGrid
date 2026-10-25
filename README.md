@@ -39,6 +39,12 @@ game masters, with screenshots.
   percentage the GM sets. PACKs are bought in one go, item by item checked
   against the player's contacts. The GM marks items out of stock (and back)
   from the game's Store tab.
+- **Giving.** Runners hand nuyen or gear (a whole item or part of a stack) to
+  each other from the sheet; both ledgers and the table log record it.
+- **Shared contacts.** The GM gives a contact to every runner at once (from
+  the game page, or from an NPC marker the crew has met): it shows on every
+  sheet, runners who join later included, costs no Karma, is confirmed already
+  and sources gear like any contact. Only the GM can change or remove it.
 - **A map-first play screen** for players and the GM: the map fills the
   screen, the initiative order runs in a strip above it, the dice roller and
   table log sit in a collapsible panel below, and everything else is in a
@@ -53,8 +59,10 @@ game masters, with screenshots.
   (top-down, isometric or first person), or leave it to them.
 - **First-person view**: walk the map at eye level, like an early-90s dungeon
   crawler (<kbd>V</kbd> or <kbd>3</kbd>). Players walk their own runner, and
-  doors open from the cell in front. The GM gets a free camera that walks
-  through rooms and closed doors without moving anyone, sees hidden markers
+  doors open from the cell in front. Walls show only where there are walls;
+  past the explored edge hangs fog. Line of sight, range bands, movement and
+  areas tint the floor. The GM gets a free camera that walks the rooms without
+  moving anyone (closed and locked doors stop it too), sees hidden markers
   faintly, and selects a marker or runner by clicking it.
 - **Line of sight overlay** (<kbd>L</kbd>): shades what a runner can see from
   their token, with the cover each cell gives (Cover I–IV) worked out the same
@@ -72,6 +80,17 @@ game masters, with screenshots.
 - **Enemies only in sight**: danger, boss and NPC markers show to a player only
   while their own runner can see them (a setting per map); loot, portals and
   the rest stay on the map once explored.
+- **Stealth**: a runner ticks Stealth under Tactics and their Stealth + Agility
+  test is rolled at once; its hits are the threshold. Every enemy that can see
+  them (a sight line, and light and smoke their eyes handle) rolls Perception +
+  Intuition against it as they come into view, and the GM sees who noticed
+  them (a ❗ on the map). While sneaking, the runner sees which enemies in view
+  have eyes on them (👀). Attacking or being attacked ends it, and the GM can
+  end it or have everyone look again. Runners still unnoticed are ticked as
+  ambushers when combat starts. The GM chooses whether players see these
+  rolls.
+- **Legend per map**: the GM decides on each map whether players see the
+  legend (it names the kinds of markers in view, without counting them).
 - **Range bands** (<kbd>R</kbd>): a player picks one of their weapons and the
   cells in sight take the colour of its range bands, with its Attack Rating
   for each. The GM's attacks take the range from the map, in meters (2 m per
@@ -123,7 +142,10 @@ game masters, with screenshots.
 - **Runs (contracts)**: the GM assigns tasks and runners, ticks tasks as they
   happen, and closes the run. Each runner is paid automatically.
 - **Handouts**: the GM writes notes in Markdown with uploaded images (PNG or
-  JPEG) and shares them with everyone or with chosen runners.
+  JPEG) and shares them with everyone or with chosen runners. Handouts fold
+  like forum spoilers, newest first, with a search over titles and text that
+  highlights what it finds; players see a NEW tag until they open one, and
+  each reader's open cards are remembered.
 - **Sessions**: start and end a session to get a recap of what happened
   (rolls, damage, Karma and nuyen, runs) that players can read and the GM can
   export as Markdown.
@@ -492,6 +514,9 @@ so a table can check them against its books and change them in one place.
 - `fight.py`: initiative tracker, actions, attacks, line of sight and cover,
   statuses and NPC templates
 - `handouts.py`: handouts and image uploads
+- `stealth.py`: sneaking, and the enemies' Perception tests
+- `movement.py`, `sightmap.py`: movement in combat; light, eyes and sight on a
+  live map
 - `sessions.py`: sessions and their recaps
 - `backup.py`: daily and manual backups, restore
 - `sr/core6e.py`, `sr/gear6e.py`, `sr/magic6e.py`, `sr/npc6e.py`: core-book

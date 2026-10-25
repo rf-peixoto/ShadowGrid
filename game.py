@@ -13,7 +13,7 @@ import aio
 
 from core import (APPROVED, DRAFT, GM_COLOR, INVITE_DAYS, PLAYER_COLORS, SUBMITTED, add_roll, app, body, gzip_bytes,
                   campaign_version, clamp_int, display_name, err, fetch_player_row, game_settings, get_db, ledger_add,
-                  ledger_rows, load_char, new_id, now, player_required, roll_rows, row_to_player, save_char)
+                  forget_game_contacts, ledger_rows, load_char, new_id, now, player_required, roll_rows, row_to_player, save_char)
 import handouts as HO
 import sessions as SS
 from maps import player_view, row_to_map
@@ -573,9 +573,68 @@ def game_settings_update(cid):
     cur = json.loads(g["settings"] or "{}") if "settings" in g.keys() else {}
     if "sellPct" in b:
         cur["sellPct"] = clamp_int(b.get("sellPct"), 0, 100, 50)
+    if "stealthRolls" in b:
+        cur["stealthRolls"] = bool(b.get("stealthRolls"))
     get_db().execute("UPDATE campaigns SET settings=?, updated_at=? WHERE id=?", (json.dumps(cur), now(), cid))
     get_db().commit()
     return jsonify({"settings": game_settings(cid)})
+
+
+# ====================================================================== shared contacts
+MAX_SHARED_CONTACTS = 60
+
+
+@app.route("/api/games/<cid>/contacts", methods=["POST"])
+@gamemaster_required
+def game_contacts_update(cid):
+    """Contacts every runner in the game has (now and later), free and confirmed: a fixer the crew shares,
+    an NPC they all met. {op: "save", contact: {id?, name, type, connection, loyalty, supply, notes}} or
+    {op: "remove", id}."""
+    g = game_or_404(cid)
+    b = body()
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    cur = json.loads(g["settings"] or "{}")
+    lst = [x for x in (cur.get("contacts") or []) if isinstance(x, dict) and x.get("id")]
+    op = str(b.get("op") or "")
+    if op == "save":
+        raw = b.get("contact") or {}
+        name = str(raw.get("name") or "").strip()[:80]
+        if not name:
+            db.rollback()
+            return err("A contact needs a name.")
+        ct = {"id": str(raw.get("id") or "") or new_id(), "name": name, "type": str(raw.get("type") or "")[:40],
+              "connection": clamp_int(raw.get("connection"), 1, 12, 1), "loyalty": clamp_int(raw.get("loyalty"), 1, 12, 1),
+              "supply": [s for s in (raw.get("supply") or []) if s in R.SUPPLY][:20], "notes": str(raw.get("notes") or "")[:4000]}
+        i = next((n for n, x in enumerate(lst) if x["id"] == ct["id"]), None)
+        if i is None:
+            if len(lst) >= MAX_SHARED_CONTACTS:
+                db.rollback()
+                return err("That's as many shared contacts as a game can have.")
+            lst.append(ct)
+            msg = f"{name} is now a contact of every runner."
+        else:
+            lst[i] = ct
+            msg = f"{name} updated for every runner."
+    elif op == "remove":
+        gone = next((x for x in lst if x["id"] == str(b.get("id"))), None)
+        if not gone:
+            db.rollback()
+            return err("No such contact.")
+        lst = [x for x in lst if x is not gone]
+        msg = f"{gone['name']} is no longer a contact of the runners."
+    else:
+        db.rollback()
+        return err("Unknown action.")
+    cur["contacts"] = lst
+    db.execute("UPDATE campaigns SET settings=?, updated_at=? WHERE id=?", (json.dumps(cur), now(), cid))
+    # the sheets show them through each runner's sheet version: bump every runner so open sheets refresh
+    db.execute("UPDATE players SET char_rev=char_rev+1, updated_at=? WHERE campaign_id=?", (now(), cid))
+    if op == "save" and i is None:
+        add_roll(cid, None, "GM", GM_COLOR, "note", {"text": f"gave every runner a new contact: {name}."})
+    db.commit()
+    forget_game_contacts()
+    return jsonify({"settings": game_settings(cid), "message": msg})
 
 
 # ====================================================================== toxins, drugs, diseases
@@ -786,6 +845,63 @@ def _use_supplies(c):
         sup["qty"] = R._int(sup.get("qty"), 1) - 1
         if sup["qty"] <= 0:
             c["inventory"].remove(sup)
+
+
+@app.route("/api/me/transfer", methods=["POST"])
+@player_required
+@rate_limited("player_transfer", 30)
+def player_transfer(me):
+    """Hand nuyen or an item to another runner of the game: {to, nuyen} or {to, uid, qty}."""
+    b = body()
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        src_row = db.execute("SELECT * FROM players WHERE id=?", (me["id"],)).fetchone()
+        dst_row = db.execute("SELECT * FROM players WHERE id=? AND campaign_id=?", (str(b.get("to") or ""), me["campaign_id"])).fetchone()
+        if not dst_row or dst_row["id"] == me["id"]:
+            raise R.RuleError("Pick another runner of this game.")
+        src, dst = load_char(src_row), load_char(dst_row)
+        src_name, dst_name = display_name(src_row, src), display_name(dst_row, dst)
+        if src_row["approved"] != APPROVED:
+            raise R.RuleError("Your sheet must be approved by the GM before you can hand things over.")
+        if dst_row["approved"] != APPROVED:
+            raise R.RuleError(f"{dst_name}'s sheet isn't approved yet.")
+        if b.get("nuyen") is not None:
+            n = clamp_int(b.get("nuyen"), 0, 10 ** 9, 0)
+            if n <= 0:
+                raise R.RuleError("How much?")
+            if src["nuyen"] < n:
+                raise R.RuleError(f"You have {src['nuyen']:,}¥.")
+            src["nuyen"] -= n
+            dst["nuyen"] += n
+            ledger_add(me["campaign_id"], src_row["id"], "nuyen", -n, src["nuyen"], f"Given to {dst_name}", False)
+            ledger_add(me["campaign_id"], dst_row["id"], "nuyen", n, dst["nuyen"], f"From {src_name}", False)
+            what = f"{n:,}¥"
+            notes = []
+        else:
+            uid = str(b.get("uid") or "")
+            for mrow in db.execute("SELECT data FROM maps WHERE campaign_id=?", (me["campaign_id"],)).fetchall():
+                for mk in json.loads(mrow["data"]).get("markers") or []:
+                    link = (mk.get("npc") or {}).get("link") or {}
+                    if link.get("pid") == me["id"] and link.get("uid") == uid:
+                        raise R.RuleError("That vehicle is on a map: ask the GM to take it off first.")
+            moved, notes = R.hand_over(src, dst, uid, b.get("qty"))
+            q = R._int(moved.get("qty"), 1)
+            what = moved["name"] + (f" ×{q}" if q > 1 else "")
+        R.clamp_state(src)
+        R.clamp_state(dst)
+        save_char(src_row["id"], src)
+        save_char(dst_row["id"], dst)
+        add_roll(me["campaign_id"], src_row["id"], src_name, src_row["color"], "note",
+                 {"text": f"gives {dst_name} {what}" + (f" ({'; '.join(notes)})" if notes else "") + "."})
+        db.commit()
+    except R.RuleError as e:
+        db.rollback()
+        return err(str(e))
+    except BaseException:
+        db.rollback()
+        raise
+    return jsonify({"message": f"{dst_name} has {what} now.", "sheet": sheet_payload(db.execute("SELECT * FROM players WHERE id=?", (me["id"],)).fetchone(), False)})
 
 
 @app.route("/api/me/heal", methods=["POST"])
